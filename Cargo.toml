@@ -1,4 +1,4 @@
-﻿[workspace]
+[workspace]
 members = [
     "sims3-cli",
     "sims3-pack",
