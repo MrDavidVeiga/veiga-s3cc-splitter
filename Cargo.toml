@@ -1,0 +1,9 @@
+﻿[workspace]
+members = [
+    "sims3-cli",
+    "sims3-pack",
+    "sims3-core",
+    "veiga-s3cc-splitter/src-tauri"
+]
+
+resolver = "2"

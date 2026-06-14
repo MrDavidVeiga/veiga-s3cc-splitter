@@ -1,0 +1,30 @@
+﻿[package]
+name = "veiga-s3cc-splitter"
+version = "1.0.0"
+edition = "2021"
+
+[lib]
+name = "veiga_s3cc_splitter_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+thiserror = "2"
+zip = "0.6"
+memmap = "0.7"
+walkdir = "2.5"
+num-traits = "0.2"
+rayon = "1.10"
+sims3-core = { path = "../../sims3-core" }
+
+
+sims3-pack = { path = "../../sims3-pack" }

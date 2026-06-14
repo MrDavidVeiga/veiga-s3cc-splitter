@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>veiga-s3cc-splitter</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="language-switcher">
+          <span id="lang-label"></span>
+          <div class="lang-dropdown" id="lang-dropdown">
+            <button id="lang-toggle-btn" class="lang-toggle-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
+              <span id="lang-current-code" class="lang-current-code">EN</span>
+              <i id="lang-toggle-icon" class="fa-solid fa-angle-down" aria-hidden="true"></i>
+            </button>
+            <div id="lang-menu" class="lang-menu hidden" role="listbox" aria-label="Language options">
+              <button class="lang-menu-item" data-lang="en" type="button" role="option">EN</button>
+              <button class="lang-menu-item" data-lang="es" type="button" role="option">ES</button>
+              <button class="lang-menu-item" data-lang="pt" type="button" role="option">PT</button>
+            </div>
+          </div>
+        </div>
+      </header>
+      <main class="layout">
+        <aside class="left-panel card">
+          <h1 class="app-title">Veiga's S3CC Splitter</h1>
+          <section class="control-block drag-zone" id="package-drop-zone">
+            <button id="pick-package-btn" class="primary-btn">Open package</button>
+            <div id="package-drop-hint" class="drop-hint">Select or drag a .package or .dbc here</div>
+          </section>
+          <div id="package-path" class="path-label hidden"></div>
+          <section class="control-block">
+            <button id="pick-destination-btn" class="primary-btn">Choose destination folder</button>
+          </section>
+          <div id="destination-path" class="path-label hidden"></div>
+          <section class="control-block hidden-controls" aria-hidden="true">
+            <div class="section-label hidden-label">Type</div>
+            <div class="type-tabs" id="type-tabs">
+              <button class="tab-btn active" data-type="casp">CASP</button>
+              <button class="tab-btn" data-type="face">FACE</button>
+              <button class="tab-btn" data-type="skintone">SkinTone</button>
+              <button class="tab-btn" data-type="pattern">Pattern</button>
+              <button class="tab-btn" data-type="all">All</button>
+            </div>
+          </section>
+          <section class="control-block hidden-controls" aria-hidden="true">
+            <div class="section-label hidden-label">Search</div>
+            <input id="search-input" class="text-input" type="text" placeholder="Search by name or type" />
+          </section>
+          <section class="control-block hidden-controls" aria-hidden="true">
+            <div class="section-label hidden-label">Options</div>
+            <label class="check-row"><input type="checkbox" id="opt-thumbs" checked /> <span>Include thumbnails</span></label>
+            <label class="check-row"><input type="checkbox" id="opt-compression" checked /> <span>Enable compression</span></label>
+            <label class="check-row"><input type="checkbox" id="opt-clone" checked /> <span>Create clone package</span></label>
+          </section>
+          <section class="control-block last-action">
+            <button id="scan-btn" class="primary-btn large">Load list</button>
+          </section>
+        </aside>
+        <section class="right-panel card">
+          <div id="busy-state" class="panel-state hidden">
+            <div class="progress-card">
+              <div id="busy-title" class="state-title">Reading package...</div>
+              <div id="busy-message" class="state-subtitle">Building the resource list from the file.</div>
+              <div class="progress-track"><div id="progress-bar" class="progress-fill"></div></div>
+            </div>
+          </div>
+          <div id="empty-state" class="panel-state empty-state">
+            <div>
+              <div class="state-title">Open a package to begin.</div>
+              <div class="state-subtitle">The list, preview and actions will appear here.</div>
+            </div>
+          </div>
+          <div id="results-state" class="panel-state hidden">
+            <div class="results-header">
+              <div>
+                <div id="results-title" class="state-title">Resources</div>
+                <div id="results-summary" class="state-subtitle">No package loaded.</div>
+              </div>
+              <div class="selected-pill"><span id="selected-count">0 selected</span></div>
+            </div>
+            <div class="results-actions">
+              <button id="select-all-btn" class="secondary-btn">Select all</button>
+              <button id="select-none-btn" class="secondary-btn">Select none</button>
+            </div>
+
+<div class="results-grid">
+  <section class="list-card">
+    <div class="list-header"><span></span></div>
+    <div id="resource-list" class="resource-list"></div>
+  </section>
+              <aside class="preview-card">
+                <div class="preview-title">Preview</div>
+                <div class="preview-thumb-wrap">
+                  <img id="preview-thumb" class="preview-thumb hidden" alt="preview" />
+                  <div id="preview-empty" class="preview-empty">Select a resource to see the preview.</div>
+                </div>
+                <div id="preview-name" class="preview-name"></div>
+                <div id="preview-kind" class="preview-kind"></div>
+                <div id="preview-key" class="preview-path preview-key-hidden"></div>
+              </aside>
+            </div>
+            <div class="footer-actions footer-actions-2">
+              <button id="export-btn" class="primary-btn">Export selection</button>
+              <button id="clear-btn" class="danger-btn">Clear</button>
+              <button id="zip-btn" class="primary-btn hidden-action" aria-hidden="true" tabindex="-1">Compress selection</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
