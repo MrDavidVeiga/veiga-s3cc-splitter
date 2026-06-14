@@ -11,7 +11,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: windows-latest
+          - platform: windows-2022
             target: ""
             build_args: --no-bundle
             binary_name: veiga-s3cc-splitter.exe
@@ -23,13 +23,13 @@ jobs:
             binary_name: veiga-s3cc-splitter
             artifact_name: linux-portable-binary
 
-          - platform: macos-latest
+          - platform: macos-15-intel
             target: x86_64-apple-darwin
             build_args: --target x86_64-apple-darwin --no-bundle
             binary_name: veiga-s3cc-splitter
             artifact_name: macos-intel-portable-binary
 
-          - platform: macos-latest
+          - platform: macos-15
             target: aarch64-apple-darwin
             build_args: --target aarch64-apple-darwin --no-bundle
             binary_name: veiga-s3cc-splitter
@@ -53,7 +53,8 @@ jobs:
             libxdo-dev \
             libssl-dev \
             libayatana-appindicator3-dev \
-            librsvg2-dev
+            librsvg2-dev \
+            patchelf
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -63,11 +64,6 @@ jobs:
           cache-dependency-path: veiga-s3cc-splitter/package-lock.json
 
       - name: Install Rust stable
-        if: matrix.target == ''
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Rust stable with target
-        if: matrix.target != ''
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -78,10 +74,10 @@ jobs:
 
       - name: Build portable binary
         working-directory: veiga-s3cc-splitter
-        run: npm run tauri build -- ${{ matrix.build_args }}
+        run: npm run tauri build -- --verbose ${{ matrix.build_args }}
 
       - name: Locate portable binary on Windows
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-2022'
         id: locate_windows
         shell: pwsh
         run: |
@@ -98,11 +94,12 @@ jobs:
           "artifact_path=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Locate portable binary on Unix
-        if: matrix.platform != 'windows-latest'
+        if: matrix.platform != 'windows-2022'
         id: locate_unix
         shell: bash
         run: |
           set -euo pipefail
+
           file_path="$(find target -type f -name "${{ matrix.binary_name }}" ! -path "*/bundle/*" | grep "/release/" | head -n 1 || true)"
 
           if [ -z "$file_path" ]; then
@@ -114,7 +111,7 @@ jobs:
           echo "artifact_path=$file_path" >> "$GITHUB_OUTPUT"
 
       - name: Upload portable artifact on Windows
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-2022'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
@@ -123,7 +120,7 @@ jobs:
           retention-days: 30
 
       - name: Upload portable artifact on Unix
-        if: matrix.platform != 'windows-latest'
+        if: matrix.platform != 'windows-2022'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
