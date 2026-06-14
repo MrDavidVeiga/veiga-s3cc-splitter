@@ -59,7 +59,7 @@ jobs:
         with:
           projectPath: .
           tagName: app-v__VERSION__
-          releaseName: "Veiga's S3CC Packer v__VERSION__"
+          releaseName: "Veiga's S3CC Splitter v__VERSION__"
           releaseBody: "See the assets to download this version."
           releaseDraft: true
           prerelease: false
