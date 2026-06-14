@@ -6,86 +6,35 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-portable:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: windows-latest
-            target: ""
-            build_args: --no-bundle
-            binary_name: veiga-s3cc-packer.exe
-            artifact_name: windows-portable-exe
-
-          - platform: ubuntu-22.04
-            target: ""
-            build_args: --no-bundle
-            binary_name: veiga-s3cc-packer
-            artifact_name: linux-portable-binary
-
-          - platform: macos-latest
-            target: x86_64-apple-darwin
-            build_args: --target x86_64-apple-darwin --no-bundle
-            binary_name: veiga-s3cc-packer
-            artifact_name: macos-intel-portable-binary
-
-          - platform: macos-latest
-            target: aarch64-apple-darwin
-            build_args: --target aarch64-apple-darwin --no-bundle
-            binary_name: veiga-s3cc-packer
-            artifact_name: macos-apple-silicon-portable-binary
-
-    runs-on: ${{ matrix.platform }}
+  build-portable-windows:
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v5
-
-      - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libxdo-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
 
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: lts/*
           cache: npm
-          cache-dependency-path: veiga-s3cc-packer/package-lock.json
+          cache-dependency-path: veiga-s3cc-splitter/package-lock.json
 
       - name: Install Rust stable
-        if: matrix.target == ''
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Rust stable with target
-        if: matrix.target != ''
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
       - name: Install frontend dependencies
-        working-directory: veiga-s3cc-packer
+        working-directory: veiga-s3cc-splitter
         run: npm ci
 
       - name: Build portable binary
-        working-directory: veiga-s3cc-packer
-        run: npm run tauri build -- ${{ matrix.build_args }}
+        working-directory: veiga-s3cc-splitter
+        run: npm run tauri build -- --no-bundle
 
-      - name: Locate portable binary on Windows
-        if: matrix.platform == 'windows-latest'
+      - name: Locate portable binary
         id: locate_windows
         shell: pwsh
         run: |
-          $file = Get-ChildItem -Path "target" -Filter "${{ matrix.binary_name }}" -Recurse -File |
+          $file = Get-ChildItem -Path "target" -Filter "veiga-s3cc-splitter.exe" -Recurse -File |
             Where-Object { $_.FullName -match '\\release\\' -and $_.FullName -notmatch '\\bundle\\' } |
             Select-Object -First 1 -ExpandProperty FullName
 
@@ -97,36 +46,10 @@ jobs:
 
           "artifact_path=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Locate portable binary on Unix
-        if: matrix.platform != 'windows-latest'
-        id: locate_unix
-        shell: bash
-        run: |
-          set -euo pipefail
-          file_path="$(find target -type f -name "${{ matrix.binary_name }}" ! -path "*/bundle/*" | grep "/release/" | head -n 1 || true)"
-
-          if [ -z "$file_path" ]; then
-            echo "Arquivos encontrados em target:"
-            find target -type f | sort || true
-            exit 1
-          fi
-
-          echo "artifact_path=$file_path" >> "$GITHUB_OUTPUT"
-
-      - name: Upload portable artifact on Windows
-        if: matrix.platform == 'windows-latest'
+      - name: Upload portable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
+          name: windows-portable-exe
           path: ${{ steps.locate_windows.outputs.artifact_path }}
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Upload portable artifact on Unix
-        if: matrix.platform != 'windows-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ steps.locate_unix.outputs.artifact_path }}
           if-no-files-found: error
           retention-days: 30
