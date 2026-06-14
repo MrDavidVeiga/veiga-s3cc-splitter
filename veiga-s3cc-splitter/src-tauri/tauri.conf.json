@@ -31,7 +31,11 @@
     "active": true,
     "targets": ["msi"],
     "icon": [
-      "../../sims3-cli/assets/icon.ico"
+      "../../sims3-cli/assets/icons/32x32.png",
+      "../../sims3-cli/assets/icons/128x128.png",
+      "../../sims3-cli/assets/icons/128x128@2x.png",
+      "../../sims3-cli/assets/icons/icon.icns",
+      "../../sims3-cli/assets/icons/icon.ico"
     ]
   }
 }
