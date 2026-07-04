@@ -367,7 +367,7 @@ body {
   justify-content: left;
   align-items: left;
   padding: clamp(14px, 1.5vw, 14px) 0 clamp(10px, 1vw, 16px);
-  margin-top: auto;
+  margin-top: clamp(14px, 1.5vw, 0);
 }
 
 .social-icons-list {
