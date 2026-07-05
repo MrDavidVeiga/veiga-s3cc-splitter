@@ -1,4 +1,4 @@
-﻿import "@fortawesome/fontawesome-free/css/all.min.css";
+import "@fortawesome/fontawesome-free/css/all.min.css";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -428,6 +428,7 @@ async function loadPreview(item) {
         resourceKey: item.key,
       },
     });
+    preview.label = item.label;
     state.preview = preview;
     render();
   } catch (error) {
