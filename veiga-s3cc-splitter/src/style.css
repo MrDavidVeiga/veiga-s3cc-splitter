@@ -5,8 +5,8 @@
   --surface: rgba(12, 16, 20, 0.92);
   --text: #f0f5f8;
   --muted: #a8b4bf;
-  --green: #2ba348;
-  --green-dark: #00842c;
+  --green: #618422;
+  --green-dark: #435c17;
   --danger: #b83232;
   --workspace-height: 640px;
 }
@@ -20,8 +20,8 @@ body {
   min-height: 100vh;
   font-family: Inter, Segoe UI, Arial, sans-serif;
   background:
-    radial-gradient(circle at top right, rgba(43, 163, 72, 0.18), transparent 22%),
-    radial-gradient(circle at bottom left, rgba(0, 132, 44, 0.16), transparent 28%),
+    radial-gradient(circle at top right, rgba(97, 132, 34, 0.18), transparent 22%),
+    radial-gradient(circle at bottom left, rgba(67, 92, 23, 0.16), transparent 28%),
     linear-gradient(180deg, #11161c 0%, #090b0e 100%);
   color: var(--text);
 }
@@ -96,8 +96,8 @@ body {
 }
 
 .drag-zone.drag-over {
-  border-color: rgba(43, 163, 72, 0.8);
-  background: rgba(43, 163, 72, 0.08);
+  border-color: rgba(97, 132, 34, 0.8);
+  background: rgba(97, 132, 34, 0.08);
 }
 
 .primary-btn,
@@ -146,7 +146,7 @@ body {
 }
 
 .primary-btn:hover {
-  background: #37b554;
+  background: #7fad2d;
 }
 
 .primary-btn.active {
@@ -179,7 +179,7 @@ body {
 }
 
 .danger-btn:hover {
-  background: #cc4040;
+  background: #5c1717;
 }
 
 .lang-btn {
@@ -204,8 +204,8 @@ body {
 }
 
 .tab-btn.active {
-  background: rgba(43, 163, 72, 0.18);
-  border-color: rgba(43, 163, 72, 0.45);
+  background: rgba(97, 132, 34, 0.18);
+  border-color: rgba(97, 132, 34, 0.45);
 }
 
 .drop-hint,
@@ -328,7 +328,7 @@ body {
 .progress-fill {
   width: 0%;
   height: 100%;
-  background: linear-gradient(90deg, #2ba348, #8cd03a);
+  background: linear-gradient(90deg, #618422, #9acd3f);
 }
 
 .results-grid {
@@ -390,8 +390,8 @@ body {
 
 .resource-row.active,
 .resource-row:hover {
-  border-color: rgba(43, 163, 72, 0.4);
-  background: rgba(43, 163, 72, 0.08);
+  border-color: rgba(97, 132, 34, 0.4);
+  background: rgba(97, 132, 34, 0.08);
 }
 
 .resource-check {
@@ -436,7 +436,7 @@ body {
   padding: 8px 10px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
-  color: #dff3e6;
+  color: #9acd3f;
   font-size: 0.76rem;
   font-weight: 800;
 }
@@ -494,7 +494,7 @@ body {
 
 .preview-kind {
   margin-top: 6px;
-  color: #9fe0ba;
+  color: #9acd3f;
   font-size: 0.84rem;
   font-weight: 700;
 }
@@ -680,7 +680,7 @@ body {
 }
 
 .lang-toggle-btn:hover {
-  background: #37b554;
+  background: #7fad2d;
 }
 
 .lang-toggle-btn i {
@@ -727,8 +727,8 @@ body {
 
 .lang-menu-item.active,
 .lang-menu-item:disabled {
-  background: rgba(43, 163, 72, 0.16);
-  color: #b9f27a;
+  background: rgba(97, 132, 34, 0.16);
+  color: #9acd3f;
   cursor: default;
 }
 
@@ -763,9 +763,9 @@ body {
 }
 
 .social-icons-list li a:hover {
-  background: rgba(43, 163, 72, 0.15);
-  border-color: rgba(43, 163, 72, 0.5);
-  color: #b9f27a;
+  background: rgba(97, 132, 34, 0.15);
+  border-color: rgba(97, 132, 34, 0.5);
+  color: #9acd3f;
   transform: translateY(-2px);
 }
 
