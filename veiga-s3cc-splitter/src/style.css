@@ -88,6 +88,38 @@ body {
   margin: 0;
 }
 
+.section-label {
+  margin-bottom: 7px;
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.content-filter-select,
+.text-input {
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+
+.content-filter-select:focus,
+.text-input:focus {
+  border-color: rgba(97, 132, 34, 0.55);
+  box-shadow: 0 0 0 3px rgba(97, 132, 34, 0.18);
+}
+
+.content-filter-select option {
+  background: #10141a;
+  color: var(--text);
+}
+
 .drag-zone {
   padding: 10px;
   border: 1px dashed rgba(255, 255, 255, 0.14);

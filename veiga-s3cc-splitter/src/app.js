@@ -22,6 +22,10 @@ const translations = {
     selectedCount: (count) => `${count} selected`,
     selectAll: "Select all",
     selectNone: "Select none",
+    contentFilter: "Content filter",
+    allFilter: "All",
+    searchLabel: "Search",
+    searchPlaceholder: "Search within the current filter",
     busyDefaultTitle: "Processing",
     busyDefaultMessage: "Please wait.",
     busyReadTitle: "Reading package...",
@@ -35,7 +39,7 @@ const translations = {
     previewTitle: "Preview",
     previewEmpty: "Select a resource to see the preview.",
     exportSelection: "Export selection",
-    clear: "Clear",
+    clear: "Clear selection",
     readError: "Failed to read package:",
     splittError: "Export failed:",
   },
@@ -52,6 +56,10 @@ const translations = {
     selectedCount: (count) => `${count} selecionados`,
     selectAll: "Selecionar tudo",
     selectNone: "Selecionar nenhum",
+    contentFilter: "Filtro de conteÃºdo",
+    allFilter: "Todos",
+    searchLabel: "Busca",
+    searchPlaceholder: "Buscar no filtro atual",
     busyDefaultTitle: "Processando",
     busyDefaultMessage: "Aguarde.",
     busyReadTitle: "Lendo package...",
@@ -65,7 +73,7 @@ const translations = {
     previewTitle: "Preview",
     previewEmpty: "Selecione um recurso para ver o preview.",
     exportSelection: "Exportar seleção",
-    clear: "Limpar",
+    clear: "Limpar seleÃ§Ã£o",
     readError: "Falha ao ler package:",
     splittError: "Falha na exportação:",
   },
@@ -82,6 +90,10 @@ const translations = {
     selectedCount: (count) => `${count} seleccionados`,
     selectAll: "Seleccionar todo",
     selectNone: "Seleccionar ninguno",
+    contentFilter: "Filtro de contenido",
+    allFilter: "Todos",
+    searchLabel: "Buscar",
+    searchPlaceholder: "Buscar en el filtro actual",
     busyDefaultTitle: "Procesando",
     busyDefaultMessage: "Espera un momento.",
     busyReadTitle: "Leyendo package...",
@@ -95,7 +107,7 @@ const translations = {
     previewTitle: "Vista previa",
     previewEmpty: "Selecciona un recurso para ver la vista previa.",
     exportSelection: "Exportar selección",
-    clear: "Limpiar",
+    clear: "Limpiar selecciÃ³n",
     readError: "Error al leer el package:",
     splittError: "Error en la exportación:",
   },
@@ -130,6 +142,9 @@ const el = {
   packagePath: document.querySelector("#package-path"),
   destinationPath: document.querySelector("#destination-path"),
   searchInput: document.querySelector("#search-input"),
+  searchLabel: document.querySelector("#search-label"),
+  contentFilterSelect: document.querySelector("#content-filter-select"),
+  contentFilterLabel: document.querySelector("#content-filter-label"),
   typeTabs: document.querySelectorAll(".tab-btn"),
   langDropdown: document.querySelector("#lang-dropdown"),
   langToggleBtn: document.querySelector("#lang-toggle-btn"),
@@ -218,6 +233,9 @@ function applyStaticTranslations() {
   if (el.resultsTitle) el.resultsTitle.textContent = t("resourcesTitle");
   if (el.selectAllBtn) el.selectAllBtn.textContent = t("selectAll");
   if (el.selectNoneBtn) el.selectNoneBtn.textContent = t("selectNone");
+  if (el.contentFilterLabel) el.contentFilterLabel.textContent = t("contentFilter");
+  if (el.searchLabel) el.searchLabel.textContent = t("searchLabel");
+  if (el.searchInput) el.searchInput.placeholder = t("searchPlaceholder");
   if (el.previewTitle) el.previewTitle.textContent = t("previewTitle");
   if (el.previewEmpty) el.previewEmpty.textContent = t("previewEmpty");
   if (el.exportBtn) el.exportBtn.innerHTML = `<img src="${exportIcon}" alt="" class="btn-icon" /><span>${t("exportSelection")}</span>`;
@@ -257,22 +275,179 @@ function clearBusy() {
   render();
 }
 
+const contentTypeOrder = [
+  "Hair",
+  "Facial Hair",
+  "Eyebrows",
+  "Body Hair",
+  "Clothes",
+  "Shoes",
+  "Accessories",
+  "Makeup",
+  "Eyes",
+  "Skin Details",
+  "Tattoos",
+  "Teeth",
+  "Face Parts",
+  "Pet Parts",
+  "Pet Coats",
+  "Pet Accessories",
+  "Other CASP",
+  "Sliders",
+  "Skins",
+  "Patterns",
+  "Comfort",
+  "Surfaces",
+  "Storage",
+  "Appliances",
+  "Electronics",
+  "Plumbing",
+  "Lighting",
+  "Decor",
+  "Entertainment",
+  "Kids",
+  "Vehicles",
+  "Pets",
+  "Show Stage",
+  "Resort",
+  "Debug",
+  "Other Objects",
+  "Doors & Arches",
+  "Windows",
+  "Fences & Gates",
+  "Stairs & Railings",
+  "Columns",
+  "Foundations",
+  "Walls",
+  "Floors",
+  "Ceilings",
+  "Roofs",
+  "Fireplaces & Chimneys",
+  "Plants & Rocks",
+  "Terrain Paints",
+  "Terrain Tools",
+  "Pools & Fountains",
+  "Elevators",
+  "Rabbit Holes",
+  "Building Shells",
+  "Landmarks",
+  "Blueprints",
+  "Resort Objects",
+  "Other Build",
+];
+
+const contentTypeRank = new Map(contentTypeOrder.map((name, index) => [name, index]));
+
 function getDisplayType(item) {
-  return item?.kind || item?.type || item?.resourceType || "";
+  return item?.contentType || item?.kind || item?.type || item?.resourceType || "";
 }
 
 function getDisplayDetails(item) {
-  return item?.details || item?.detail || "";
+  const details = item?.details || item?.detail || "";
+  const kind = item?.kind || "";
+  if (!kind || details.includes(kind)) return details;
+  return details ? `${kind} - ${details}` : kind;
+}
+
+function itemContentTypes(item) {
+  const values = Array.isArray(item?.contentTypes) ? item.contentTypes : [];
+  const normalized = values.filter(Boolean);
+  if (normalized.length) return normalized;
+  if (item?.contentType) return [item.contentType];
+  return item?.kind ? [item.kind] : [];
+}
+
+function countContentTypes() {
+  const counts = new Map();
+  for (const item of state.resources) {
+    for (const contentType of itemContentTypes(item)) {
+      counts.set(contentType, (counts.get(contentType) || 0) + 1);
+    }
+  }
+  return counts;
+}
+
+function sortedContentTypes(counts) {
+  return [...counts.keys()].sort((a, b) => {
+    const rankA = contentTypeRank.has(a) ? contentTypeRank.get(a) : Number.MAX_SAFE_INTEGER;
+    const rankB = contentTypeRank.has(b) ? contentTypeRank.get(b) : Number.MAX_SAFE_INTEGER;
+    if (rankA !== rankB) return rankA - rankB;
+    return a.localeCompare(b);
+  });
+}
+
+function renderContentFilter() {
+  if (!el.contentFilterSelect) return;
+  const counts = countContentTypes();
+  const available = sortedContentTypes(counts);
+  if (state.resourceType !== "all" && !counts.has(state.resourceType)) {
+    state.resourceType = "all";
+  }
+
+  const options = [
+    { value: "all", label: `${t("allFilter")} (${state.resources.length})` },
+    ...available.map((contentType) => ({
+      value: contentType,
+      label: `${contentType} (${counts.get(contentType)})`,
+    })),
+  ];
+
+  el.contentFilterSelect.innerHTML = "";
+  for (const optionData of options) {
+    const option = document.createElement("option");
+    option.value = optionData.value;
+    option.textContent = optionData.label;
+    option.selected = optionData.value === state.resourceType;
+    el.contentFilterSelect.appendChild(option);
+  }
+  el.contentFilterSelect.value = state.resourceType;
+}
+
+function itemMatchesContentFilter(item) {
+  return state.resourceType === "all" || itemContentTypes(item).includes(state.resourceType);
+}
+
+function itemMatchesSearch(item) {
+  const query = state.search.trim().toLowerCase();
+  if (!query) return true;
+  const values = [
+    item?.label,
+    item?.key,
+    item?.kind,
+    item?.details,
+    item?.contentType,
+    ...(Array.isArray(item?.contentTypes) ? item.contentTypes : []),
+  ];
+  return values.some((value) => String(value || "").toLowerCase().includes(query));
+}
+
+function visibleResources() {
+  return state.resources.filter((item) => itemMatchesContentFilter(item) && itemMatchesSearch(item));
+}
+
+function isPreviewVisible(visibleItems) {
+  if (!state.preview?.key) return true;
+  return visibleItems.some((item) => item.key === state.preview.key);
+}
+
+function clearPreviewIfHidden(visibleItems) {
+  if (!isPreviewVisible(visibleItems)) {
+    state.preview = null;
+  }
 }
 
 function render() {
   updatePathLabel(el.packagePath, state.packagePath);
   updatePathLabel(el.destinationPath, state.destinationFolder);
 
+  const visibleItems = visibleResources();
+  clearPreviewIfHidden(visibleItems);
+  renderContentFilter();
+
   el.typeTabs.forEach((btn) => btn.classList.toggle("active", btn.dataset.type === state.resourceType));
   el.selectedCount.textContent = t("selectedCount", state.selectedKeys.length);
   el.resultsSummary.textContent = state.packagePath
-    ? t("packageReady", state.resources.length, state.resourceType)
+    ? t("packageReady", visibleItems.length, state.resourceType)
     : t("noPackageLoaded");
 
   el.busyTitle.textContent = state.busyTitle || t("busyDefaultTitle");
@@ -287,14 +462,14 @@ function render() {
     el.emptyState.classList.remove("hidden");
   }
 
-  renderList();
+  renderList(visibleItems);
   renderPreview();
 }
 
-function renderList() {
+function renderList(items = visibleResources()) {
   el.resourceList.innerHTML = "";
 
-  for (const item of state.resources) {
+  for (const item of items) {
     const displayType = getDisplayType(item);
     const displayDetails = getDisplayDetails(item);
 
@@ -379,6 +554,9 @@ async function pickPackage() {
     state.resources = [];
     state.selectedKeys = [];
     state.preview = null;
+    state.resourceType = "all";
+    state.search = "";
+    if (el.searchInput) el.searchInput.value = "";
     render();
   }
 }
@@ -400,17 +578,19 @@ async function scanPackage() {
     const result = await invoke("scan_package_resources", {
       payload: {
         packagePath: state.packagePath,
-        resourceType: state.resourceType,
-        search: state.search.trim() || null,
+        resourceType: "all",
+        search: null,
       },
     });
 
     state.resources = result.items || [];
     state.selectedKeys = state.resources.map((item) => item.key);
     state.preview = null;
+    state.resourceType = "all";
 
-    if (state.resources[0]) {
-      await loadPreview(state.resources[0]);
+    const firstVisible = visibleResources()[0];
+    if (firstVisible) {
+      await loadPreview(firstVisible);
     }
   } catch (error) {
     console.error(error);
@@ -429,6 +609,10 @@ async function loadPreview(item) {
       },
     });
     preview.label = item.label;
+    preview.kind = item.kind;
+    preview.details = item.details;
+    preview.contentType = item.contentType;
+    preview.contentTypes = item.contentTypes;
     state.preview = preview;
     render();
   } catch (error) {
@@ -467,14 +651,15 @@ async function exportSelection(zip) {
   }
 }
 
-function clearAll() {
-  state.packagePath = "";
-  state.destinationFolder = "";
-  state.resources = [];
-  state.selectedKeys = [];
-  state.preview = null;
-  state.search = "";
-  if (el.searchInput) el.searchInput.value = "";
+function clearSelectionForCurrentFilter() {
+  if (state.resourceType === "all") {
+    state.selectedKeys = [];
+    render();
+    return;
+  }
+
+  const visibleKeys = new Set(visibleResources().map((item) => item.key));
+  state.selectedKeys = state.selectedKeys.filter((key) => !visibleKeys.has(key));
   render();
 }
 
@@ -520,6 +705,9 @@ function bindDragAndDrop() {
         state.resources = [];
         state.selectedKeys = [];
         state.preview = null;
+        state.resourceType = "all";
+        state.search = "";
+        if (el.searchInput) el.searchInput.value = "";
         render();
       }
       return;
@@ -541,38 +729,41 @@ function setupEvents() {
     el.zipBtn.addEventListener("click", () => exportSelection(true));
   }
 
-  el.clearBtn.addEventListener("click", clearAll);
+  el.clearBtn.addEventListener("click", clearSelectionForCurrentFilter);
 
   el.selectAllBtn.addEventListener("click", () => {
-    state.selectedKeys = state.resources.map((item) => item.key);
+    const merged = new Set(state.selectedKeys);
+    for (const item of visibleResources()) {
+      merged.add(item.key);
+    }
+    state.selectedKeys = [...merged];
     render();
   });
 
   el.selectNoneBtn.addEventListener("click", () => {
-    state.selectedKeys = [];
+    const visibleKeys = new Set(visibleResources().map((item) => item.key));
+    state.selectedKeys = state.selectedKeys.filter((key) => !visibleKeys.has(key));
     render();
   });
 
   if (el.searchInput) {
     el.searchInput.addEventListener("input", (event) => {
       state.search = event.target.value;
+      render();
     });
+  }
 
-    el.searchInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        scanPackage();
-      }
+  if (el.contentFilterSelect) {
+    el.contentFilterSelect.addEventListener("change", (event) => {
+      state.resourceType = event.target.value || "all";
+      render();
     });
   }
 
   el.typeTabs.forEach((btn) =>
     btn.addEventListener("click", () => {
       state.resourceType = btn.dataset.type;
-      state.resources = [];
-      state.selectedKeys = [];
-      state.preview = null;
       render();
-      if (state.packagePath) scanPackage();
     })
   );
 

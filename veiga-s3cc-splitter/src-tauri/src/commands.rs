@@ -47,6 +47,21 @@ const TYPE_FTPT: u32 = 0xD382BF57;
 const TYPE_LITE: u32 = 0x03B4C61D;
 const TYPE_RIG: u32 = 0x8EAF13DE;
 const TYPE_ICON: u32 = 0x2E75C765;
+const TYPE_CATALOG_FENCE: u32 = 0x0418FE2A;
+const TYPE_CATALOG_STAIRS: u32 = 0x049CA4CD;
+const TYPE_CATALOG_PROXY_PRODUCT: u32 = 0x04AC5D93;
+const TYPE_CATALOG_TERRAIN_GEOMETRY_BRUSH: u32 = 0x04B30669;
+const TYPE_CATALOG_RAILING: u32 = 0x04C58103;
+const TYPE_CATALOG_TERRAIN_PAINT_BRUSH: u32 = 0x04ED4BB2;
+const TYPE_CATALOG_FIREPLACE: u32 = 0x04F3CC01;
+const TYPE_CATALOG_TERRAIN_WATER_BRUSH: u32 = 0x060B390C;
+const TYPE_CATALOG_FOUNTAIN_POOL: u32 = 0x0A36F07A;
+const TYPE_CATALOG_FOUNDATION: u32 = 0x316C78F2;
+const TYPE_CATALOG_WALL_FLOOR_PATTERN: u32 = 0x515CA4CD;
+const TYPE_CATALOG_ROOF_STYLE: u32 = 0x91EDBD3E;
+const TYPE_CATALOG_WALL_STYLE: u32 = 0x9151E6BC;
+const TYPE_MODULAR_RESOURCE: u32 = 0xCF9A4ACE;
+const TYPE_CATALOG_ROOF_PATTERN: u32 = 0xF1EDBD86;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,6 +83,9 @@ pub struct ResourceItem {
     pub key: String,
     pub kind: String,
     pub details: String,
+    pub content_type: String,
+    pub content_types: Vec<String>,
+    pub classification: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -158,6 +176,21 @@ fn kind_from_type(resource_type: u32) -> &'static str {
         TYPE_LITE => "LITE",
         TYPE_RIG => "RIG",
         TYPE_ICON => "ICON",
+        TYPE_CATALOG_FENCE => "CatalogFence",
+        TYPE_CATALOG_STAIRS => "CatalogStairs",
+        TYPE_CATALOG_PROXY_PRODUCT => "CatalogProxyProduct",
+        TYPE_CATALOG_TERRAIN_GEOMETRY_BRUSH => "CatalogTerrainGeometryBrush",
+        TYPE_CATALOG_RAILING => "CatalogRailing",
+        TYPE_CATALOG_TERRAIN_PAINT_BRUSH => "CatalogTerrainPaintBrush",
+        TYPE_CATALOG_FIREPLACE => "CatalogFireplace",
+        TYPE_CATALOG_TERRAIN_WATER_BRUSH => "CatalogTerrainWaterBrush",
+        TYPE_CATALOG_FOUNTAIN_POOL => "CatalogFountainPool",
+        TYPE_CATALOG_FOUNDATION => "CatalogFoundation",
+        TYPE_CATALOG_WALL_FLOOR_PATTERN => "CatalogWallFloorPattern",
+        TYPE_CATALOG_ROOF_STYLE => "CatalogRoofStyle",
+        TYPE_CATALOG_WALL_STYLE => "CatalogWallStyle",
+        TYPE_MODULAR_RESOURCE => "ModularResource",
+        TYPE_CATALOG_ROOF_PATTERN => "CatalogRoofPattern",
         _ => "Resource",
     }
 }
@@ -193,6 +226,21 @@ fn extension_from_type(resource_type: u32) -> &'static str {
         TYPE_LITE => "light",
         TYPE_RIG => "grannyrig",
         TYPE_ICON => "png",
+        TYPE_CATALOG_FENCE => "fence",
+        TYPE_CATALOG_STAIRS => "stairs",
+        TYPE_CATALOG_PROXY_PRODUCT => "proxyprod",
+        TYPE_CATALOG_TERRAIN_GEOMETRY_BRUSH => "terraingeometry",
+        TYPE_CATALOG_RAILING => "railing",
+        TYPE_CATALOG_TERRAIN_PAINT_BRUSH => "terrainpaint",
+        TYPE_CATALOG_FIREPLACE => "fireplace",
+        TYPE_CATALOG_TERRAIN_WATER_BRUSH => "terrainwater",
+        TYPE_CATALOG_FOUNTAIN_POOL => "fountainpool",
+        TYPE_CATALOG_FOUNDATION => "foundation",
+        TYPE_CATALOG_WALL_FLOOR_PATTERN => "wallfloorpattern",
+        TYPE_CATALOG_ROOF_STYLE => "roofstyle",
+        TYPE_CATALOG_WALL_STYLE => "wallstyle",
+        TYPE_MODULAR_RESOURCE => "modular",
+        TYPE_CATALOG_ROOF_PATTERN => "roofpattern",
         _ => "bin",
     }
 }
@@ -261,9 +309,502 @@ fn filter_matches(entry: &DBPFEntry<'_>, mode: &str) -> bool {
         "object" => entry.resource_type == TYPE_OBJD,
         _ => matches!(
             entry.resource_type,
-            TYPE_CASP | TYPE_FACE | TYPE_SKINTONE | TYPE_PATTERN | TYPE_XML | TYPE_OBJD
+            TYPE_CASP
+                | TYPE_FACE
+                | TYPE_SKINTONE
+                | TYPE_PATTERN
+                | TYPE_XML
+                | TYPE_OBJD
+                | TYPE_CATALOG_FENCE
+                | TYPE_CATALOG_STAIRS
+                | TYPE_CATALOG_PROXY_PRODUCT
+                | TYPE_CATALOG_TERRAIN_GEOMETRY_BRUSH
+                | TYPE_CATALOG_RAILING
+                | TYPE_CATALOG_TERRAIN_PAINT_BRUSH
+                | TYPE_CATALOG_FIREPLACE
+                | TYPE_CATALOG_TERRAIN_WATER_BRUSH
+                | TYPE_CATALOG_FOUNTAIN_POOL
+                | TYPE_CATALOG_FOUNDATION
+                | TYPE_CATALOG_WALL_FLOOR_PATTERN
+                | TYPE_CATALOG_ROOF_STYLE
+                | TYPE_CATALOG_WALL_STYLE
+                | TYPE_MODULAR_RESOURCE
+                | TYPE_CATALOG_ROOF_PATTERN
         ),
     }
+}
+
+#[derive(Clone, Debug)]
+struct ContentClassification {
+    primary: String,
+    all: Vec<String>,
+    detail: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct ObjdCatalogFields {
+    object_type: u32,
+    object_type_ext: u32,
+    room_category: u32,
+    function_category: u32,
+    function_subcategory: u64,
+    function_subcategory2: u64,
+    room_subcategory: u64,
+    build_category: u32,
+}
+
+fn push_content_type(types: &mut Vec<String>, value: &str) {
+    if !types.iter().any(|existing| existing == value) {
+        types.push(value.to_string());
+    }
+}
+
+fn one_content_type(value: &str, detail: Option<String>) -> ContentClassification {
+    ContentClassification {
+        primary: value.to_string(),
+        all: vec![value.to_string()],
+        detail,
+    }
+}
+
+fn casp_clothing_type_name(clothing: u32) -> &'static str {
+    match clothing {
+        0x00000000 => "None",
+        0x00000001 => "Hair",
+        0x00000002 => "Scalp",
+        0x00000003 => "Face",
+        0x00000004 => "Body",
+        0x00000005 => "Top",
+        0x00000006 => "Bottom",
+        0x00000007 => "Shoes",
+        0x00000008 => "FirstAccessory",
+        0x00000009 => "Necklace",
+        0x0000000A => "NoseRing",
+        0x0000000B => "Earrings",
+        0x0000000C => "Glasses_F",
+        0x0000000D => "Bracelets",
+        0x0000000E => "Ring_Lt",
+        0x0000000F => "Ring_Rt",
+        0x00000010 => "Beard",
+        0x00000011 => "Lipstick",
+        0x00000012 => "Eyeshadow",
+        0x00000013 => "Eyeliner",
+        0x00000014 => "Blush",
+        0x00000015 => "Makeup",
+        0x00000016 => "Eyebrow",
+        0x00000017 => "EyeColor",
+        0x00000018 => "Glove",
+        0x00000019 => "Socks",
+        0x0000001A => "Mascara",
+        0x0000001B => "Moles",
+        0x0000001C => "Freckles",
+        0x0000001D => "Weathering",
+        0x0000001E => "EarringL",
+        0x0000001F => "EarringR",
+        0x00000020 => "ArmBand",
+        0x00000021 => "Tattoo",
+        0x00000022 => "TattooTemplate",
+        0x00000023 => "Dental",
+        0x00000024 => "LeftGarter",
+        0x00000025 => "RightGarter",
+        0x00000026 => "BirthMark",
+        0x00000027 => "BodyHairChestUpper",
+        0x00000028 => "BodyHairChestStomach",
+        0x00000029 => "BodyHairBackLower",
+        0x0000002A => "BodyHairBackUpper",
+        0x0000002B => "BodyHairBackFull",
+        0x0000002C => "BodyHairForearms",
+        0x0000002D => "BodyHairLegsCalves",
+        0x0000002E => "BodyHairLegsFeet",
+        0x0000002F => "PetBody",
+        0x00000030 => "PetTail",
+        0x00000031 => "PetEars",
+        0x00000032 => "PetMane",
+        0x00000033 => "PetCollarBridle",
+        0x00000034 => "PetSaddle",
+        0x00000035 => "PeltLayer",
+        0x00000036 => "BasePeltLayer",
+        0x00000037 => "PetHooves",
+        0x00000038 => "PetHorn",
+        0x00000039 => "PetBlanket",
+        0x0000003A => "PetBreastCollar",
+        0x0000003B => "PetBeard",
+        0x0000003C => "Unknown3C",
+        0x0000003D => "Unknown3D",
+        0x0000003E => "Unknown3E",
+        0x0000003F => "Unknown3F",
+        _ => "Unknown",
+    }
+}
+
+fn classify_casp(entry: &DBPFEntry<'_>) -> ContentClassification {
+    let detail = casp_parse_core_fields(entry.data()).map(|(clothing, data_type, age_gender)| {
+        format!(
+            "{} • ClothingType 0x{:08X} • DataTypeFlags 0x{:08X} • AgeGenderFlags 0x{:08X}",
+            casp_clothing_type_name(clothing),
+            clothing,
+            data_type,
+            age_gender
+        )
+    });
+    let Some((clothing, _data_type, _age_gender)) = casp_parse_core_fields(entry.data()) else {
+        return one_content_type("Other CASP", detail);
+    };
+
+    let category = match clothing {
+        0x00000001 | 0x00000002 => "Hair",
+        0x00000010 => "Facial Hair",
+        0x00000016 => "Eyebrows",
+        0x00000027..=0x0000002E => "Body Hair",
+        0x00000004 | 0x00000005 | 0x00000006 => "Clothes",
+        0x00000007 => "Shoes",
+        0x00000009..=0x0000000F
+        | 0x00000018
+        | 0x00000019
+        | 0x0000001E
+        | 0x0000001F
+        | 0x00000020
+        | 0x00000024
+        | 0x00000025 => "Accessories",
+        0x00000011..=0x00000015 | 0x0000001A => "Makeup",
+        0x00000017 => "Eyes",
+        0x0000001B..=0x0000001D | 0x00000026 => "Skin Details",
+        0x00000021 | 0x00000022 => "Tattoos",
+        0x00000023 => "Teeth",
+        0x00000003 => "Face Parts",
+        0x0000002F..=0x00000032 | 0x00000037 | 0x00000038 | 0x0000003B => "Pet Parts",
+        0x00000035 | 0x00000036 => "Pet Coats",
+        0x00000033 | 0x00000034 | 0x00000039 | 0x0000003A => "Pet Accessories",
+        _ => "Other CASP",
+    };
+    one_content_type(category, detail)
+}
+
+fn skip_exact(cur: &mut Cursor<&[u8]>, count: u64) -> Option<()> {
+    let next = cur.position().checked_add(count)?;
+    if next > cur.get_ref().len() as u64 {
+        return None;
+    }
+    cur.set_position(next);
+    Some(())
+}
+
+fn cursor_read_u8(cur: &mut Cursor<&[u8]>) -> Option<u8> {
+    let mut buf = [0u8; 1];
+    cur.read_exact(&mut buf).ok()?;
+    Some(buf[0])
+}
+
+fn cursor_read_u32(cur: &mut Cursor<&[u8]>) -> Option<u32> {
+    let mut buf = [0u8; 4];
+    cur.read_exact(&mut buf).ok()?;
+    Some(u32::from_le_bytes(buf))
+}
+
+fn cursor_read_u64(cur: &mut Cursor<&[u8]>) -> Option<u64> {
+    let mut buf = [0u8; 8];
+    cur.read_exact(&mut buf).ok()?;
+    Some(u64::from_le_bytes(buf))
+}
+
+fn skip_catalog_common(cur: &mut Cursor<&[u8]>) -> Option<()> {
+    let version = cursor_read_u32(cur)?;
+    skip_exact(cur, 16)?;
+    let _name = read_be_unicode_string(cur)?;
+    let _desc = read_be_unicode_string(cur)?;
+    skip_exact(cur, 4 + 4 + 4 + 1 + 8 + 1 + 4 + 4 + 1 + 1 + 4)?;
+    if version >= 0x0D {
+        skip_exact(cur, 1)?;
+        if version >= 0x0E {
+            skip_exact(cur, 1)?;
+            if version >= 0x0F {
+                skip_exact(cur, 4)?;
+            }
+        }
+    }
+    Some(())
+}
+
+fn skip_wall_cutout_list(cur: &mut Cursor<&[u8]>) -> Option<()> {
+    let count = cursor_read_u8(cur)? as u64;
+    skip_exact(cur, count.checked_mul(24)?)?;
+    Some(())
+}
+
+fn parse_objd_catalog_fields(data: &[u8]) -> Option<ObjdCatalogFields> {
+    let mut cur = Cursor::new(data);
+    let version = cursor_read_u32(&mut cur)?;
+    skip_exact(&mut cur, 8)?;
+    skip_objd_material_list(&mut cur)?;
+    if version >= 0x16 {
+        let _instance_name = read_be_unicode_string(&mut cur)?;
+    }
+    skip_catalog_common(&mut cur)?;
+    let _objk_index = cursor_read_u32(&mut cur)?;
+    let object_type = cursor_read_u32(&mut cur)?;
+    let object_type_ext = if version >= 0x1A {
+        cursor_read_u32(&mut cur)?
+    } else {
+        0
+    };
+    let _wall_placement = cursor_read_u32(&mut cur)?;
+    let _movement = cursor_read_u32(&mut cur)?;
+    let _cutout_tiles_per_level = cursor_read_u32(&mut cur)?;
+    let _levels = cursor_read_u32(&mut cur)?;
+    skip_wall_cutout_list(&mut cur)?;
+    let _is_script_enabled = cursor_read_u8(&mut cur)?;
+    let _diagonal_index = cursor_read_u32(&mut cur)?;
+    let _ambience_type_hash = cursor_read_u32(&mut cur)?;
+    let room_category = cursor_read_u32(&mut cur)?;
+    let function_category = cursor_read_u32(&mut cur)?;
+    let function_subcategory = cursor_read_u64(&mut cur)?;
+    let function_subcategory2 = if version >= 0x1C {
+        cursor_read_u64(&mut cur)?
+    } else {
+        0
+    };
+    let room_subcategory = cursor_read_u64(&mut cur)?;
+    let build_category = cursor_read_u32(&mut cur)?;
+
+    Some(ObjdCatalogFields {
+        object_type,
+        object_type_ext,
+        room_category,
+        function_category,
+        function_subcategory,
+        function_subcategory2,
+        room_subcategory,
+        build_category,
+    })
+}
+
+fn classify_objd(fields: Option<ObjdCatalogFields>) -> ContentClassification {
+    let Some(fields) = fields else {
+        return one_content_type("Other Objects", None);
+    };
+    let mut types = Vec::new();
+
+    const FC_APPLIANCES: u32 = 0x00000002;
+    const FC_ELECTRONICS: u32 = 0x00000004;
+    const FC_ENTERTAINMENT: u32 = 0x00000008;
+    const FC_LIGHTING: u32 = 0x00000020;
+    const FC_PLUMBING: u32 = 0x00000040;
+    const FC_DECOR: u32 = 0x00000080;
+    const FC_KIDS: u32 = 0x00000100;
+    const FC_STORAGE: u32 = 0x00000200;
+    const FC_COMFORT: u32 = 0x00000800;
+    const FC_SURFACES: u32 = 0x00001000;
+    const FC_VEHICLES: u32 = 0x00002000;
+    const FC_PETS: u32 = 0x00004000;
+    const FC_SHOW_STAGE: u32 = 0x00008000;
+    const FC_RESORT: u32 = 0x00010000;
+    const FC_DEBUG: u32 = 0x40000000;
+
+    for (flag, category) in [
+        (FC_COMFORT, "Comfort"),
+        (FC_SURFACES, "Surfaces"),
+        (FC_STORAGE, "Storage"),
+        (FC_APPLIANCES, "Appliances"),
+        (FC_ELECTRONICS, "Electronics"),
+        (FC_PLUMBING, "Plumbing"),
+        (FC_LIGHTING, "Lighting"),
+        (FC_DECOR, "Decor"),
+        (FC_ENTERTAINMENT, "Entertainment"),
+        (FC_KIDS, "Kids"),
+        (FC_VEHICLES, "Vehicles"),
+        (FC_PETS, "Pets"),
+        (FC_SHOW_STAGE, "Show Stage"),
+        (FC_RESORT, "Resort"),
+        (FC_DEBUG, "Debug"),
+    ] {
+        if (fields.function_category & flag) != 0 {
+            push_content_type(&mut types, category);
+        }
+    }
+
+    const FSC_DEBUG_MASK: u64 = 0x00000010 | 0x00000020 | 0x00000040 | 0x00000200 | 0x00010000
+        | 0x0000000400000000;
+    const FSC_SHOW_STAGE_MASK: u64 = 0x00000002 | 0x00000004 | 0x00000008;
+    if (fields.function_subcategory & FSC_DEBUG_MASK) != 0 {
+        push_content_type(&mut types, "Debug");
+    }
+    if (fields.function_subcategory2 & FSC_SHOW_STAGE_MASK) != 0 {
+        push_content_type(&mut types, "Show Stage");
+    }
+    if (fields.function_subcategory2 & (0x00000010 | 0x00000020 | 0x00000040)) != 0 {
+        push_content_type(&mut types, "Resort");
+    }
+
+    if types.is_empty() {
+        push_content_type(&mut types, "Other Objects");
+    }
+
+    let detail = Some(format!(
+        "ObjectTypeFlags 0x{:08X} • ObjectTypeExt 0x{:08X} • RoomCategoryFlags 0x{:08X} • FunctionCategoryFlags 0x{:08X} • FunctionSubCategoryFlags 0x{:016X} • FunctionSubCategoryFlags2 0x{:016X} • RoomSubCategoryFlags 0x{:016X} • BuildCategoryFlags 0x{:08X}",
+        fields.object_type,
+        fields.object_type_ext,
+        fields.room_category,
+        fields.function_category,
+        fields.function_subcategory,
+        fields.function_subcategory2,
+        fields.room_subcategory,
+        fields.build_category
+    ));
+    ContentClassification {
+        primary: types[0].clone(),
+        all: types,
+        detail,
+    }
+}
+
+fn classify_build_from_objd(fields: &ObjdCatalogFields) -> Vec<String> {
+    let mut types = Vec::new();
+    let object_type = fields.object_type;
+    let object_type_ext = fields.object_type_ext;
+    let build = fields.build_category;
+    if (object_type & (0x00000008 | 0x00100000)) != 0 || (build & (0x00000002 | 0x00000100 | 0x40000000)) != 0 {
+        push_content_type(&mut types, "Doors & Arches");
+    }
+    if (object_type & 0x00000010) != 0 || (build & 0x00000004) != 0 {
+        push_content_type(&mut types, "Windows");
+    }
+    if (object_type & 0x00000020) != 0 || (build & 0x00000008) != 0 {
+        push_content_type(&mut types, "Fences & Gates");
+    }
+    if (object_type_ext & 0x00000001) != 0 || (build & 0x00020000) != 0 {
+        push_content_type(&mut types, "Stairs & Railings");
+    }
+    if (object_type & 0x00004000) != 0 || (build & 0x00000010) != 0 {
+        push_content_type(&mut types, "Columns");
+    }
+    if (object_type & 0x04000000) != 0 || (build & 0x00004000) != 0 {
+        push_content_type(&mut types, "Building Shells");
+    }
+    if (object_type & 0x00000080) != 0 || (build & 0x00000020) != 0 {
+        push_content_type(&mut types, "Rabbit Holes");
+    }
+    if (object_type & 0x00000800) != 0 || (build & 0x00000040) != 0 {
+        push_content_type(&mut types, "Fireplaces & Chimneys");
+    }
+    if (object_type & 0x00001000) != 0 || (build & 0x00000080) != 0 {
+        push_content_type(&mut types, "Fireplaces & Chimneys");
+    }
+    if (object_type & 0x00002000) != 0 || (build & (0x00000200 | 0x00000400 | 0x00000800 | 0x00002000)) != 0 {
+        push_content_type(&mut types, "Plants & Rocks");
+    }
+    if (build & 0x00010000) != 0 {
+        push_content_type(&mut types, "Elevators");
+    }
+    if (build & 0x00008000) != 0 {
+        push_content_type(&mut types, "Landmarks");
+    }
+    if (build & 0x10000000) != 0 {
+        push_content_type(&mut types, "Blueprints");
+    }
+    if (build & 0x20000000) != 0 {
+        push_content_type(&mut types, "Resort Objects");
+    }
+    types
+}
+
+fn classify_build_resource(resource_type: u32, fields: Option<&ObjdCatalogFields>) -> Option<ContentClassification> {
+    let mut types = Vec::new();
+    if let Some(fields) = fields {
+        for category in classify_build_from_objd(fields) {
+            push_content_type(&mut types, &category);
+        }
+    }
+
+    let direct = match resource_type {
+        TYPE_CATALOG_FENCE => Some("Fences & Gates"),
+        TYPE_CATALOG_STAIRS => Some("Stairs & Railings"),
+        TYPE_CATALOG_RAILING => Some("Stairs & Railings"),
+        TYPE_CATALOG_TERRAIN_GEOMETRY_BRUSH | TYPE_CATALOG_TERRAIN_WATER_BRUSH => {
+            Some("Terrain Tools")
+        }
+        TYPE_CATALOG_TERRAIN_PAINT_BRUSH => Some("Terrain Paints"),
+        TYPE_CATALOG_FIREPLACE => Some("Fireplaces & Chimneys"),
+        TYPE_CATALOG_FOUNTAIN_POOL => Some("Pools & Fountains"),
+        TYPE_CATALOG_FOUNDATION => Some("Foundations"),
+        TYPE_CATALOG_WALL_FLOOR_PATTERN => Some("Floors"),
+        TYPE_CATALOG_WALL_STYLE => Some("Walls"),
+        TYPE_CATALOG_ROOF_STYLE | TYPE_CATALOG_ROOF_PATTERN => Some("Roofs"),
+        TYPE_MODULAR_RESOURCE => Some("Doors & Arches"),
+        _ => None,
+    };
+    if let Some(category) = direct {
+        push_content_type(&mut types, category);
+    }
+
+    if types.is_empty() {
+        if matches!(
+            resource_type,
+            TYPE_CATALOG_FENCE
+                | TYPE_CATALOG_STAIRS
+                | TYPE_CATALOG_PROXY_PRODUCT
+                | TYPE_CATALOG_TERRAIN_GEOMETRY_BRUSH
+                | TYPE_CATALOG_RAILING
+                | TYPE_CATALOG_TERRAIN_PAINT_BRUSH
+                | TYPE_CATALOG_FIREPLACE
+                | TYPE_CATALOG_TERRAIN_WATER_BRUSH
+                | TYPE_CATALOG_FOUNTAIN_POOL
+                | TYPE_CATALOG_FOUNDATION
+                | TYPE_CATALOG_WALL_FLOOR_PATTERN
+                | TYPE_CATALOG_ROOF_STYLE
+                | TYPE_CATALOG_WALL_STYLE
+                | TYPE_MODULAR_RESOURCE
+                | TYPE_CATALOG_ROOF_PATTERN
+        ) {
+            push_content_type(&mut types, "Other Build");
+        } else {
+            return None;
+        }
+    }
+
+    Some(ContentClassification {
+        primary: types[0].clone(),
+        all: types,
+        detail: None,
+    })
+}
+
+fn classify_resource(entry: &DBPFEntry<'_>) -> ContentClassification {
+    match entry.resource_type {
+        TYPE_CASP => classify_casp(entry),
+        TYPE_FACE => one_content_type("Sliders", None),
+        TYPE_SKINTONE => one_content_type("Skins", None),
+        TYPE_PATTERN => one_content_type("Patterns", None),
+        TYPE_OBJD => {
+            let fields = parse_objd_catalog_fields(entry.data());
+            let object = classify_objd(fields.clone());
+            let mut all = object.all.clone();
+            if let Some(fields) = fields.as_ref() {
+                for category in classify_build_from_objd(fields) {
+                    push_content_type(&mut all, &category);
+                }
+            }
+            ContentClassification {
+                primary: object.primary,
+                all,
+                detail: object.detail,
+            }
+        }
+        _ => classify_build_resource(entry.resource_type, None)
+            .unwrap_or_else(|| one_content_type(kind_from_type(entry.resource_type), None)),
+    }
+}
+
+fn item_matches_query(item: &ResourceItem, query: &str) -> bool {
+    query.is_empty()
+        || item.label.to_lowercase().contains(query)
+        || item.key.to_lowercase().contains(query)
+        || item.kind.to_lowercase().contains(query)
+        || item.details.to_lowercase().contains(query)
+        || item.content_type.to_lowercase().contains(query)
+        || item
+            .content_types
+            .iter()
+            .any(|content_type| content_type.to_lowercase().contains(query))
 }
 
 fn first_compound_key(key: &str) -> &str {
@@ -380,13 +921,11 @@ fn build_casp_group_items(
             key: joined_key,
             kind: kind_from_type(first.resource_type).to_string(),
             details,
+            content_type: "Body Hair".to_string(),
+            content_types: vec!["Body Hair".to_string()],
+            classification: Some("Grouped CASP body hair resources".to_string()),
         };
-        if query.is_empty()
-            || item.label.to_lowercase().contains(query)
-            || item.key.to_lowercase().contains(query)
-            || item.kind.to_lowercase().contains(query)
-            || item.details.to_lowercase().contains(query)
-        {
+        if item_matches_query(&item, query) {
             items.push(item);
         }
     }
@@ -1344,13 +1883,11 @@ fn build_face_group_items(
             key: joined_key,
             kind: kind_from_type(first.resource_type).to_string(),
             details,
+            content_type: "Sliders".to_string(),
+            content_types: vec!["Sliders".to_string()],
+            classification: Some("Grouped FACE resources".to_string()),
         };
-        if query.is_empty()
-            || item.label.to_lowercase().contains(query)
-            || item.key.to_lowercase().contains(query)
-            || item.kind.to_lowercase().contains(query)
-            || item.details.to_lowercase().contains(query)
-        {
+        if item_matches_query(&item, query) {
             items.push(item);
         }
     }
@@ -1643,6 +2180,7 @@ fn build_item(
     name_map: &BTreeMap<u64, String>,
 ) -> ResourceItem {
     let kind = kind_from_type(entry.resource_type).to_string();
+    let classification = classify_resource(entry);
     ResourceItem {
         label: object_display_label(package, entry, name_map),
         key: key_string(entry),
@@ -1651,6 +2189,9 @@ fn build_item(
             "Type 0x{:08X} • Group 0x{:08X}",
             entry.resource_type, entry.resource_group
         ),
+        content_type: classification.primary,
+        content_types: classification.all,
+        classification: classification.detail,
     }
 }
 
@@ -1694,13 +2235,11 @@ fn build_skintone_group_items(
             key: joined_key,
             kind: kind_from_type(first.resource_type).to_string(),
             details,
+            content_type: "Skins".to_string(),
+            content_types: vec!["Skins".to_string()],
+            classification: Some("Grouped SkinTone resources".to_string()),
         };
-        if query.is_empty()
-            || item.label.to_lowercase().contains(query)
-            || item.key.to_lowercase().contains(query)
-            || item.kind.to_lowercase().contains(query)
-            || item.details.to_lowercase().contains(query)
-        {
+        if item_matches_query(&item, query) {
             items.push(item);
         }
     }
