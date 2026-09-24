@@ -5457,8 +5457,15 @@ mod remove_selected_tests {
         let selected_key = format!(
             "0x{TYPE_CASP:08X}-0x00000000-0x{casp_a:016X}"
         );
-        let mut removed = HashSet::new();
-        removed.insert(selected_key.clone());
+        let name_map = package_resource_names(&dbpf);
+        let (_selected_resources, shared_resources, removed) =
+            removal_plan_sets(&dbpf, &[selected_key.clone()], &name_map).unwrap();
+        let shared_key = format!(
+            "0x{TYPE_IMG:08X}-0x00000000-0x{shared:016X}"
+        );
+        assert!(removed.contains(&selected_key));
+        assert!(!removed.contains(&shared_key));
+        assert!(shared_resources.contains(&shared_key));
 
         write_removed_package(
             &dbpf,
