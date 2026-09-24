@@ -16,6 +16,9 @@ const translations = {
     dropHint: "Select or drag a .package or .dbc here",
     pickDestination: "Choose destination folder",
     scanList: "Load list",
+    searchLabel: "Search",
+    searchPlaceholder: "Search by name or Instance ID",
+    instanceLabel: "Instance",
     resourcesTitle: "Resources",
     noPackageLoaded: "No package loaded.",
     packageReady: (count) => `${count} found:`,
@@ -46,6 +49,9 @@ const translations = {
     dropHint: "Selecione ou arraste um .package ou .dbc aqui",
     pickDestination: "Escolher pasta de destino",
     scanList: "Carregar lista",
+    searchLabel: "Buscar",
+    searchPlaceholder: "Buscar por nome ou Instance ID",
+    instanceLabel: "Instance",
     resourcesTitle: "Recursos",
     noPackageLoaded: "Nenhum package carregado.",
     packageReady: (count) => `${count} ${count === 1 ? "encontrado" : "encontrados"}:`,
@@ -76,6 +82,9 @@ const translations = {
     dropHint: "Selecciona o arrastra un .package o .dbc aquí",
     pickDestination: "Elegir carpeta de destino",
     scanList: "Cargar lista",
+    searchLabel: "Buscar",
+    searchPlaceholder: "Buscar por nombre o Instance ID",
+    instanceLabel: "Instance",
     resourcesTitle: "Recursos",
     noPackageLoaded: "Ningún package cargado.",
     packageReady: (count) => `${count} ${count === 1 ? "encontrado" : "encontrados"}:`,
@@ -130,6 +139,7 @@ const el = {
   packagePath: document.querySelector("#package-path"),
   destinationPath: document.querySelector("#destination-path"),
   searchInput: document.querySelector("#search-input"),
+  searchLabel: document.querySelector("#search-label"),
   typeTabs: document.querySelectorAll(".tab-btn"),
   langDropdown: document.querySelector("#lang-dropdown"),
   langToggleBtn: document.querySelector("#lang-toggle-btn"),
@@ -215,6 +225,8 @@ function applyStaticTranslations() {
   if (el.dropHint) el.dropHint.textContent = t("dropHint");
   if (el.pickDestinationBtn) el.pickDestinationBtn.textContent = t("pickDestination");
   if (el.scanBtn) el.scanBtn.textContent = t("scanList");
+  if (el.searchLabel) el.searchLabel.textContent = t("searchLabel");
+  if (el.searchInput) el.searchInput.placeholder = t("searchPlaceholder");
   if (el.resultsTitle) el.resultsTitle.textContent = t("resourcesTitle");
   if (el.selectAllBtn) el.selectAllBtn.textContent = t("selectAll");
   if (el.selectNoneBtn) el.selectNoneBtn.textContent = t("selectNone");
@@ -360,7 +372,9 @@ function renderPreview() {
   el.previewKind.textContent = displayDetails
     ? `${displayType} • ${displayDetails}`
     : displayType;
-  el.previewKey.textContent = "";
+  const keyParts = String(state.preview.key || "").split("-");
+  const instance = keyParts.length >= 3 ? keyParts[2] : "";
+  el.previewKey.textContent = instance ? `${t("instanceLabel")}: ${instance}` : "";
 }
 
 function toggleSelection(key) {

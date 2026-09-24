@@ -350,12 +350,7 @@ fn build_casp_group_items(
             bodyhair_groups.entry(base).or_default().push(entry);
         } else {
             let item = build_item(package, entry, name_map);
-            if query.is_empty()
-                || item.label.to_lowercase().contains(query)
-                || item.key.to_lowercase().contains(query)
-                || item.kind.to_lowercase().contains(query)
-                || item.details.to_lowercase().contains(query)
-            {
+            if item_matches_query(&item, query) {
                 singles.push(item);
             }
         }
@@ -383,12 +378,7 @@ fn build_casp_group_items(
             kind: kind_from_type(first.resource_type).to_string(),
             details,
         };
-        if query.is_empty()
-            || item.label.to_lowercase().contains(query)
-            || item.key.to_lowercase().contains(query)
-            || item.kind.to_lowercase().contains(query)
-            || item.details.to_lowercase().contains(query)
-        {
+        if item_matches_query(&item, query) {
             items.push(item);
         }
     }
@@ -1347,12 +1337,7 @@ fn build_face_group_items(
             kind: kind_from_type(first.resource_type).to_string(),
             details,
         };
-        if query.is_empty()
-            || item.label.to_lowercase().contains(query)
-            || item.key.to_lowercase().contains(query)
-            || item.kind.to_lowercase().contains(query)
-            || item.details.to_lowercase().contains(query)
-        {
+        if item_matches_query(&item, query) {
             items.push(item);
         }
     }
@@ -1639,6 +1624,49 @@ fn object_display_label(
     resource_label(entry, name_map)
 }
 
+fn normalized_instance_query(query: &str) -> Option<u64> {
+    let lower = query.trim().to_ascii_lowercase();
+    let candidate = if let Some(pos) = lower.rfind("0x") {
+        &lower[pos + 2..]
+    } else {
+        lower.as_str()
+    };
+    let candidate = candidate.trim();
+
+    if !(8..=16).contains(&candidate.len())
+        || !candidate.chars().all(|ch| ch.is_ascii_hexdigit())
+    {
+        return None;
+    }
+
+    u64::from_str_radix(candidate, 16).ok()
+}
+
+fn item_matches_query(item: &ResourceItem, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+
+    if item.label.to_lowercase().contains(&query)
+        || item.key.to_lowercase().contains(&query)
+        || item.kind.to_lowercase().contains(&query)
+        || item.details.to_lowercase().contains(&query)
+    {
+        return true;
+    }
+
+    let Some(instance) = normalized_instance_query(&query) else {
+        return false;
+    };
+
+    item.key.split("||").any(|part| {
+        parse_key(part)
+            .map(|parts| parts.instance == instance)
+            .unwrap_or(false)
+    })
+}
+
 fn build_item(
     package: &DBPF<'_>,
     entry: &DBPFEntry<'_>,
@@ -1697,12 +1725,7 @@ fn build_skintone_group_items(
             kind: kind_from_type(first.resource_type).to_string(),
             details,
         };
-        if query.is_empty()
-            || item.label.to_lowercase().contains(query)
-            || item.key.to_lowercase().contains(query)
-            || item.kind.to_lowercase().contains(query)
-            || item.details.to_lowercase().contains(query)
-        {
+        if item_matches_query(&item, query) {
             items.push(item);
         }
     }
@@ -3346,13 +3369,7 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
                 .filter(|entry| entry.resource_type != TYPE_XML)
                 .filter(|entry| entry.resource_type != TYPE_CASP)
                 .map(|entry| build_item(&package, entry, &name_map))
-                .filter(|item| {
-                    query.is_empty()
-                        || item.label.to_lowercase().contains(&query)
-                        || item.key.to_lowercase().contains(&query)
-                        || item.kind.to_lowercase().contains(&query)
-                        || item.details.to_lowercase().contains(&query)
-                })
+                .filter(|item| item_matches_query(item, &query))
                 .collect();
 
             items.extend(build_casp_group_items(&package, &query, &name_map));
@@ -3367,13 +3384,7 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
                 .filter(|entry| filter_matches(entry, &resource_type))
                 .filter(|entry| !(resource_type == "casp" && entry.resource_type == TYPE_XML))
                 .map(|entry| build_item(&package, entry, &name_map))
-                .filter(|item| {
-                    query.is_empty()
-                        || item.label.to_lowercase().contains(&query)
-                        || item.key.to_lowercase().contains(&query)
-                        || item.kind.to_lowercase().contains(&query)
-                        || item.details.to_lowercase().contains(&query)
-                })
+                .filter(|item| item_matches_query(item, &query))
                 .collect();
 
             items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
