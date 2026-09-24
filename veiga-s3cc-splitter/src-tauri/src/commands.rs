@@ -3272,6 +3272,76 @@ fn expand_selection_for_export(
     Ok(selected)
 }
 
+fn manifest_removal_plan_sets(
+    package: &DBPF<'_>,
+    manifest: &MergeManifest,
+    selected_keys: &[String],
+) -> Option<(HashSet<String>, HashSet<String>, HashSet<String>)> {
+    let selected_atomic: HashSet<String> = selected_keys
+        .iter()
+        .flat_map(|key| key.split("||"))
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+
+    let available: HashSet<String> = package
+        .files
+        .iter()
+        .filter(|entry| entry.resource_type != TYPE_KEY)
+        .filter(|entry| !is_manifest_tgi(entry.resource_type, entry.resource_group, entry.instance))
+        .map(key_string)
+        .collect();
+
+    let mut selected_packages = HashSet::new();
+    for source in &manifest.packages {
+        let matched = if source.anchors.is_empty() {
+            source
+                .resources
+                .iter()
+                .any(|resource| selected_atomic.contains(&resource.key))
+        } else {
+            source
+                .anchors
+                .iter()
+                .any(|anchor| selected_atomic.contains(&anchor.key))
+        };
+        if matched {
+            selected_packages.insert(source.id);
+        }
+    }
+
+    if selected_packages.is_empty() {
+        return None;
+    }
+
+    let mut selected_resources = HashSet::new();
+    let mut remaining_resources = HashSet::new();
+    for source in &manifest.packages {
+        let target = if selected_packages.contains(&source.id) {
+            &mut selected_resources
+        } else {
+            &mut remaining_resources
+        };
+        for resource in &source.resources {
+            if available.contains(&resource.key) {
+                target.insert(resource.key.clone());
+            }
+        }
+    }
+
+    let shared_preserved: HashSet<String> = selected_resources
+        .intersection(&remaining_resources)
+        .cloned()
+        .collect();
+    let resources_to_remove: HashSet<String> = selected_resources
+        .difference(&shared_preserved)
+        .cloned()
+        .collect();
+
+    Some((selected_resources, shared_preserved, resources_to_remove))
+}
+
 fn removal_plan_sets(
     package: &DBPF<'_>,
     selected_keys: &[String],
@@ -3279,6 +3349,12 @@ fn removal_plan_sets(
 ) -> Result<(HashSet<String>, HashSet<String>, HashSet<String>), String> {
     if selected_keys.is_empty() {
         return Err("Selecione pelo menos um item para remover.".to_string());
+    }
+
+    if let Some(manifest) = read_merge_manifest_from_dbpf(package)? {
+        if let Some(plan) = manifest_removal_plan_sets(package, &manifest, selected_keys) {
+            return Ok(plan);
+        }
     }
 
     let selected_compound: HashSet<String> = selected_keys.iter().cloned().collect();
@@ -3326,20 +3402,23 @@ fn build_remove_selection_plan(
     selected_keys: &[String],
     name_map: &BTreeMap<u64, String>,
 ) -> Result<RemoveSelectionPlan, String> {
-    let selected_compound: HashSet<String> = selected_keys.iter().cloned().collect();
-    let candidate =
-        expand_selection_for_export(package, &selected_compound, true, name_map)?;
-    let candidate_non_key: HashSet<String> = candidate
-        .into_iter()
-        .filter(|key| {
-            parse_key(key)
-                .map(|parts| parts.resource_type != TYPE_KEY)
-                .unwrap_or(false)
-        })
-        .collect();
-
+    let manifest_backed = read_merge_manifest_from_dbpf(package)?.is_some();
     let (selected_resources, shared_preserved, resources_to_remove) =
         removal_plan_sets(package, selected_keys, name_map)?;
+
+    let candidate_resources = if manifest_backed {
+        selected_resources.len()
+    } else {
+        let selected_compound: HashSet<String> = selected_keys.iter().cloned().collect();
+        expand_selection_for_export(package, &selected_compound, true, name_map)?
+            .into_iter()
+            .filter(|key| {
+                parse_key(key)
+                    .map(|parts| parts.resource_type != TYPE_KEY)
+                    .unwrap_or(false)
+            })
+            .count()
+    };
     let selected_resources_preserved = selected_resources
         .intersection(&shared_preserved)
         .count();
@@ -3347,7 +3426,7 @@ fn build_remove_selection_plan(
     Ok(RemoveSelectionPlan {
         selected_items: selected_keys.len(),
         selected_resources: selected_resources.len(),
-        candidate_resources: candidate_non_key.len(),
+        candidate_resources,
         shared_resources_preserved: shared_preserved.len(),
         selected_resources_preserved,
         resources_to_remove: resources_to_remove.len(),
