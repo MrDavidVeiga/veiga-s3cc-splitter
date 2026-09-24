@@ -1,0 +1,40 @@
+name: validate-reversible-merger-final
+
+on:
+  push:
+    branches:
+      - feature/reversible-merger-manifest
+
+jobs:
+  validate:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: veiga-s3cc-splitter/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install frontend dependencies
+        working-directory: veiga-s3cc-splitter
+        run: npm ci
+      - name: Test content filters
+        working-directory: veiga-s3cc-splitter
+        run: node src/filter-logic.test.mjs
+      - name: Build frontend
+        working-directory: veiga-s3cc-splitter
+        run: npm run build
+      - name: Cargo check
+        run: cargo check -p veiga-s3cc-splitter
+      - name: Cargo test
+        run: cargo test -p veiga-s3cc-splitter --lib
+      - name: Build Windows executable
+        working-directory: veiga-s3cc-splitter
+        run: npm run tauri build -- --no-bundle
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: Veigas-S3CC-Splitter-v2.2.0-Reversible-Merger
+          path: target/release/veiga-s3cc-splitter.exe
+          if-no-files-found: error
