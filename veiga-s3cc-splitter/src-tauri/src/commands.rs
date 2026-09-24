@@ -5115,6 +5115,219 @@ mod remove_selected_tests {
         let _ = remove_file(&source);
         let _ = remove_file(&rebuilt);
     }
+
+    fn test_dir(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "veiga-splitter-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn reversible_merger_writes_manifest_and_restores_original_names() {
+        let root = test_dir("reversible-merge");
+        let source_a = root.join("TShirtMickey.package");
+        let source_b = root.join("ModernSofa.package");
+        let merged_dir = root.join("merged");
+        let restore_dir = root.join("restored");
+        std::fs::create_dir_all(&merged_dir).unwrap();
+        std::fs::create_dir_all(&restore_dir).unwrap();
+
+        let casp_instance = 0x1111_0000_0000_0001u64;
+        let objd_instance = 0x2222_0000_0000_0002u64;
+        let shared_instance = 0x3333_0000_0000_0003u64;
+        let shared_data = vec![9, 8, 7, 6, 5];
+
+        write_test_package(
+            &source_a,
+            &[
+                (TYPE_CASP, 0, casp_instance, vec![1, 2, 3]),
+                (TYPE_IMG, 0, shared_instance, shared_data.clone()),
+            ],
+        );
+        write_test_package(
+            &source_b,
+            &[
+                (TYPE_OBJD, 0, objd_instance, vec![4, 5, 6]),
+                (TYPE_IMG, 0, shared_instance, shared_data),
+            ],
+        );
+
+        let result = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![
+                source_a.display().to_string(),
+                source_b.display().to_string(),
+            ],
+            destination_folder: merged_dir.display().to_string(),
+            output_name: "MyMerged.package".to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(result.package_count, 2);
+        assert_eq!(result.shared_resources, 1);
+        assert_eq!(result.resource_count, 3);
+
+        let merged = WritablePackage::load(&result.output_path).unwrap();
+        let manifest = read_merge_manifest_from_writable(&merged).unwrap().unwrap();
+        assert_eq!(
+            manifest
+                .packages
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["TShirtMickey.package", "ModernSofa.package"]
+        );
+        assert_eq!(manifest.packages[0].anchors[0].kind, "CASP");
+        assert_eq!(manifest.packages[1].anchors[0].kind, "OBJD");
+
+        let restored = restore_manifest_packages(RestoreManifestPayload {
+            package_path: result.output_path.clone(),
+            destination_folder: restore_dir.display().to_string(),
+        })
+        .unwrap();
+        assert_eq!(restored.package_count, 2);
+        assert!(restore_dir.join("TShirtMickey.package").exists());
+        assert!(restore_dir.join("ModernSofa.package").exists());
+
+        let restored_a = WritablePackage::load(restore_dir.join("TShirtMickey.package")).unwrap();
+        let restored_a_keys: HashSet<String> = restored_a
+            .entries
+            .iter()
+            .map(key_string_from_writable)
+            .collect();
+        assert!(restored_a_keys.contains(&format!(
+            "0x{TYPE_CASP:08X}-0x00000000-0x{casp_instance:016X}"
+        )));
+        assert!(restored_a_keys.contains(&format!(
+            "0x{TYPE_IMG:08X}-0x00000000-0x{shared_instance:016X}"
+        )));
+
+        let restored_b = WritablePackage::load(restore_dir.join("ModernSofa.package")).unwrap();
+        let restored_b_keys: HashSet<String> = restored_b
+            .entries
+            .iter()
+            .map(key_string_from_writable)
+            .collect();
+        assert!(restored_b_keys.contains(&format!(
+            "0x{TYPE_OBJD:08X}-0x00000000-0x{objd_instance:016X}"
+        )));
+        assert!(restored_b_keys.contains(&format!(
+            "0x{TYPE_IMG:08X}-0x00000000-0x{shared_instance:016X}"
+        )));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reversible_merger_rejects_conflicting_tgi_data() {
+        let root = test_dir("merge-conflict");
+        let source_a = root.join("A.package");
+        let source_b = root.join("B.package");
+        let destination = root.join("out");
+        std::fs::create_dir_all(&destination).unwrap();
+
+        let instance = 0x4444_0000_0000_0004u64;
+        write_test_package(&source_a, &[(TYPE_IMG, 0, instance, vec![1, 2, 3])]);
+        write_test_package(&source_b, &[(TYPE_IMG, 0, instance, vec![9, 9, 9])]);
+
+        let error = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![
+                source_a.display().to_string(),
+                source_b.display().to_string(),
+            ],
+            destination_folder: destination.display().to_string(),
+            output_name: "Conflict.package".to_string(),
+        })
+        .unwrap_err();
+
+        assert!(error.contains("Conflito de TGI"));
+        assert!(!destination.join("Conflict.package").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn removing_merged_cc_updates_embedded_manifest() {
+        let root = test_dir("manifest-removal");
+        let source_a = root.join("A.package");
+        let source_b = root.join("B.package");
+        let destination = root.join("out");
+        std::fs::create_dir_all(&destination).unwrap();
+
+        let casp_a = 0x5555_0000_0000_0001u64;
+        let casp_b = 0x5555_0000_0000_0002u64;
+        let shared = 0x5555_0000_0000_0003u64;
+        write_test_package(
+            &source_a,
+            &[
+                (TYPE_CASP, 0, casp_a, vec![1]),
+                (TYPE_IMG, 0, shared, vec![7, 7]),
+            ],
+        );
+        write_test_package(
+            &source_b,
+            &[
+                (TYPE_CASP, 0, casp_b, vec![2]),
+                (TYPE_IMG, 0, shared, vec![7, 7]),
+            ],
+        );
+
+        let merged = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![
+                source_a.display().to_string(),
+                source_b.display().to_string(),
+            ],
+            destination_folder: destination.display().to_string(),
+            output_name: "Merged.package".to_string(),
+        })
+        .unwrap();
+
+        let rebuilt = root.join("rebuilt.package");
+        let mmap = open_package(&merged.output_path).unwrap();
+        let dbpf = parse_package(&mmap).unwrap();
+        let source_package = WritablePackage::load(&merged.output_path).unwrap();
+        let mut source_file = File::open(&merged.output_path).unwrap();
+        let selected_key = format!(
+            "0x{TYPE_CASP:08X}-0x00000000-0x{casp_a:016X}"
+        );
+        let mut removed = HashSet::new();
+        removed.insert(selected_key.clone());
+
+        write_removed_package(
+            &dbpf,
+            &source_package,
+            &mut source_file,
+            &[selected_key.clone()],
+            &removed,
+            &rebuilt,
+        )
+        .unwrap();
+        validate_removed_package(
+            &source_package,
+            &rebuilt,
+            &[selected_key],
+            &removed,
+        )
+        .unwrap();
+
+        let rebuilt_package = WritablePackage::load(&rebuilt).unwrap();
+        let manifest = read_merge_manifest_from_writable(&rebuilt_package)
+            .unwrap()
+            .unwrap();
+        assert_eq!(manifest.packages.len(), 1);
+        assert_eq!(manifest.packages[0].name, "B.package");
+        assert!(manifest.packages[0]
+            .resources
+            .iter()
+            .any(|r| r.key.ends_with(&format!("{shared:016X}"))));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 
