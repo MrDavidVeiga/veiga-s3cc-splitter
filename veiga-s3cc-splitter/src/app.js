@@ -1275,6 +1275,7 @@ function bindDragAndDrop() {
         state.isContentFilterOpen = false;
         state.selectionAnchorKey = null;
         state.preview = null;
+        state.manifestPackageCount = 0;
         render();
       }
       return;
