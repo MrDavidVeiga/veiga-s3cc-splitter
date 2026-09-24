@@ -117,6 +117,7 @@ const state = {
   search: "",
   resources: [],
   selectedKeys: [],
+  selectionAnchorKey: null,
   preview: null,
   isBusy: false,
   busyTitle: "",
@@ -319,7 +320,7 @@ function renderList() {
     const check = document.createElement("input");
     check.type = "checkbox";
     check.checked = state.selectedKeys.includes(item.key);
-    check.addEventListener("change", () => toggleSelection(item.key));
+    check.addEventListener("click", (event) => handleSelectionClick(item.key, event));
     checkWrap.appendChild(check);
 
     const button = document.createElement("button");
@@ -377,12 +378,39 @@ function renderPreview() {
   el.previewKey.textContent = instance ? `${t("instanceLabel")}: ${instance}` : "";
 }
 
-function toggleSelection(key) {
-  if (state.selectedKeys.includes(key)) {
-    state.selectedKeys = state.selectedKeys.filter((item) => item !== key);
+function handleSelectionClick(key, event) {
+  const targetChecked = event.currentTarget.checked;
+  const currentIndex = state.resources.findIndex((item) => item.key === key);
+  const anchorIndex = state.selectionAnchorKey
+    ? state.resources.findIndex((item) => item.key === state.selectionAnchorKey)
+    : -1;
+
+  if (event.shiftKey && currentIndex >= 0 && anchorIndex >= 0) {
+    const start = Math.min(anchorIndex, currentIndex);
+    const end = Math.max(anchorIndex, currentIndex);
+    const selected = new Set(state.selectedKeys);
+
+    for (const item of state.resources.slice(start, end + 1)) {
+      if (targetChecked) {
+        selected.add(item.key);
+      } else {
+        selected.delete(item.key);
+      }
+    }
+
+    state.selectedKeys = [...selected];
   } else {
-    state.selectedKeys = [...state.selectedKeys, key];
+    if (targetChecked) {
+      if (!state.selectedKeys.includes(key)) {
+        state.selectedKeys = [...state.selectedKeys, key];
+      }
+    } else {
+      state.selectedKeys = state.selectedKeys.filter((item) => item !== key);
+    }
+
+    state.selectionAnchorKey = key;
   }
+
   render();
 }
 
@@ -392,6 +420,7 @@ async function pickPackage() {
     state.packagePath = result;
     state.resources = [];
     state.selectedKeys = [];
+    state.selectionAnchorKey = null;
     state.preview = null;
     render();
   }
@@ -421,6 +450,7 @@ async function scanPackage() {
 
     state.resources = result.items || [];
     state.selectedKeys = state.resources.map((item) => item.key);
+    state.selectionAnchorKey = null;
     state.preview = null;
 
     if (state.resources[0]) {
@@ -486,6 +516,7 @@ function clearAll() {
   state.destinationFolder = "";
   state.resources = [];
   state.selectedKeys = [];
+    state.selectionAnchorKey = null;
   state.preview = null;
   state.search = "";
   if (el.searchInput) el.searchInput.value = "";
@@ -533,6 +564,7 @@ function bindDragAndDrop() {
         state.packagePath = path;
         state.resources = [];
         state.selectedKeys = [];
+        state.selectionAnchorKey = null;
         state.preview = null;
         render();
       }
@@ -559,11 +591,13 @@ function setupEvents() {
 
   el.selectAllBtn.addEventListener("click", () => {
     state.selectedKeys = state.resources.map((item) => item.key);
+    state.selectionAnchorKey = null;
     render();
   });
 
   el.selectNoneBtn.addEventListener("click", () => {
     state.selectedKeys = [];
+    state.selectionAnchorKey = null;
     render();
   });
 
@@ -584,6 +618,7 @@ function setupEvents() {
       state.resourceType = btn.dataset.type;
       state.resources = [];
       state.selectedKeys = [];
+      state.selectionAnchorKey = null;
       state.preview = null;
       render();
       if (state.packagePath) scanPackage();
