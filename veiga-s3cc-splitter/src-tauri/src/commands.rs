@@ -4581,6 +4581,80 @@ fn create_clone_package(payload: &ExportSelectionPayload) -> Result<(String, usi
     Ok((batch_root.display().to_string(), total_count))
 }
 
+fn build_merge_manifest_items(
+    package: &DBPF<'_>,
+    manifest: &MergeManifest,
+    query: &str,
+    name_map: &BTreeMap<u64, String>,
+) -> Vec<ResourceItem> {
+    let available: HashSet<String> = package.files.iter().map(key_string).collect();
+    let mut items = Vec::new();
+
+    for source in &manifest.packages {
+        let mut selection_keys: Vec<String> = source
+            .anchors
+            .iter()
+            .map(|anchor| anchor.key.clone())
+            .filter(|key| available.contains(key))
+            .collect();
+
+        if selection_keys.is_empty() {
+            selection_keys = source
+                .resources
+                .iter()
+                .map(|resource| resource.key.clone())
+                .filter(|key| available.contains(key))
+                .collect();
+        }
+        selection_keys.sort();
+        selection_keys.dedup();
+        if selection_keys.is_empty() {
+            continue;
+        }
+
+        let mut categories = Vec::new();
+        for anchor in &source.anchors {
+            if !available.contains(&anchor.key) {
+                continue;
+            }
+            for category in content_categories_for_key(package, &anchor.key, name_map) {
+                push_unique_category(&mut categories, &category);
+            }
+        }
+
+        let mut kinds: Vec<String> = source
+            .anchors
+            .iter()
+            .map(|anchor| anchor.kind.clone())
+            .collect();
+        kinds.sort();
+        kinds.dedup();
+        let kind = if kinds.is_empty() {
+            "Merged CC".to_string()
+        } else {
+            kinds.join(" + ")
+        };
+
+        let item = ResourceItem {
+            label: source.name.clone(),
+            key: selection_keys.join("||"),
+            kind,
+            details: format!(
+                "Merge Manifest • {} recurso(s) • {} anchor(s)",
+                source.resources.len(),
+                source.anchors.len()
+            ),
+            content_categories: categories,
+        };
+        if item_matches_query(&item, query) {
+            items.push(item);
+        }
+    }
+
+    items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    items
+}
+
 #[tauri::command]
 pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String> {
     let package_path = payload.package_path.trim();
@@ -4601,11 +4675,20 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
         let package = parse_package(&mmap)?;
         let query = payload.search.unwrap_or_default().to_lowercase();
         let name_map = package_resource_names(&package);
-        let manifest_package_count = read_merge_manifest_from_dbpf(&package)?
+        let merge_manifest = read_merge_manifest_from_dbpf(&package)?;
+        let manifest_package_count = merge_manifest
+            .as_ref()
             .map(|manifest| manifest.packages.len())
             .unwrap_or(0);
 
-        let items = if resource_type == "skintone" {
+        let items = if resource_type == "all" && merge_manifest.is_some() {
+            build_merge_manifest_items(
+                &package,
+                merge_manifest.as_ref().unwrap(),
+                &query,
+                &name_map,
+            )
+        } else if resource_type == "skintone" {
             build_skintone_group_items(&package, &query, &name_map)
         } else if resource_type == "face" {
             build_face_group_items(&package, &query, &name_map)
