@@ -9,6 +9,10 @@
   <body>
     <div class="app-shell">
       <header class="topbar">
+        <div class="mode-switcher" role="tablist" aria-label="Tool mode">
+          <button id="mode-splitter-btn" class="mode-btn active" type="button" role="tab" aria-selected="true">Splitter</button>
+          <button id="mode-merger-btn" class="mode-btn" type="button" role="tab" aria-selected="false">Merger</button>
+        </div>
         <div class="language-switcher">
           <span id="lang-label"></span>
           <div class="lang-dropdown" id="lang-dropdown">
@@ -27,26 +31,48 @@
       <main class="layout">
         <aside class="left-panel card">
           <h1 class="app-title">Veiga's S3CC Splitter</h1>
-          <section class="control-block drag-zone" id="package-drop-zone">
-            <button id="pick-package-btn" class="primary-btn">Open package</button>
-            <div id="package-drop-hint" class="drop-hint">Select or drag a .package or .dbc here</div>
-          </section>
-          <div id="package-path" class="path-label hidden"></div>
-          <section class="control-block">
-            <button id="pick-destination-btn" class="primary-btn">Choose destination folder</button>
-          </section>
-          <div id="destination-path" class="path-label hidden"></div>
-          <section class="control-block hidden-controls" aria-hidden="true">
-            <div class="section-label hidden-label">Options</div>
-            <label class="check-row"><input type="checkbox" id="opt-thumbs" checked /> <span>Include thumbnails</span></label>
-            <label class="check-row"><input type="checkbox" id="opt-compression" checked /> <span>Enable compression</span></label>
-            <label class="check-row"><input type="checkbox" id="opt-clone" checked /> <span>Create clone package</span></label>
-          </section>
-          <section class="control-block last-action">
-            <button id="scan-btn" class="primary-btn large">Load list</button>
-          </section>
+          <div id="splitter-controls" class="mode-controls">
+            <section class="control-block drag-zone" id="package-drop-zone">
+              <button id="pick-package-btn" class="primary-btn">Open package</button>
+              <div id="package-drop-hint" class="drop-hint">Select or drag a .package or .dbc here</div>
+            </section>
+            <div id="package-path" class="path-label hidden"></div>
+            <section class="control-block">
+              <button id="pick-destination-btn" class="primary-btn">Choose destination folder</button>
+            </section>
+            <div id="destination-path" class="path-label hidden"></div>
+            <section class="control-block hidden-controls" aria-hidden="true">
+              <div class="section-label hidden-label">Options</div>
+              <label class="check-row"><input type="checkbox" id="opt-thumbs" checked /> <span>Include thumbnails</span></label>
+              <label class="check-row"><input type="checkbox" id="opt-compression" checked /> <span>Enable compression</span></label>
+              <label class="check-row"><input type="checkbox" id="opt-clone" checked /> <span>Create clone package</span></label>
+            </section>
+            <section class="control-block last-action">
+              <button id="scan-btn" class="primary-btn large">Load list</button>
+            </section>
+          </div>
+          <div id="merger-controls" class="mode-controls hidden">
+            <section class="control-block drag-zone">
+              <button id="merger-add-packages-btn" class="primary-btn">Add packages</button>
+              <div id="merger-add-hint" class="drop-hint">Select two or more .package files to merge</div>
+            </section>
+            <div id="merger-source-count" class="path-label"></div>
+            <section class="control-block">
+              <button id="merger-pick-destination-btn" class="primary-btn">Choose destination folder</button>
+            </section>
+            <div id="merger-destination-path" class="path-label hidden"></div>
+            <section class="control-block merger-name-block">
+              <div id="merger-output-label" class="section-label">Merged package name</div>
+              <input id="merger-output-name" class="text-input" type="text" value="Merged.package" autocomplete="off" spellcheck="false" />
+            </section>
+            <section class="control-block last-action merger-action-row">
+              <button id="merger-run-btn" class="primary-btn large">Merge packages</button>
+              <button id="merger-clear-btn" class="secondary-btn">Clear</button>
+            </section>
+          </div>
         </aside>
         <section class="right-panel card">
+          <div id="splitter-workspace" class="mode-workspace">
           <div id="busy-state" class="panel-state hidden">
             <div class="progress-card">
               <div id="busy-title" class="state-title">Reading package...</div>
@@ -103,9 +129,21 @@
             <div class="footer-actions">
               <button id="export-btn" class="primary-btn">Export selection</button>
               <button id="remove-merged-btn" class="danger-btn">Remove from merged</button>
+              <button id="restore-manifest-btn" class="secondary-btn hidden">Restore Original Packages</button>
               <button id="clear-btn" class="secondary-btn">Clear</button>
               <button id="zip-btn" class="primary-btn hidden-action" aria-hidden="true" tabindex="-1">Compress selection</button>
             </div>
+          </div>
+          </div>
+          <div id="merger-workspace" class="mode-workspace hidden">
+            <div class="results-header">
+              <div>
+                <div id="merger-title" class="state-title">Packages to Merge</div>
+                <div id="merger-summary" class="state-subtitle">No packages selected.</div>
+              </div>
+            </div>
+            <div id="merger-source-list" class="merger-source-list"></div>
+            <div id="merger-result" class="merger-result hidden"></div>
           </div>
         </section>
       </main>
