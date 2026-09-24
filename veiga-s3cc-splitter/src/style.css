@@ -8,7 +8,7 @@
   --green: #618422;
   --green-dark: #435c17;
   --danger: #b83232;
-  --workspace-height: 640px;
+  --workspace-height: clamp(520px, calc(100vh - 120px), 820px);
 }
 
 * {
@@ -396,7 +396,9 @@ body {
 }
 
 .resource-list {
-  max-height: calc(410px - var(--list-end-gap));
+  height: calc(var(--workspace-height) - 260px);
+  min-height: 260px;
+  max-height: none;
   overflow: auto;
   display: flex;
   flex-direction: column;
@@ -422,6 +424,31 @@ body {
 .resource-row:hover {
   border-color: rgba(97, 132, 34, 0.4);
   background: rgba(97, 132, 34, 0.08);
+}
+
+.resource-row.duplicate {
+  border-color: rgba(202, 156, 55, 0.34);
+  background: rgba(202, 156, 55, 0.06);
+}
+
+.resource-row.duplicate:hover,
+.resource-row.duplicate.active {
+  border-color: rgba(202, 156, 55, 0.58);
+}
+
+.duplicate-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-top: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(202, 156, 55, 0.42);
+  background: rgba(202, 156, 55, 0.10);
+  color: var(--text);
+  font-size: 0.7rem;
+  font-weight: 800;
+  line-height: 1.2;
 }
 
 .resource-check {
@@ -802,4 +829,47 @@ body {
   width: 18px;
   height: 18px;
   fill: currentColor;
+}
+
+@media (max-height: 760px) {
+  :root {
+    --workspace-height: calc(100vh - 86px);
+  }
+
+  .resource-list {
+    min-height: 220px;
+    height: calc(var(--workspace-height) - 235px);
+  }
+
+  .app-shell {
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .topbar {
+    margin-bottom: 8px;
+  }
+
+  .left-panel,
+  .right-panel {
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+
+  .drag-zone {
+    padding: 7px;
+  }
+
+  .primary-btn {
+    padding: 9px 11px;
+  }
+
+  .resource-list {
+    gap: 5px;
+    padding: 6px;
+  }
+
+  .resource-row {
+    padding: 6px 5px;
+  }
 }

@@ -19,6 +19,7 @@ const translations = {
     searchLabel: "Search",
     searchPlaceholder: "Search by name or Instance ID",
     instanceLabel: "Instance",
+    duplicateLabel: (count) => `Duplicate ×${count}`,
     resourcesTitle: "Resources",
     noPackageLoaded: "No package loaded.",
     packageReady: (count) => `${count} found:`,
@@ -60,6 +61,7 @@ const translations = {
     searchLabel: "Buscar",
     searchPlaceholder: "Buscar por nome ou Instance ID",
     instanceLabel: "Instance",
+    duplicateLabel: (count) => `Duplicado ×${count}`,
     resourcesTitle: "Recursos",
     noPackageLoaded: "Nenhum package carregado.",
     packageReady: (count) => `${count} ${count === 1 ? "encontrado" : "encontrados"}:`,
@@ -101,6 +103,7 @@ const translations = {
     searchLabel: "Buscar",
     searchPlaceholder: "Buscar por nombre o Instance ID",
     instanceLabel: "Instance",
+    duplicateLabel: (count) => `Duplicado ×${count}`,
     resourcesTitle: "Recursos",
     noPackageLoaded: "Ningún package cargado.",
     packageReady: (count) => `${count} ${count === 1 ? "encontrado" : "encontrados"}:`,
@@ -333,12 +336,24 @@ function render() {
 function renderList() {
   el.resourceList.innerHTML = "";
 
+  const duplicateCounts = new Map();
+  for (const item of state.resources) {
+    const duplicateKey = String(item.label || "").trim().toLowerCase();
+    if (!duplicateKey) continue;
+    duplicateCounts.set(duplicateKey, (duplicateCounts.get(duplicateKey) || 0) + 1);
+  }
+
   for (const item of state.resources) {
     const displayType = getDisplayType(item);
     const displayDetails = getDisplayDetails(item);
 
+    const duplicateKey = String(item.label || "").trim().toLowerCase();
+    const duplicateCount = duplicateCounts.get(duplicateKey) || 0;
     const row = document.createElement("div");
-    row.className = "resource-row" + (state.preview?.key === item.key ? " active" : "");
+    row.className =
+      "resource-row" +
+      (state.preview?.key === item.key ? " active" : "") +
+      (duplicateCount > 1 ? " duplicate" : "");
 
     const checkWrap = document.createElement("div");
     checkWrap.className = "resource-check";
@@ -355,6 +370,9 @@ function renderList() {
     const metaLines = [];
     if (displayType) metaLines.push(displayType);
     if (displayDetails) metaLines.push(displayDetails);
+    if (duplicateCount > 1) {
+      metaLines.push(`<span class="duplicate-badge">${t("duplicateLabel", duplicateCount)}</span>`);
+    }
 
     button.innerHTML = `
       <div class="resource-name">${item.label}</div>
