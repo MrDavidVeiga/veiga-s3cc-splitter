@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
-use std::fs::{create_dir_all, File, OpenOptions};
+use std::fs::{copy, create_dir_all, remove_file, rename, File, OpenOptions};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -102,6 +102,43 @@ pub struct ExportSelectionPayload {
     pub include_thumbnails: bool,
     pub enable_compression: bool,
     pub create_clone_package: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveSelectionPayload {
+    pub package_path: String,
+    pub selected_keys: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveSelectionApplyPayload {
+    pub package_path: String,
+    pub destination_folder: String,
+    pub selected_keys: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveSelectionPlan {
+    pub selected_items: usize,
+    pub selected_resources: usize,
+    pub candidate_resources: usize,
+    pub shared_resources_preserved: usize,
+    pub selected_resources_preserved: usize,
+    pub resources_to_remove: usize,
+    pub remaining_resources: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveSelectionResult {
+    pub output_path: String,
+    pub backup_path: String,
+    pub removed_resources: usize,
+    pub shared_resources_preserved: usize,
+    pub selected_resources_preserved: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -2837,6 +2874,11 @@ fn collect_clone_keys(
                     enqueue_key(package, include_thumbnails, &mut resolved, &mut queue, part);
                 }
             }
+            TYPE_SKINTONE => {
+                for part in tone_group_members(package, parts, name_map) {
+                    enqueue_key(package, include_thumbnails, &mut resolved, &mut queue, part);
+                }
+            }
             TYPE_OBJD => {
                 for part in object_group_members(package, parts) {
                     enqueue_key(package, include_thumbnails, &mut resolved, &mut queue, part);
@@ -2850,6 +2892,7 @@ fn collect_clone_keys(
         let discovered = match current.resource_type {
             TYPE_CASP => casp_direct_refs(package, current),
             TYPE_FACE => face_group_members(package, current, name_map),
+            TYPE_SKINTONE => tone_group_members(package, current, name_map),
             TYPE_OBJD => object_group_members(package, current),
             TYPE_OBJK => objk_direct_refs(package, current),
             TYPE_VPXY => vpxy_direct_refs(package, current),
@@ -2884,6 +2927,299 @@ fn expand_selection_for_export(
     let extra = collect_clone_keys(package, &selected, include_thumbnails, name_map)?;
     selected.extend(extra);
     Ok(selected)
+}
+
+fn removal_plan_sets(
+    package: &DBPF<'_>,
+    selected_keys: &[String],
+    name_map: &BTreeMap<u64, String>,
+) -> Result<(HashSet<String>, HashSet<String>, HashSet<String>), String> {
+    if selected_keys.is_empty() {
+        return Err("Selecione pelo menos um item para remover.".to_string());
+    }
+
+    let selected_compound: HashSet<String> = selected_keys.iter().cloned().collect();
+    let selected_resources = expand_compound_keys(&selected_compound);
+    let mut candidate =
+        expand_selection_for_export(package, &selected_compound, true, name_map)?;
+
+    // KEY is metadata for the whole package and must never be removed directly.
+    candidate.retain(|key| {
+        parse_key(key)
+            .map(|parts| parts.resource_type != TYPE_KEY)
+            .unwrap_or(false)
+    });
+
+    // Treat every resource outside the candidate closure as a remaining seed.
+    // Global manifest XML (instance 0) is deliberately protected even when it
+    // was discovered through the selected object's dependency closure.
+    let mut remaining_seeds = HashSet::new();
+    for entry in &package.files {
+        let key = key_string(entry);
+        let global_protected = entry.resource_type == TYPE_KEY
+            || (entry.resource_type == TYPE_XML && entry.instance == 0);
+        if !candidate.contains(&key) || global_protected {
+            remaining_seeds.insert(key);
+        }
+    }
+
+    let required_by_remaining =
+        collect_clone_keys(package, &remaining_seeds, true, name_map)?;
+    let shared_preserved: HashSet<String> = candidate
+        .intersection(&required_by_remaining)
+        .cloned()
+        .collect();
+
+    let resources_to_remove: HashSet<String> = candidate
+        .difference(&shared_preserved)
+        .cloned()
+        .collect();
+
+    Ok((selected_resources, shared_preserved, resources_to_remove))
+}
+
+fn build_remove_selection_plan(
+    package: &DBPF<'_>,
+    selected_keys: &[String],
+    name_map: &BTreeMap<u64, String>,
+) -> Result<RemoveSelectionPlan, String> {
+    let selected_compound: HashSet<String> = selected_keys.iter().cloned().collect();
+    let candidate =
+        expand_selection_for_export(package, &selected_compound, true, name_map)?;
+    let candidate_non_key: HashSet<String> = candidate
+        .into_iter()
+        .filter(|key| {
+            parse_key(key)
+                .map(|parts| parts.resource_type != TYPE_KEY)
+                .unwrap_or(false)
+        })
+        .collect();
+
+    let (selected_resources, shared_preserved, resources_to_remove) =
+        removal_plan_sets(package, selected_keys, name_map)?;
+    let selected_resources_preserved = selected_resources
+        .intersection(&shared_preserved)
+        .count();
+
+    Ok(RemoveSelectionPlan {
+        selected_items: selected_keys.len(),
+        selected_resources: selected_resources.len(),
+        candidate_resources: candidate_non_key.len(),
+        shared_resources_preserved: shared_preserved.len(),
+        selected_resources_preserved,
+        resources_to_remove: resources_to_remove.len(),
+        remaining_resources: package
+            .files
+            .iter()
+            .filter(|entry| entry.resource_type != TYPE_KEY)
+            .filter(|entry| !resources_to_remove.contains(&key_string(entry)))
+            .count(),
+    })
+}
+
+fn unique_backup_directory(destination: &Path, stem: &str) -> PathBuf {
+    let base = destination.join(format!("{stem}_backup"));
+    if !base.exists() {
+        return base;
+    }
+
+    let mut suffix = 1usize;
+    loop {
+        let candidate = destination.join(format!("{stem}_backup ({suffix})"));
+        if !candidate.exists() {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+fn files_are_identical(left: &Path, right: &Path) -> Result<bool, String> {
+    let mut a = File::open(left).map_err(|e| e.to_string())?;
+    let mut b = File::open(right).map_err(|e| e.to_string())?;
+    let mut a_buf = [0u8; 64 * 1024];
+    let mut b_buf = [0u8; 64 * 1024];
+
+    loop {
+        let a_len = a.read(&mut a_buf).map_err(|e| e.to_string())?;
+        let b_len = b.read(&mut b_buf).map_err(|e| e.to_string())?;
+        if a_len != b_len {
+            return Ok(false);
+        }
+        if a_len == 0 {
+            return Ok(true);
+        }
+        if a_buf[..a_len] != b_buf[..b_len] {
+            return Ok(false);
+        }
+    }
+}
+
+fn write_removed_package(
+    package: &DBPF<'_>,
+    source_package: &WritablePackage,
+    source_file: &mut File,
+    resources_to_remove: &HashSet<String>,
+    temp_path: &Path,
+) -> Result<(), String> {
+    if temp_path.exists() {
+        remove_file(temp_path).map_err(|e| e.to_string())?;
+    }
+
+    let retained_keys: HashSet<String> = package
+        .files
+        .iter()
+        .filter(|entry| entry.resource_type != TYPE_KEY)
+        .map(key_string)
+        .filter(|key| !resources_to_remove.contains(key))
+        .collect();
+
+    let mut out_pkg = WritablePackage::new(temp_path, false).map_err(|e| e.to_string())?;
+    let mut out_f = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&out_pkg.path)
+        .map_err(|e| e.to_string())?;
+    out_f
+        .seek(SeekFrom::Start(out_pkg.index_position as u64))
+        .map_err(|e| e.to_string())?;
+
+    for entry in &source_package.entries {
+        let key = key_string_from_writable(entry);
+        if entry.type_id == TYPE_KEY || resources_to_remove.contains(&key) {
+            continue;
+        }
+
+        let raw = read_raw_writable_entry(source_file, entry)?;
+        let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+        out_f.write_all(&raw).map_err(|e| e.to_string())?;
+        out_pkg.entries.push(WritableEntry {
+            type_id: entry.type_id,
+            group: entry.group,
+            id1: entry.id1,
+            id2: entry.id2,
+            instance: entry.instance,
+            chunk_offset,
+            file_size: entry.file_size,
+            mem_size: entry.mem_size,
+            compressed: entry.compressed,
+            unknown2: entry.unknown2,
+        });
+    }
+
+    if let Some(template) = source_package
+        .entries
+        .iter()
+        .find(|entry| entry.type_id == TYPE_KEY)
+    {
+        let raw = build_filtered_key_data(package, &retained_keys);
+        let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+        out_f.write_all(&raw).map_err(|e| e.to_string())?;
+        out_pkg.entries.push(WritableEntry {
+            type_id: template.type_id,
+            group: template.group,
+            id1: template.id1,
+            id2: template.id2,
+            instance: template.instance,
+            chunk_offset,
+            file_size: raw.len() as u32,
+            mem_size: raw.len() as u32,
+            compressed: 0,
+            unknown2: template.unknown2,
+        });
+    }
+
+    out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+    out_pkg
+        .write_index_and_header()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn validate_removed_package(
+    source_package: &WritablePackage,
+    output_path: &Path,
+    resources_to_remove: &HashSet<String>,
+) -> Result<(), String> {
+    let rebuilt = WritablePackage::load(output_path)
+        .map_err(|e| format!("O package reconstruído falhou na validação DBPF: {e}"))?;
+
+    let mut expected_counts: HashMap<String, usize> = HashMap::new();
+    for entry in &source_package.entries {
+        if entry.type_id == TYPE_KEY {
+            continue;
+        }
+        let key = key_string_from_writable(entry);
+        if resources_to_remove.contains(&key) {
+            continue;
+        }
+        *expected_counts.entry(key).or_insert(0) += 1;
+    }
+
+    let mut actual_counts: HashMap<String, usize> = HashMap::new();
+    for entry in &rebuilt.entries {
+        if entry.type_id == TYPE_KEY {
+            continue;
+        }
+        let key = key_string_from_writable(entry);
+        if resources_to_remove.contains(&key) {
+            return Err(format!(
+                "Validação falhou: o recurso removido {key} ainda está no package reconstruído."
+            ));
+        }
+        *actual_counts.entry(key).or_insert(0) += 1;
+    }
+
+    if expected_counts != actual_counts {
+        return Err(
+            "Validação falhou: os recursos mantidos não correspondem exatamente ao package original."
+                .to_string(),
+        );
+    }
+
+    let mmap = open_package(&output_path.display().to_string())?;
+    let _parsed = parse_package(&mmap)?;
+    Ok(())
+}
+
+fn replace_source_with_rollback(
+    source_path: &Path,
+    temp_path: &Path,
+    output_path: &Path,
+) -> Result<(), String> {
+    let file_name = source_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("merged.package");
+    let rollback = source_path.with_file_name(format!(
+        ".{file_name}.remove-original-{}",
+        std::process::id()
+    ));
+
+    if rollback.exists() {
+        return Err(format!(
+            "Arquivo temporário de rollback já existe: {}",
+            rollback.display()
+        ));
+    }
+
+    rename(source_path, &rollback).map_err(|e| {
+        format!(
+            "Não foi possível preparar a substituição segura do original: {e}"
+        )
+    })?;
+
+    if let Err(error) = rename(temp_path, output_path) {
+        let _ = rename(&rollback, source_path);
+        return Err(format!(
+            "Não foi possível colocar o package reconstruído no destino; o original foi restaurado: {error}"
+        ));
+    }
+
+    // The validated output and verified backup are already safe at this point.
+    // Failure to delete the rollback copy is non-fatal; keep the extra original
+    // rather than reporting the completed replacement as a failure.
+    let _ = remove_file(&rollback);
+    Ok(())
 }
 
 fn selection_output_stem(
@@ -3504,6 +3840,156 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
 }
 
 #[tauri::command]
+pub fn analyze_remove_selection(
+    payload: RemoveSelectionPayload,
+) -> Result<RemoveSelectionPlan, String> {
+    validate_package_extension(&payload.package_path)?;
+    let mmap = open_package(&payload.package_path)?;
+    let package = parse_package(&mmap)?;
+    let name_map = package_resource_names(&package);
+    build_remove_selection_plan(&package, &payload.selected_keys, &name_map)
+}
+
+#[tauri::command]
+pub fn remove_selected_from_merged(
+    payload: RemoveSelectionApplyPayload,
+) -> Result<RemoveSelectionResult, String> {
+    if payload.destination_folder.trim().is_empty() {
+        return Err("Escolha uma pasta de destino.".to_string());
+    }
+    validate_package_extension(&payload.package_path)?;
+
+    let source_path = PathBuf::from(&payload.package_path);
+    let destination = PathBuf::from(&payload.destination_folder);
+    create_dir_all(&destination).map_err(|e| e.to_string())?;
+
+    let file_name = source_path
+        .file_name()
+        .ok_or_else(|| "Nome do package de origem inválido.".to_string())?;
+    let stem = source_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("Merged");
+    let output_path = destination.join(file_name);
+
+    let source_canonical = source_path
+        .canonicalize()
+        .map_err(|e| format!("Não foi possível localizar o package original: {e}"))?;
+    let output_is_source = output_path
+        .canonicalize()
+        .map(|path| path == source_canonical)
+        .unwrap_or(false);
+
+    if output_path.exists() && !output_is_source {
+        return Err(format!(
+            "Já existe um arquivo com o mesmo nome no destino: {}",
+            output_path.display()
+        ));
+    }
+
+    let mmap = open_package(&payload.package_path)?;
+    let package = parse_package(&mmap)?;
+    let name_map = package_resource_names(&package);
+    let plan = build_remove_selection_plan(&package, &payload.selected_keys, &name_map)?;
+    if plan.resources_to_remove == 0 {
+        return Err(
+            "Nenhum recurso pode ser removido com segurança; todos os recursos selecionados são compartilhados ou protegidos."
+                .to_string(),
+        );
+    }
+
+    let (_selected_resources, shared_preserved, resources_to_remove) =
+        removal_plan_sets(&package, &payload.selected_keys, &name_map)?;
+
+    let source_package = WritablePackage::load(&payload.package_path).map_err(|e| e.to_string())?;
+    let mut source_file = File::open(&payload.package_path).map_err(|e| e.to_string())?;
+
+    let extension = source_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("package");
+    let temp_path = destination.join(format!(
+        ".{stem}.remove-temp-{}.{}",
+        std::process::id(),
+        extension
+    ));
+
+    write_removed_package(
+        &package,
+        &source_package,
+        &mut source_file,
+        &resources_to_remove,
+        &temp_path,
+    )?;
+
+    if let Err(error) = validate_removed_package(
+        &source_package,
+        &temp_path,
+        &resources_to_remove,
+    ) {
+        let _ = remove_file(&temp_path);
+        return Err(error);
+    }
+
+    let backup_dir = unique_backup_directory(&destination, stem);
+    create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
+    let backup_path = backup_dir.join(file_name);
+    copy(&source_path, &backup_path).map_err(|e| {
+        let _ = remove_file(&temp_path);
+        format!("Não foi possível criar o backup do original: {e}")
+    })?;
+
+    match files_are_identical(&source_path, &backup_path) {
+        Ok(true) => {}
+        Ok(false) => {
+            let _ = remove_file(&temp_path);
+            let _ = remove_file(&backup_path);
+            return Err(
+                "A verificação bit-for-bit do backup falhou. O original não foi alterado."
+                    .to_string(),
+            );
+        }
+        Err(error) => {
+            let _ = remove_file(&temp_path);
+            let _ = remove_file(&backup_path);
+            return Err(format!(
+                "Não foi possível verificar o backup bit a bit. O original não foi alterado: {error}"
+            ));
+        }
+    }
+
+    // Close every handle backed by the original package before replacing it.
+    // On Windows an open memory map/file handle can prevent rename/delete of
+    // the source even though the rebuilt output and backup have already passed
+    // validation.
+    drop(source_file);
+    drop(source_package);
+    drop(package);
+    drop(mmap);
+
+    if output_is_source {
+        if let Err(error) = replace_source_with_rollback(&source_path, &temp_path, &output_path) {
+            let _ = remove_file(&temp_path);
+            return Err(error);
+        }
+    } else {
+        rename(&temp_path, &output_path).map_err(|e| {
+            let _ = remove_file(&temp_path);
+            format!("Não foi possível finalizar o novo merged: {e}")
+        })?;
+    }
+
+    Ok(RemoveSelectionResult {
+        output_path: output_path.display().to_string(),
+        backup_path: backup_path.display().to_string(),
+        removed_resources: resources_to_remove.len(),
+        shared_resources_preserved: shared_preserved.len(),
+        selected_resources_preserved: plan.selected_resources_preserved,
+    })
+}
+
+#[tauri::command]
 pub fn get_resource_preview(payload: PreviewPayload) -> Result<PreviewResult, String> {
     validate_package_extension(&payload.package_path)?;
     let mmap = open_package(&payload.package_path)?;
@@ -3679,4 +4165,136 @@ pub fn zip_selected_resources(payload: ExportSelectionPayload) -> Result<String,
         }
     }
     Ok(batch_root.display().to_string())
+}
+
+
+#[cfg(test)]
+mod remove_selected_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_path(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "veiga-splitter-{label}-{}-{nonce}.package",
+            std::process::id()
+        ))
+    }
+
+    fn write_test_package(path: &Path, resources: &[(u32, u32, u64, Vec<u8>)]) {
+        let mut package = WritablePackage::new(path, false).unwrap();
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&package.path)
+            .unwrap();
+        file.seek(SeekFrom::Start(package.index_position as u64))
+            .unwrap();
+
+        for (resource_type, group, instance, data) in resources {
+            let chunk_offset = file.stream_position().unwrap() as u32;
+            file.write_all(data).unwrap();
+            package.entries.push(WritableEntry {
+                type_id: *resource_type,
+                group: *group,
+                id1: (*instance >> 32) as u32,
+                id2: *instance as u32,
+                instance: *instance,
+                chunk_offset,
+                file_size: data.len() as u32,
+                mem_size: data.len() as u32,
+                compressed: 0,
+                unknown2: 0,
+            });
+        }
+
+        package.index_position = file.stream_position().unwrap() as u32;
+        drop(file);
+        package.write_index_and_header().unwrap();
+    }
+
+    #[test]
+    fn preserves_shared_dependency_and_rebuilds_valid_package() {
+        let source = test_path("remove-source");
+        let rebuilt = test_path("remove-rebuilt");
+
+        let shared_instance = 0x1111_2222_3333_4444u64;
+        let selected_xml_instance = 0xAAAA_BBBB_CCCC_D001u64;
+        let remaining_xml_instance = 0xAAAA_BBBB_CCCC_D002u64;
+        let shared_key_text = format!(
+            "key:{TYPE_IMG:08X}:{:08X}:{shared_instance:016X}",
+            0u32
+        );
+
+        write_test_package(
+            &source,
+            &[
+                (
+                    TYPE_XML,
+                    0,
+                    selected_xml_instance,
+                    format!("<selected>{shared_key_text}</selected>").into_bytes(),
+                ),
+                (
+                    TYPE_XML,
+                    0,
+                    remaining_xml_instance,
+                    format!("<remaining>{shared_key_text}</remaining>").into_bytes(),
+                ),
+                (TYPE_IMG, 0, shared_instance, vec![1, 2, 3, 4, 5, 6]),
+            ],
+        );
+
+        let mmap = open_package(&source.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let name_map = BTreeMap::new();
+        let selected_key = format!(
+            "0x{TYPE_XML:08X}-0x{:08X}-0x{selected_xml_instance:016X}",
+            0u32
+        );
+
+        let (_selected, shared, remove) =
+            removal_plan_sets(&package, &[selected_key.clone()], &name_map).unwrap();
+
+        let shared_img_key = format!(
+            "0x{TYPE_IMG:08X}-0x{:08X}-0x{shared_instance:016X}",
+            0u32
+        );
+        assert!(remove.contains(&selected_key));
+        assert!(shared.contains(&shared_img_key));
+        assert!(!remove.contains(&shared_img_key));
+
+        let source_package = WritablePackage::load(&source).unwrap();
+        let mut source_file = File::open(&source).unwrap();
+        write_removed_package(
+            &package,
+            &source_package,
+            &mut source_file,
+            &remove,
+            &rebuilt,
+        )
+        .unwrap();
+        validate_removed_package(&source_package, &rebuilt, &remove).unwrap();
+
+        let rebuilt_package = WritablePackage::load(&rebuilt).unwrap();
+        let rebuilt_keys: HashSet<String> = rebuilt_package
+            .entries
+            .iter()
+            .map(key_string_from_writable)
+            .collect();
+        assert!(!rebuilt_keys.contains(&selected_key));
+        assert!(rebuilt_keys.contains(&shared_img_key));
+
+        let remaining_key = format!(
+            "0x{TYPE_XML:08X}-0x{:08X}-0x{remaining_xml_instance:016X}",
+            0u32
+        );
+        assert!(rebuilt_keys.contains(&remaining_key));
+
+        let _ = remove_file(&source);
+        let _ = remove_file(&rebuilt);
+    }
 }

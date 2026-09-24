@@ -38,6 +38,14 @@ const translations = {
     previewTitle: "Preview",
     previewEmpty: "Select a resource to see the preview.",
     exportSelection: "Export selection",
+    removeFromMerged: "Remove from merged",
+    removeBusyTitle: "Rebuilding merged package...",
+    removeBusyMessage: "Preserving shared resources and validating the new package.",
+    removeDestinationRequired: "Choose a destination folder first.",
+    removeNothing: "None of the selected resources can be removed safely.",
+    removeConfirm: (plan) => `Remove ${plan.resourcesToRemove} resources associated with ${plan.selectedItems} selected item(s)?\n\n${plan.sharedResourcesPreserved} shared resource(s) will be preserved.${plan.selectedResourcesPreserved ? `\n${plan.selectedResourcesPreserved} selected resource(s) are shared and will remain in the merged package.` : ""}\nA bit-for-bit backup of the original will be created before the final replacement.`,
+    removeSuccess: (result) => `Merged package rebuilt successfully.\n\nRemoved resources: ${result.removedResources}\nShared resources preserved: ${result.sharedResourcesPreserved}\nBackup: ${result.backupPath}`,
+    removeError: "Failed to remove selected items:",
     clear: "Clear",
     readError: "Failed to read package:",
     splittError: "Export failed:",
@@ -71,6 +79,14 @@ const translations = {
     previewTitle: "Preview",
     previewEmpty: "Selecione um recurso para ver o preview.",
     exportSelection: "Exportar seleção",
+    removeFromMerged: "Remover do merged",
+    removeBusyTitle: "Reconstruindo merged...",
+    removeBusyMessage: "Preservando recursos compartilhados e validando o novo package.",
+    removeDestinationRequired: "Escolha primeiro uma pasta de destino.",
+    removeNothing: "Nenhum dos recursos selecionados pode ser removido com segurança.",
+    removeConfirm: (plan) => `Remover ${plan.resourcesToRemove} recursos associados a ${plan.selectedItems} item(ns) selecionado(s)?\n\n${plan.sharedResourcesPreserved} recurso(s) compartilhado(s) serão preservados.${plan.selectedResourcesPreserved ? `\n${plan.selectedResourcesPreserved} recurso(s) selecionado(s) são compartilhados e permanecerão no merged.` : ""}\nUm backup bit a bit do original será criado antes da substituição final.`,
+    removeSuccess: (result) => `Merged reconstruído com sucesso.\n\nRecursos removidos: ${result.removedResources}\nRecursos compartilhados preservados: ${result.sharedResourcesPreserved}\nBackup: ${result.backupPath}`,
+    removeError: "Falha ao remover os itens selecionados:",
     clear: "Limpar",
     readError: "Falha ao ler package:",
     splittError: "Falha na exportação:",
@@ -104,6 +120,14 @@ const translations = {
     previewTitle: "Vista previa",
     previewEmpty: "Selecciona un recurso para ver la vista previa.",
     exportSelection: "Exportar selección",
+    removeFromMerged: "Eliminar del merged",
+    removeBusyTitle: "Reconstruyendo merged...",
+    removeBusyMessage: "Conservando recursos compartidos y validando el nuevo package.",
+    removeDestinationRequired: "Elige primero una carpeta de destino.",
+    removeNothing: "Ninguno de los recursos seleccionados puede eliminarse de forma segura.",
+    removeConfirm: (plan) => `¿Eliminar ${plan.resourcesToRemove} recursos asociados a ${plan.selectedItems} elemento(s) seleccionado(s)?\n\nSe conservarán ${plan.sharedResourcesPreserved} recurso(s) compartido(s).${plan.selectedResourcesPreserved ? `\n${plan.selectedResourcesPreserved} recurso(s) seleccionado(s) son compartidos y permanecerán en el merged.` : ""}\nSe creará una copia de seguridad bit a bit del original antes del reemplazo final.`,
+    removeSuccess: (result) => `Merged reconstruido correctamente.\n\nRecursos eliminados: ${result.removedResources}\nRecursos compartidos conservados: ${result.sharedResourcesPreserved}\nBackup: ${result.backupPath}`,
+    removeError: "Error al eliminar los elementos seleccionados:",
     clear: "Limpiar",
     readError: "Error al leer el package:",
     splittError: "Error en la exportación:",
@@ -132,6 +156,7 @@ const el = {
   pickDestinationBtn: document.querySelector("#pick-destination-btn"),
   scanBtn: document.querySelector("#scan-btn"),
   exportBtn: document.querySelector("#export-btn"),
+  removeMergedBtn: document.querySelector("#remove-merged-btn"),
   zipBtn: document.querySelector("#zip-btn"),
   clearBtn: document.querySelector("#clear-btn"),
   selectAllBtn: document.querySelector("#select-all-btn"),
@@ -234,6 +259,7 @@ function applyStaticTranslations() {
   if (el.previewTitle) el.previewTitle.textContent = t("previewTitle");
   if (el.previewEmpty) el.previewEmpty.textContent = t("previewEmpty");
   if (el.exportBtn) el.exportBtn.innerHTML = `<img src="${exportIcon}" alt="" class="btn-icon" /><span>${t("exportSelection")}</span>`;
+  if (el.removeMergedBtn) el.removeMergedBtn.textContent = t("removeFromMerged");
   if (el.zipBtn) el.zipBtn.innerHTML = `<img src="${zipIcon}" alt="" class="btn-icon" /><span>${t("busyZipTitle").replace("...", "")}</span>`;
   if (el.clearBtn) el.clearBtn.innerHTML = `<img src="${clearIcon}" alt="" class="btn-icon" /><span>${t("clear")}</span>`;
   if (el.emptyTitle) el.emptyTitle.textContent = t("emptyTitle");
@@ -480,6 +506,64 @@ async function loadPreview(item) {
   }
 }
 
+function normalizeLocalPath(path) {
+  return String(path || "").replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
+}
+
+async function removeSelectionFromMerged() {
+  if (!state.packagePath || !state.selectedKeys.length) return;
+  if (!state.destinationFolder) {
+    alert(t("removeDestinationRequired"));
+    return;
+  }
+
+  try {
+    const plan = await invoke("analyze_remove_selection", {
+      payload: {
+        packagePath: state.packagePath,
+        selectedKeys: state.selectedKeys,
+      },
+    });
+
+    if (!plan.resourcesToRemove) {
+      alert(t("removeNothing"));
+      return;
+    }
+
+    if (!window.confirm(t("removeConfirm", plan))) {
+      return;
+    }
+
+    setBusy(t("removeBusyTitle"), t("removeBusyMessage"));
+
+    const result = await invoke("remove_selected_from_merged", {
+      payload: {
+        packagePath: state.packagePath,
+        destinationFolder: state.destinationFolder,
+        selectedKeys: state.selectedKeys,
+      },
+    });
+
+    alert(t("removeSuccess", result));
+    await revealItemInDir(result.outputPath);
+
+    if (normalizeLocalPath(result.outputPath) === normalizeLocalPath(state.packagePath)) {
+      state.resources = [];
+      state.selectedKeys = [];
+      state.selectionAnchorKey = null;
+      state.preview = null;
+      await scanPackage();
+    }
+  } catch (error) {
+    console.error(error);
+    alert(`${t("removeError")}\n${error}`);
+  } finally {
+    if (state.isBusy) {
+      clearBusy();
+    }
+  }
+}
+
 async function exportSelection(zip) {
   if (!state.packagePath || !state.selectedKeys.length || !state.destinationFolder) return;
 
@@ -516,7 +600,7 @@ function clearAll() {
   state.destinationFolder = "";
   state.resources = [];
   state.selectedKeys = [];
-    state.selectionAnchorKey = null;
+  state.selectionAnchorKey = null;
   state.preview = null;
   state.search = "";
   if (el.searchInput) el.searchInput.value = "";
@@ -582,6 +666,9 @@ function setupEvents() {
   el.pickDestinationBtn.addEventListener("click", pickDestination);
   el.scanBtn.addEventListener("click", scanPackage);
   el.exportBtn.addEventListener("click", () => exportSelection(false));
+  if (el.removeMergedBtn) {
+    el.removeMergedBtn.addEventListener("click", removeSelectionFromMerged);
+  }
 
   if (el.zipBtn) {
     el.zipBtn.addEventListener("click", () => exportSelection(true));
