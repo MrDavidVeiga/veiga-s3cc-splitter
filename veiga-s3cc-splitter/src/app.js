@@ -24,6 +24,26 @@ const translations = {
     dropHint: "Select or drag a .package or .dbc here",
     pickDestination: "Choose destination folder",
     scanList: "Load list",
+    modeSplitter: "Splitter",
+    modeMerger: "Merger",
+    mergerAddPackages: "Add Packages",
+    mergerAddHint: "Select two or more .package files to merge",
+    mergerPickDestination: "Choose Destination Folder",
+    mergerOutputLabel: "Merged Package Name",
+    mergerRun: "Merge Packages",
+    mergerClear: "Clear",
+    mergerTitle: "Packages to Merge",
+    mergerNoPackages: "No packages selected.",
+    mergerCount: (count) => `${count} package${count === 1 ? "" : "s"} selected.`,
+    mergerBusy: "Merging packages...",
+    mergerSuccess: (result) => `Merged successfully: ${result.packageCount} original package(s), ${result.resourceCount} unique resource(s), ${result.sharedResources} shared resource(s).`,
+    mergerError: "Merge failed:",
+    restoreOriginals: "Restore Original Packages",
+    restoreBusyTitle: "Restoring original packages...",
+    restoreBusyMessage: "Rebuilding packages from the embedded Merge Manifest.",
+    restoreSuccess: (count) => `${count} original package(s) restored successfully.`,
+    restoreError: "Restore failed:",
+    manifestFound: (count) => `Merge Manifest: ${count} original package(s)`,
     contentFilter: "Filter",
     filterAll: "All",
     filterLabels: {
@@ -126,6 +146,26 @@ const translations = {
     dropHint: "Selecione ou arraste um .package ou .dbc aqui",
     pickDestination: "Escolher pasta de destino",
     scanList: "Carregar lista",
+    modeSplitter: "Splitter",
+    modeMerger: "Merger",
+    mergerAddPackages: "Adicionar Packages",
+    mergerAddHint: "Selecione dois ou mais arquivos .package para mesclar",
+    mergerPickDestination: "Escolher Pasta de Destino",
+    mergerOutputLabel: "Nome do Package Mesclado",
+    mergerRun: "Mesclar Packages",
+    mergerClear: "Limpar",
+    mergerTitle: "Packages para Mesclar",
+    mergerNoPackages: "Nenhum package selecionado.",
+    mergerCount: (count) => `${count} package${count === 1 ? "" : "s"} selecionado${count === 1 ? "" : "s"}.`,
+    mergerBusy: "Mesclando packages...",
+    mergerSuccess: (result) => `Merge concluído: ${result.packageCount} package(s) original(is), ${result.resourceCount} recurso(s) único(s), ${result.sharedResources} recurso(s) compartilhado(s).`,
+    mergerError: "Falha ao mesclar:",
+    restoreOriginals: "Restaurar Packages Originais",
+    restoreBusyTitle: "Restaurando Packages Originais...",
+    restoreBusyMessage: "Reconstruindo os packages a partir do Merge Manifest interno.",
+    restoreSuccess: (count) => `${count} package(s) original(is) restaurado(s) com sucesso.`,
+    restoreError: "Falha ao restaurar:",
+    manifestFound: (count) => `Merge Manifest: ${count} package(s) original(is)`,
     contentFilter: "Filtro",
     filterAll: "Todos",
     filterLabels: {
@@ -228,6 +268,26 @@ const translations = {
     dropHint: "Selecciona o arrastra un .package o .dbc aquí",
     pickDestination: "Elegir carpeta de destino",
     scanList: "Cargar lista",
+    modeSplitter: "Splitter",
+    modeMerger: "Merger",
+    mergerAddPackages: "Añadir Packages",
+    mergerAddHint: "Selecciona dos o más archivos .package para fusionar",
+    mergerPickDestination: "Elegir Carpeta de Destino",
+    mergerOutputLabel: "Nombre del Package Fusionado",
+    mergerRun: "Fusionar Packages",
+    mergerClear: "Limpiar",
+    mergerTitle: "Packages para Fusionar",
+    mergerNoPackages: "Ningún package seleccionado.",
+    mergerCount: (count) => `${count} package${count === 1 ? "" : "s"} seleccionado${count === 1 ? "" : "s"}.`,
+    mergerBusy: "Fusionando packages...",
+    mergerSuccess: (result) => `Fusión completada: ${result.packageCount} package(s) original(es), ${result.resourceCount} recurso(s) único(s), ${result.sharedResources} recurso(s) compartido(s).`,
+    mergerError: "Error al fusionar:",
+    restoreOriginals: "Restaurar Packages Originales",
+    restoreBusyTitle: "Restaurando Packages Originales...",
+    restoreBusyMessage: "Reconstruyendo los packages desde el Merge Manifest interno.",
+    restoreSuccess: (count) => `${count} package(s) original(es) restaurado(s) correctamente.`,
+    restoreError: "Error al restaurar:",
+    manifestFound: (count) => `Merge Manifest: ${count} package(s) original(es)`,
     contentFilter: "Filtro",
     filterAll: "Todos",
     filterLabels: {
@@ -326,6 +386,7 @@ const translations = {
 };
 
 const state = {
+  mode: "splitter",
   packagePath: "",
   destinationFolder: "",
   search: "",
@@ -342,9 +403,35 @@ const state = {
   language: "en",
   isLangMenuOpen: false,
   isContentFilterOpen: false,
+  manifestPackageCount: 0,
+  mergerSources: [],
+  mergerDestinationFolder: "",
+  mergerOutputName: "Merged.package",
+  mergerBusy: false,
+  mergerResult: null,
 };
 
 const el = {
+  modeSplitterBtn: document.querySelector("#mode-splitter-btn"),
+  modeMergerBtn: document.querySelector("#mode-merger-btn"),
+  splitterControls: document.querySelector("#splitter-controls"),
+  mergerControls: document.querySelector("#merger-controls"),
+  splitterWorkspace: document.querySelector("#splitter-workspace"),
+  mergerWorkspace: document.querySelector("#merger-workspace"),
+  mergerAddPackagesBtn: document.querySelector("#merger-add-packages-btn"),
+  mergerAddHint: document.querySelector("#merger-add-hint"),
+  mergerSourceCount: document.querySelector("#merger-source-count"),
+  mergerPickDestinationBtn: document.querySelector("#merger-pick-destination-btn"),
+  mergerDestinationPath: document.querySelector("#merger-destination-path"),
+  mergerOutputLabel: document.querySelector("#merger-output-label"),
+  mergerOutputName: document.querySelector("#merger-output-name"),
+  mergerRunBtn: document.querySelector("#merger-run-btn"),
+  mergerClearBtn: document.querySelector("#merger-clear-btn"),
+  mergerTitle: document.querySelector("#merger-title"),
+  mergerSummary: document.querySelector("#merger-summary"),
+  mergerSourceList: document.querySelector("#merger-source-list"),
+  mergerResult: document.querySelector("#merger-result"),
+  restoreManifestBtn: document.querySelector("#restore-manifest-btn"),
   pickPackageBtn: document.querySelector("#pick-package-btn"),
   pickDestinationBtn: document.querySelector("#pick-destination-btn"),
   scanBtn: document.querySelector("#scan-btn"),
@@ -449,6 +536,16 @@ function applyStaticTranslations() {
   if (el.dropHint) el.dropHint.textContent = t("dropHint");
   if (el.pickDestinationBtn) el.pickDestinationBtn.textContent = t("pickDestination");
   if (el.scanBtn) el.scanBtn.textContent = t("scanList");
+  if (el.modeSplitterBtn) el.modeSplitterBtn.textContent = t("modeSplitter");
+  if (el.modeMergerBtn) el.modeMergerBtn.textContent = t("modeMerger");
+  if (el.mergerAddPackagesBtn) el.mergerAddPackagesBtn.textContent = t("mergerAddPackages");
+  if (el.mergerAddHint) el.mergerAddHint.textContent = t("mergerAddHint");
+  if (el.mergerPickDestinationBtn) el.mergerPickDestinationBtn.textContent = t("mergerPickDestination");
+  if (el.mergerOutputLabel) el.mergerOutputLabel.textContent = t("mergerOutputLabel");
+  if (el.mergerRunBtn) el.mergerRunBtn.textContent = state.mergerBusy ? t("mergerBusy") : t("mergerRun");
+  if (el.mergerClearBtn) el.mergerClearBtn.textContent = t("mergerClear");
+  if (el.mergerTitle) el.mergerTitle.textContent = t("mergerTitle");
+  if (el.restoreManifestBtn) el.restoreManifestBtn.textContent = t("restoreOriginals");
   if (el.searchInput) {
     el.searchInput.placeholder = t("searchPlaceholder");
     el.searchInput.setAttribute("aria-label", t("searchPlaceholder"));
@@ -609,14 +706,101 @@ function renderContentFilter() {
   }
 }
 
+function setMode(mode) {
+  state.mode = mode === "merger" ? "merger" : "splitter";
+  state.isContentFilterOpen = false;
+  state.isLangMenuOpen = false;
+  applyStaticTranslations();
+  render();
+}
+
+function fileNameFromPath(path) {
+  const normalized = String(path || "").replaceAll("\\", "/");
+  return normalized.split("/").pop() || normalized;
+}
+
+function renderMergerSources() {
+  if (!el.mergerSourceList) return;
+  el.mergerSourceList.innerHTML = "";
+
+  if (el.mergerSummary) {
+    el.mergerSummary.textContent = state.mergerSources.length
+      ? t("mergerCount", state.mergerSources.length)
+      : t("mergerNoPackages");
+  }
+  if (el.mergerSourceCount) {
+    el.mergerSourceCount.textContent = state.mergerSources.length
+      ? t("mergerCount", state.mergerSources.length)
+      : "";
+  }
+
+  state.mergerSources.forEach((path, index) => {
+    const row = document.createElement("div");
+    row.className = "merger-source-row";
+
+    const info = document.createElement("div");
+    const name = document.createElement("div");
+    name.className = "merger-source-name";
+    name.textContent = fileNameFromPath(path);
+    const fullPath = document.createElement("div");
+    fullPath.className = "merger-source-path";
+    fullPath.textContent = path;
+    info.append(name, fullPath);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "merger-remove-btn";
+    remove.textContent = "×";
+    remove.title = t("removeFromMerged");
+    remove.addEventListener("click", () => {
+      state.mergerSources.splice(index, 1);
+      state.mergerResult = null;
+      render();
+    });
+
+    row.append(info, remove);
+    el.mergerSourceList.appendChild(row);
+  });
+
+  if (el.mergerRunBtn) {
+    el.mergerRunBtn.disabled =
+      state.mergerBusy ||
+      state.mergerSources.length < 2 ||
+      !state.mergerDestinationFolder;
+  }
+
+  if (el.mergerResult) {
+    el.mergerResult.classList.toggle("hidden", !state.mergerResult);
+    el.mergerResult.textContent = state.mergerResult
+      ? t("mergerSuccess", state.mergerResult)
+      : "";
+  }
+}
+
 function render() {
+  const splitterMode = state.mode === "splitter";
+  el.modeSplitterBtn?.classList.toggle("active", splitterMode);
+  el.modeMergerBtn?.classList.toggle("active", !splitterMode);
+  el.modeSplitterBtn?.setAttribute("aria-selected", String(splitterMode));
+  el.modeMergerBtn?.setAttribute("aria-selected", String(!splitterMode));
+  el.splitterControls?.classList.toggle("hidden", !splitterMode);
+  el.mergerControls?.classList.toggle("hidden", splitterMode);
+  el.splitterWorkspace?.classList.toggle("hidden", !splitterMode);
+  el.mergerWorkspace?.classList.toggle("hidden", splitterMode);
+
   updatePathLabel(el.packagePath, state.packagePath);
   updatePathLabel(el.destinationPath, state.destinationFolder);
+  updatePathLabel(el.mergerDestinationPath, state.mergerDestinationFolder);
+  if (el.mergerOutputName && el.mergerOutputName.value !== state.mergerOutputName) {
+    el.mergerOutputName.value = state.mergerOutputName;
+  }
 
   const visibleResources = getVisibleResources();
   el.selectedCount.textContent = t("selectedCount", state.selectedKeys.length);
   el.resultsSummary.textContent = state.packagePath
-    ? t("packageReady", visibleResources.length)
+    ? [t("packageReady", visibleResources.length), state.manifestPackageCount ? t("manifestFound", state.manifestPackageCount) : ""]
+        .filter(Boolean)
+        .join(" • ")
     : t("noPackageLoaded");
 
   el.busyTitle.textContent = state.busyTitle || t("busyDefaultTitle");
@@ -631,9 +815,14 @@ function render() {
     el.emptyState.classList.remove("hidden");
   }
 
+  if (el.restoreManifestBtn) {
+    el.restoreManifestBtn.classList.toggle("hidden", state.manifestPackageCount === 0);
+  }
+
   renderContentFilter();
   renderList();
   renderPreview();
+  renderMergerSources();
 }
 
 function renderList() {
@@ -774,6 +963,7 @@ async function pickPackage() {
     state.isContentFilterOpen = false;
     state.selectionAnchorKey = null;
     state.preview = null;
+    state.manifestPackageCount = 0;
     render();
   }
 }
@@ -801,6 +991,7 @@ async function scanPackage() {
     });
 
     state.resources = result.items || [];
+    state.manifestPackageCount = result.manifestPackageCount || 0;
 
     if (!state.selectionInitialized) {
       state.selectedKeys = state.resources.map((item) => item.key);
@@ -836,6 +1027,97 @@ async function loadPreview(item) {
   } catch (error) {
     console.error(error);
   }
+}
+
+async function pickMergerPackages() {
+  const result = await open({
+    multiple: true,
+    filters: [{ name: "Package", extensions: ["package", "dbc"] }],
+  });
+  const paths = Array.isArray(result) ? result : typeof result === "string" ? [result] : [];
+  const existing = new Set(state.mergerSources.map(normalizeLocalPath));
+  for (const path of paths) {
+    const normalized = normalizeLocalPath(path);
+    if (!normalized || existing.has(normalized)) continue;
+    existing.add(normalized);
+    state.mergerSources.push(path);
+  }
+  state.mergerResult = null;
+  render();
+}
+
+async function pickMergerDestination() {
+  const result = await open({ directory: true, multiple: false });
+  if (typeof result === "string") {
+    state.mergerDestinationFolder = result;
+    state.mergerResult = null;
+    render();
+  }
+}
+
+async function runMerger() {
+  if (state.mergerBusy || state.mergerSources.length < 2 || !state.mergerDestinationFolder) return;
+
+  state.mergerBusy = true;
+  state.mergerResult = null;
+  render();
+  applyStaticTranslations();
+
+  try {
+    const result = await invoke("merge_packages_with_manifest", {
+      payload: {
+        packagePaths: state.mergerSources,
+        destinationFolder: state.mergerDestinationFolder,
+        outputName: state.mergerOutputName || "Merged.package",
+      },
+    });
+    state.mergerResult = result;
+    alert(t("mergerSuccess", result));
+    await revealItemInDir(result.outputPath);
+  } catch (error) {
+    console.error(error);
+    alert(`${t("mergerError")}\n${error}`);
+  } finally {
+    state.mergerBusy = false;
+    applyStaticTranslations();
+    render();
+  }
+}
+
+async function restoreManifestPackages() {
+  if (!state.packagePath || !state.manifestPackageCount) return;
+  if (!state.destinationFolder) {
+    alert(t("removeDestinationRequired"));
+    return;
+  }
+
+  setBusy(t("restoreBusyTitle"), t("restoreBusyMessage"));
+  try {
+    const result = await invoke("restore_manifest_packages", {
+      payload: {
+        packagePath: state.packagePath,
+        destinationFolder: state.destinationFolder,
+      },
+    });
+    alert(t("restoreSuccess", result.packageCount));
+    if (result.outputPaths?.[0]) {
+      await revealItemInDir(result.outputPaths[0]);
+    }
+  } catch (error) {
+    console.error(error);
+    alert(`${t("restoreError")}\n${error}`);
+  } finally {
+    clearBusy();
+  }
+}
+
+function clearMerger() {
+  state.mergerSources = [];
+  state.mergerDestinationFolder = "";
+  state.mergerOutputName = "Merged.package";
+  state.mergerResult = null;
+  if (el.mergerOutputName) el.mergerOutputName.value = state.mergerOutputName;
+  render();
 }
 
 function normalizeLocalPath(path) {
@@ -940,6 +1222,7 @@ function clearAll() {
   state.isContentFilterOpen = false;
   state.selectionAnchorKey = null;
   state.preview = null;
+  state.manifestPackageCount = 0;
   state.search = "";
   if (el.searchInput) el.searchInput.value = "";
   render();
@@ -973,6 +1256,7 @@ function bindDragAndDrop() {
   }
 
   appWindow.onDragDropEvent((event) => {
+    if (state.mode !== "splitter") return;
     if (event.payload.type === "over") {
       zone.classList.add("drag-over");
       return;
@@ -1003,6 +1287,18 @@ function bindDragAndDrop() {
 }
 
 function setupEvents() {
+  el.modeSplitterBtn?.addEventListener("click", () => setMode("splitter"));
+  el.modeMergerBtn?.addEventListener("click", () => setMode("merger"));
+  el.mergerAddPackagesBtn?.addEventListener("click", pickMergerPackages);
+  el.mergerPickDestinationBtn?.addEventListener("click", pickMergerDestination);
+  el.mergerRunBtn?.addEventListener("click", runMerger);
+  el.mergerClearBtn?.addEventListener("click", clearMerger);
+  el.restoreManifestBtn?.addEventListener("click", restoreManifestPackages);
+  el.mergerOutputName?.addEventListener("input", (event) => {
+    state.mergerOutputName = event.target.value;
+    state.mergerResult = null;
+  });
+
   el.pickPackageBtn.addEventListener("click", pickPackage);
   el.pickDestinationBtn.addEventListener("click", pickDestination);
   el.scanBtn.addEventListener("click", scanPackage);
