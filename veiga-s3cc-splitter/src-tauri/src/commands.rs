@@ -111,7 +111,7 @@ struct ResourceKeyParts {
     instance: u64,
 }
 
-fn open_package(path: &str) -> Result<(Mmap, DBPF<'static>), String> {
+fn open_package(path: &str) -> Result<Mmap, String> {
     let file = File::open(path).map_err(|e| format!("Não foi possível abrir o arquivo: {e}"))?;
     let mmap = unsafe { Mmap::map(&file) }
         .map_err(|e| format!("Não foi possível mapear o arquivo: {e}"))?;
@@ -124,9 +124,11 @@ fn open_package(path: &str) -> Result<(Mmap, DBPF<'static>), String> {
         return Err("Arquivo inválido: não é um package DBPF válido.".to_string());
     }
 
-    let leaked: &'static [u8] = Box::leak(mmap[..].to_vec().into_boxed_slice());
-    let dbpf = DBPF::new(leaked).map_err(|e| format!("Package inválido: {e:?}"))?;
-    Ok((mmap, dbpf))
+    Ok(mmap)
+}
+
+fn parse_package(mmap: &Mmap) -> Result<DBPF<'_>, String> {
+    DBPF::new(&mmap[..]).map_err(|e| format!("Package inválido: {e:?}"))
 }
 
 fn kind_from_type(resource_type: u32) -> &'static str {
@@ -3003,7 +3005,8 @@ fn create_clone_package_single(
     payload: &ExportSelectionPayload,
     clone_path: &Path,
 ) -> Result<(String, usize), String> {
-    let (_mmap, core_package) = open_package(&payload.package_path)?;
+    let mmap = open_package(&payload.package_path)?;
+    let core_package = parse_package(&mmap)?;
     let source_package = WritablePackage::load(&payload.package_path).map_err(|e| e.to_string())?;
     let selected: HashSet<String> = payload.selected_keys.iter().cloned().collect();
     let clone_keys =
@@ -3094,7 +3097,8 @@ fn export_selected_resources_single(
     payload: &ExportSelectionPayload,
     export_root: &Path,
 ) -> Result<String, String> {
-    let (_mmap, package) = open_package(&payload.package_path)?;
+    let mmap = open_package(&payload.package_path)?;
+    let package = parse_package(&mmap)?;
     let name_map = package_resource_names(&package);
     let selected_compound: HashSet<String> = payload.selected_keys.iter().cloned().collect();
     let selected =
@@ -3158,7 +3162,8 @@ fn zip_selected_resources_single(
         return Ok(zip_path.display().to_string());
     }
 
-    let (_mmap, package) = open_package(&payload.package_path)?;
+    let mmap = open_package(&payload.package_path)?;
+    let package = parse_package(&mmap)?;
     let name_map = package_resource_names(&package);
     let selected_compound: HashSet<String> = payload.selected_keys.iter().cloned().collect();
     let selected =
@@ -3238,7 +3243,8 @@ fn create_clone_package(payload: &ExportSelectionPayload) -> Result<(String, usi
 
     if payload.selected_keys.len() <= 1 {
         let clone_path = if let Some(key) = payload.selected_keys.first() {
-            let (_mmap, package) = open_package(&payload.package_path)?;
+            let mmap = open_package(&payload.package_path)?;
+    let package = parse_package(&mmap)?;
             destination_dir.join(clone_package_file_name(&package, key))
         } else {
             destination_dir.join(format!(
@@ -3252,7 +3258,8 @@ fn create_clone_package(payload: &ExportSelectionPayload) -> Result<(String, usi
     let batch_root = multi_export_root(&payload.destination_folder, &payload.package_path);
     create_dir_all(&batch_root).map_err(|e| e.to_string())?;
 
-    let (_mmap, package) = open_package(&payload.package_path)?;
+    let mmap = open_package(&payload.package_path)?;
+    let package = parse_package(&mmap)?;
     let mut total_count = 0usize;
     for key in &payload.selected_keys {
         let clone_path = batch_root.join(clone_package_file_name(&package, key));
@@ -3287,7 +3294,8 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
     };
 
     std::panic::catch_unwind(|| {
-        let (_mmap, package) = open_package(package_path)?;
+        let mmap = open_package(package_path)?;
+        let package = parse_package(&mmap)?;
         let query = payload.search.unwrap_or_default().to_lowercase();
         let name_map = package_resource_names(&package);
 
@@ -3349,7 +3357,8 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
 #[tauri::command]
 pub fn get_resource_preview(payload: PreviewPayload) -> Result<PreviewResult, String> {
     validate_package_extension(&payload.package_path)?;
-    let (_mmap, package) = open_package(&payload.package_path)?;
+    let mmap = open_package(&payload.package_path)?;
+    let package = parse_package(&mmap)?;
     let key = parse_key(first_compound_key(&payload.resource_key))?;
     let entry = package
         .files
@@ -3386,7 +3395,8 @@ pub fn export_selected_resources(payload: ExportSelectionPayload) -> Result<Stri
         return Ok(path);
     }
 
-    let (_mmap, package) = open_package(&payload.package_path)?;
+    let mmap = open_package(&payload.package_path)?;
+    let package = parse_package(&mmap)?;
     let name_map = package_resource_names(&package);
 
     if payload.selected_keys.len() <= 1 {
@@ -3423,10 +3433,9 @@ pub fn zip_selected_resources(payload: ExportSelectionPayload) -> Result<String,
     validate_package_extension(&payload.package_path)?;
     if payload.selected_keys.len() <= 1 {
         let zip_name = if let Some(base_key) = payload.selected_keys.first() {
-            format!(
-                "{}.zip",
-                selection_output_stem(&open_package(&payload.package_path)?.1, base_key)
-            )
+            let mmap = open_package(&payload.package_path)?;
+            let package = parse_package(&mmap)?;
+            format!("{}.zip", selection_output_stem(&package, base_key))
         } else {
             format!("{}.zip", export_folder_name(&payload.package_path))
         };
@@ -3434,7 +3443,8 @@ pub fn zip_selected_resources(payload: ExportSelectionPayload) -> Result<String,
         return zip_selected_resources_single(&payload, &zip_path);
     }
 
-    let (_mmap, package) = open_package(&payload.package_path)?;
+    let mmap = open_package(&payload.package_path)?;
+    let package = parse_package(&mmap)?;
     let destination_dir = PathBuf::from(&payload.destination_folder);
     create_dir_all(&destination_dir).map_err(|e| e.to_string())?;
     let batch_root = multi_export_root(&payload.destination_folder, &payload.package_path);
