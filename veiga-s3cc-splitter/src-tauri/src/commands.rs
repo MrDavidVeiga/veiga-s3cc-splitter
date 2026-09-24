@@ -2977,15 +2977,10 @@ fn selected_label_file_name(
     )
 }
 
-fn unique_output_name(file_name: String, seen: &mut HashMap<String, usize>) -> String {
-    let key = file_name.to_lowercase();
-    let count = seen.entry(key).or_insert(0);
-    if *count == 0 {
-        *count = 1;
+fn unique_output_name(file_name: String, used: &mut HashSet<String>) -> String {
+    if used.insert(file_name.to_lowercase()) {
         return file_name;
     }
-    let suffix = *count;
-    *count += 1;
 
     let path = Path::new(&file_name);
     let stem = path
@@ -2995,9 +2990,40 @@ fn unique_output_name(file_name: String, seen: &mut HashMap<String, usize>) -> S
     let ext = path
         .extension()
         .map(|ext| ext.to_string_lossy().to_string());
-    match ext {
-        Some(ext) if !ext.is_empty() => format!("{} ({}).{}", stem, suffix, ext),
-        _ => format!("{} ({})", stem, suffix),
+
+    let mut suffix = 1usize;
+    loop {
+        let candidate = match &ext {
+            Some(ext) if !ext.is_empty() => format!("{} ({}).{}", stem, suffix, ext),
+            _ => format!("{} ({})", stem, suffix),
+        };
+        if used.insert(candidate.to_lowercase()) {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+fn unique_directory_path(path: PathBuf, used: &mut HashSet<String>) -> PathBuf {
+    let key = path.to_string_lossy().to_lowercase();
+    if used.insert(key) {
+        return path;
+    }
+
+    let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "resource".to_string());
+
+    let mut suffix = 1usize;
+    loop {
+        let candidate = parent.join(format!("{} ({})", name, suffix));
+        if used.insert(candidate.to_string_lossy().to_lowercase()) {
+            return candidate;
+        }
+        suffix += 1;
     }
 }
 
@@ -3111,7 +3137,7 @@ fn export_selected_resources_single(
         None
     };
 
-    let mut seen_names = HashMap::new();
+    let mut seen_names = HashSet::new();
     for idx in selected_entry_indices(&package, &selected) {
         let entry = &package.files[idx];
         if entry.resource_type == TYPE_KEY {
@@ -3179,7 +3205,7 @@ fn zip_selected_resources_single(
         None
     };
 
-    let mut seen_names = HashMap::new();
+    let mut seen_names = HashSet::new();
     for idx in selected_entry_indices(&package, &selected) {
         let entry = &package.files[idx];
         if entry.resource_type == TYPE_KEY {
@@ -3261,8 +3287,13 @@ fn create_clone_package(payload: &ExportSelectionPayload) -> Result<(String, usi
     let mmap = open_package(&payload.package_path)?;
     let package = parse_package(&mmap)?;
     let mut total_count = 0usize;
+    let mut used_clone_names = HashSet::new();
     for key in &payload.selected_keys {
-        let clone_path = batch_root.join(clone_package_file_name(&package, key));
+        let clone_name = unique_output_name(
+            clone_package_file_name(&package, key),
+            &mut used_clone_names,
+        );
+        let clone_path = batch_root.join(clone_name);
         let single_payload = ExportSelectionPayload {
             package_path: payload.package_path.clone(),
             destination_folder: payload.destination_folder.clone(),
@@ -3409,8 +3440,12 @@ pub fn export_selected_resources(payload: ExportSelectionPayload) -> Result<Stri
     let batch_root = multi_export_root(&payload.destination_folder, &payload.package_path);
     create_dir_all(&batch_root).map_err(|e| e.to_string())?;
     let batch_root_string = batch_root.display().to_string();
+    let mut used_export_roots = HashSet::new();
     for key in &payload.selected_keys {
-        let export_root = selection_export_root(&package, &batch_root_string, key, &name_map);
+        let export_root = unique_directory_path(
+            selection_export_root(&package, &batch_root_string, key, &name_map),
+            &mut used_export_roots,
+        );
         let single_payload = ExportSelectionPayload {
             package_path: payload.package_path.clone(),
             destination_folder: payload.destination_folder.clone(),
@@ -3450,8 +3485,13 @@ pub fn zip_selected_resources(payload: ExportSelectionPayload) -> Result<String,
     let batch_root = multi_export_root(&payload.destination_folder, &payload.package_path);
     create_dir_all(&batch_root).map_err(|e| e.to_string())?;
 
+    let mut used_zip_names = HashSet::new();
     for key in &payload.selected_keys {
-        let zip_path = batch_root.join(format!("{}.zip", selection_output_stem(&package, key)));
+        let zip_name = unique_output_name(
+            format!("{}.zip", selection_output_stem(&package, key)),
+            &mut used_zip_names,
+        );
+        let zip_path = batch_root.join(zip_name);
         let single_payload = ExportSelectionPayload {
             package_path: payload.package_path.clone(),
             destination_folder: payload.destination_folder.clone(),
