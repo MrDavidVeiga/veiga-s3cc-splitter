@@ -5084,11 +5084,18 @@ mod remove_selected_tests {
             &package,
             &source_package,
             &mut source_file,
+            &[selected_key.clone()],
             &remove,
             &rebuilt,
         )
         .unwrap();
-        validate_removed_package(&source_package, &rebuilt, &remove).unwrap();
+        validate_removed_package(
+            &source_package,
+            &rebuilt,
+            &[selected_key.clone()],
+            &remove,
+        )
+        .unwrap();
 
         let rebuilt_package = WritablePackage::load(&rebuilt).unwrap();
         let rebuilt_keys: HashSet<String> = rebuilt_package
