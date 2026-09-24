@@ -3653,12 +3653,21 @@ pub fn merge_packages_with_manifest(
 
     let destination = PathBuf::from(&payload.destination_folder);
     create_dir_all(&destination).map_err(|e| e.to_string())?;
-    let output_path = destination.join(normalized_merged_output_name(&payload.output_name));
+    let output_name = normalized_merged_output_name(&payload.output_name);
+    let output_path = destination.join(&output_name);
     if output_path.exists() {
         return Err(format!(
             "Já existe um arquivo com esse nome no destino: {}",
             output_path.display()
         ));
+    }
+    let temp_path = destination.join(format!(
+        ".{}.merge-temp-{}.package",
+        output_name.trim_end_matches(".package"),
+        std::process::id()
+    ));
+    if temp_path.exists() {
+        remove_file(&temp_path).map_err(|e| e.to_string())?;
     }
 
     let mut sources = Vec::new();
@@ -3718,7 +3727,7 @@ pub fn merge_packages_with_manifest(
         packages: manifest_packages,
     };
 
-    let mut out_pkg = WritablePackage::new(&output_path, false).map_err(|e| e.to_string())?;
+    let mut out_pkg = WritablePackage::new(&temp_path, false).map_err(|e| e.to_string())?;
     let mut out_f = OpenOptions::new()
         .read(true)
         .write(true)
@@ -3776,8 +3785,8 @@ pub fn merge_packages_with_manifest(
     drop(out_f);
     drop(out_pkg);
 
-    let rebuilt = WritablePackage::load(&output_path)
-        .map_err(|e| format!("O merged final falhou na validação DBPF: {e}"))?;
+    let rebuilt = WritablePackage::load(&temp_path)
+        .map_err(|e| format!("O merged temporário falhou na validação DBPF: {e}"))?;
     let rebuilt_manifest = read_merge_manifest_from_writable(&rebuilt)?
         .ok_or_else(|| "O merged final não contém o Merge Manifest.".to_string())?;
     let available_keys: HashSet<String> = rebuilt
@@ -3787,6 +3796,12 @@ pub fn merge_packages_with_manifest(
         .map(key_string_from_writable)
         .collect();
     rebuilt_manifest.validate_keys(&available_keys)?;
+    drop(rebuilt);
+
+    rename(&temp_path, &output_path).map_err(|e| {
+        let _ = remove_file(&temp_path);
+        format!("O merged foi validado, mas não foi possível finalizar o arquivo: {e}")
+    })?;
 
     Ok(MergePackagesResult {
         output_path: output_path.display().to_string(),
@@ -3818,6 +3833,38 @@ pub fn restore_manifest_packages(
         .filter(|(_, entry)| !is_manifest_tgi(entry.type_id, entry.group, entry.instance))
         .map(|(idx, entry)| (key_string_from_writable(entry), idx))
         .collect();
+
+    let mut planned_names = HashSet::new();
+    for package_info in &manifest.packages {
+        let mut file_name = sanitize_file_name(&package_info.name);
+        if file_name.trim().is_empty() {
+            file_name = format!("Package_{}.package", package_info.id);
+        }
+        if !file_name.to_ascii_lowercase().ends_with(".package") {
+            file_name.push_str(".package");
+        }
+        let normalized_name = file_name.to_ascii_lowercase();
+        if !planned_names.insert(normalized_name) {
+            return Err(format!(
+                "O manifesto contém nomes de arquivo duplicados que não podem ser restaurados na mesma pasta: {file_name}"
+            ));
+        }
+        let output_path = destination.join(&file_name);
+        if output_path.exists() {
+            return Err(format!(
+                "A restauração foi cancelada porque já existe: {}",
+                output_path.display()
+            ));
+        }
+        for resource in &package_info.resources {
+            if !index.contains_key(&resource.key) {
+                return Err(format!(
+                    "A restauração foi cancelada antes de criar arquivos: {} referencia o recurso ausente {}.",
+                    package_info.name, resource.key
+                ));
+            }
+        }
+    }
 
     let mut output_paths = Vec::new();
     for package_info in &manifest.packages {
