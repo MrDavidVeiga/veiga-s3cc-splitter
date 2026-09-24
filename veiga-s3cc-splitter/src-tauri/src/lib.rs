@@ -11,6 +11,8 @@ pub fn run() {
             commands::get_resource_preview,
             commands::analyze_remove_selection,
             commands::remove_selected_from_merged,
+            commands::merge_packages_with_manifest,
+            commands::restore_manifest_packages,
             commands::export_selected_resources,
             commands::zip_selected_resources
         ])
