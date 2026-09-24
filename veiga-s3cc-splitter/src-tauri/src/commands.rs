@@ -5348,6 +5348,18 @@ mod remove_selected_tests {
         assert_eq!(manifest.packages[0].anchors[0].kind, "CASP");
         assert_eq!(manifest.packages[1].anchors[0].kind, "OBJD");
 
+        let scan = scan_package_resources(ScanPayload {
+            package_path: result.output_path.clone(),
+            resource_type: "all".to_string(),
+            search: None,
+        })
+        .unwrap();
+        assert_eq!(scan.manifest_package_count, 2);
+        assert_eq!(scan.items.len(), 2);
+        let labels: HashSet<String> = scan.items.iter().map(|item| item.label.clone()).collect();
+        assert!(labels.contains("TShirtMickey.package"));
+        assert!(labels.contains("ModernSofa.package"));
+
         let restored = restore_manifest_packages(RestoreManifestPayload {
             package_path: result.output_path.clone(),
             destination_folder: restore_dir.display().to_string(),
