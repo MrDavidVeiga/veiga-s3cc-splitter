@@ -63,6 +63,10 @@ fn attr(tag: &str, name: &str) -> Option<String> {
     Some(xml_unescape(&rest[..end]))
 }
 
+fn instance_text_from_key(key: &str) -> &str {
+    key.rsplit('-').next().unwrap_or("")
+}
+
 impl MergeManifest {
     pub fn to_xml_bytes(&self) -> Vec<u8> {
         let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
@@ -81,8 +85,9 @@ impl MergeManifest {
             ));
             for anchor in &package.anchors {
                 out.push_str(&format!(
-                    "    <Anchor kind=\"{}\" key=\"{}\" />\n",
+                    "    <Anchor kind=\"{}\" instance=\"{}\" key=\"{}\" />\n",
                     xml_escape(&anchor.kind),
+                    xml_escape(instance_text_from_key(&anchor.key)),
                     xml_escape(&anchor.key)
                 ));
             }
