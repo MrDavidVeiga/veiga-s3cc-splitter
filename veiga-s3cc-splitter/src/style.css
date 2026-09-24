@@ -34,9 +34,43 @@ body {
 
 .topbar {
   display: flex;
-  justify-content: flex-start;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
   margin-top: 2px;
   margin-bottom: 14px;
+}
+
+.mode-switcher {
+  display: inline-flex;
+  padding: 4px;
+  gap: 4px;
+  border: 1px solid rgba(186, 196, 206, 0.22);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.mode-btn {
+  min-width: 120px;
+  padding: 9px 16px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  transition: 0.18s ease;
+}
+
+.mode-btn:hover {
+  color: var(--text);
+  background: rgba(127, 173, 45, 0.12);
+}
+
+.mode-btn.active {
+  color: white;
+  background: var(--green);
 }
 
 .language-switcher {
@@ -62,8 +96,8 @@ body {
 }
 
 .left-panel {
-  display: grid;
-  grid-template-rows: repeat(10, auto);
+  display: flex;
+  flex-direction: column;
   align-content: space-between;
   row-gap: clamp(6px, 0.7vh, 10px);
   padding: clamp(16px, 1.3vw, 22px);
@@ -86,6 +120,89 @@ body {
 
 .control-block {
   margin: 0;
+}
+
+.mode-controls {
+  display: grid;
+  align-content: space-between;
+  gap: clamp(8px, 1vh, 14px);
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.mode-workspace {
+  height: 100%;
+  min-height: 0;
+}
+
+.merger-name-block .section-label {
+  margin-bottom: 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.merger-action-row {
+  display: grid;
+  gap: 8px;
+}
+
+.merger-source-list {
+  margin-top: 16px;
+  display: grid;
+  gap: 8px;
+  max-height: calc(var(--workspace-height) - 150px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.merger-source-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid rgba(186, 196, 206, 0.16);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.merger-source-name {
+  min-width: 0;
+  font-size: 0.86rem;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.merger-source-path {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.merger-remove-btn {
+  border: 0;
+  border-radius: 9px;
+  padding: 7px 9px;
+  background: rgba(184, 50, 50, 0.18);
+  color: #f5c2c2;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.merger-result {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid rgba(127, 173, 45, 0.34);
+  border-radius: 12px;
+  background: rgba(127, 173, 45, 0.09);
+  font-size: 0.82rem;
+  line-height: 1.45;
 }
 
 .search-block .section-label {
@@ -710,6 +827,19 @@ body {
 }
 
 @media (max-width: 700px) {
+  .topbar {
+    flex-wrap: wrap;
+  }
+
+  .mode-switcher {
+    width: 100%;
+  }
+
+  .mode-btn {
+    flex: 1 1 50%;
+    min-width: 0;
+  }
+
   .topbar {
     margin-bottom: 14px;
   }
