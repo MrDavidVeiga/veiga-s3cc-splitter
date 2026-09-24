@@ -43,12 +43,12 @@ fn xml_escape(value: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
-        .replace(''', "&apos;")
+        .replace('\'', "&apos;")
 }
 
 fn xml_unescape(value: &str) -> String {
     value
-        .replace("&quot;", """)
+        .replace("&quot;", "\"")
         .replace("&apos;", "'")
         .replace("&gt;", ">")
         .replace("&lt;", "<")
@@ -56,7 +56,7 @@ fn xml_unescape(value: &str) -> String {
 }
 
 fn attr(tag: &str, name: &str) -> Option<String> {
-    let needle = format!("{name}="");
+    let needle = format!("{name}=\"");
     let start = tag.find(&needle)? + needle.len();
     let rest = &tag[start..];
     let end = rest.find('"')?;
@@ -65,15 +65,15 @@ fn attr(tag: &str, name: &str) -> Option<String> {
 
 impl MergeManifest {
     pub fn to_xml_bytes(&self) -> Vec<u8> {
-        let mut out = String::from("<?xml version="1.0" encoding="UTF-8"?>\n");
+        let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         out.push_str(&format!(
-            "<VeigaS3CCMergeManifest version="{}" packageCount="{}">\n",
+            "<VeigaS3CCMergeManifest version=\"{}\" packageCount=\"{}\">\n",
             self.version,
             self.packages.len()
         ));
         for package in &self.packages {
             out.push_str(&format!(
-                "  <Package id="{}" name="{}" originalSize="{}" resourceCount="{}">\n",
+                "  <Package id=\"{}\" name=\"{}\" originalSize=\"{}\" resourceCount=\"{}\">\n",
                 package.id,
                 xml_escape(&package.name),
                 package.original_size,
@@ -81,14 +81,14 @@ impl MergeManifest {
             ));
             for anchor in &package.anchors {
                 out.push_str(&format!(
-                    "    <Anchor kind="{}" key="{}" />\n",
+                    "    <Anchor kind=\"{}\" key=\"{}\" />\n",
                     xml_escape(&anchor.kind),
                     xml_escape(&anchor.key)
                 ));
             }
             for resource in &package.resources {
                 out.push_str(&format!(
-                    "    <Resource key="{}" />\n",
+                    "    <Resource key=\"{}\" />\n",
                     xml_escape(&resource.key)
                 ));
             }
