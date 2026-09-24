@@ -3434,6 +3434,7 @@ fn build_remove_selection_plan(
             .files
             .iter()
             .filter(|entry| entry.resource_type != TYPE_KEY)
+            .filter(|entry| !is_manifest_tgi(entry.resource_type, entry.resource_group, entry.instance))
             .filter(|entry| !resources_to_remove.contains(&key_string(entry)))
             .count(),
     })
