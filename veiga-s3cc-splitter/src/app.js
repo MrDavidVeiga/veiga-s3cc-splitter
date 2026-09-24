@@ -7,6 +7,14 @@ import noPreviewImage from "./assets/no-preview.png";
 import exportIcon from "./assets/icons/export.png";
 import zipIcon from "./assets/icons/zip.png";
 import clearIcon from "./assets/icons/clear.png";
+import {
+  availableContentFilters,
+  CONTENT_FILTERS,
+  contentFilterCounts,
+  deselectVisibleItems,
+  selectVisibleItems,
+  visibleItemsForFilter,
+} from "./filter-logic.js";
 
 const translations = {
   en: {
@@ -17,6 +25,8 @@ const translations = {
     pickDestination: "Choose destination folder",
     scanList: "Load list",
     searchLabel: "Search",
+    contentFilter: "Filter",
+    filterAll: "All",
     searchPlaceholder: "Search by name or Instance ID",
     instanceLabel: "Instance",
     duplicateLabel: (count) => `Duplicate ×${count}`,
@@ -59,6 +69,8 @@ const translations = {
     pickDestination: "Escolher pasta de destino",
     scanList: "Carregar lista",
     searchLabel: "Buscar",
+    contentFilter: "Filtro",
+    filterAll: "Todos",
     searchPlaceholder: "Buscar por nome ou Instance ID",
     instanceLabel: "Instance",
     duplicateLabel: (count) => `Duplicado ×${count}`,
@@ -101,6 +113,8 @@ const translations = {
     pickDestination: "Elegir carpeta de destino",
     scanList: "Cargar lista",
     searchLabel: "Buscar",
+    contentFilter: "Filtro",
+    filterAll: "Todos",
     searchPlaceholder: "Buscar por nombre o Instance ID",
     instanceLabel: "Instance",
     duplicateLabel: (count) => `Duplicado ×${count}`,
@@ -140,12 +154,11 @@ const translations = {
 const state = {
   packagePath: "",
   destinationFolder: "",
-  resourceType: "all",
   search: "",
   resources: [],
+  activeContentFilter: "all",
   selectedKeys: [],
   selectionInitialized: false,
-  selectionKeysByType: {},
   selectionAnchorKey: null,
   preview: null,
   isBusy: false,
@@ -154,6 +167,7 @@ const state = {
   progress: 30,
   language: "en",
   isLangMenuOpen: false,
+  isContentFilterOpen: false,
 };
 
 const el = {
@@ -171,7 +185,13 @@ const el = {
   destinationPath: document.querySelector("#destination-path"),
   searchInput: document.querySelector("#search-input"),
   searchLabel: document.querySelector("#search-label"),
-  typeTabs: document.querySelectorAll(".tab-btn"),
+  contentFilter: document.querySelector("#content-filter"),
+  contentFilterLabel: document.querySelector("#content-filter-label"),
+  contentFilterDropdown: document.querySelector("#content-filter-dropdown"),
+  contentFilterToggleBtn: document.querySelector("#content-filter-toggle-btn"),
+  contentFilterCurrent: document.querySelector("#content-filter-current"),
+  contentFilterToggleIcon: document.querySelector("#content-filter-toggle-icon"),
+  contentFilterMenu: document.querySelector("#content-filter-menu"),
   langDropdown: document.querySelector("#lang-dropdown"),
   langToggleBtn: document.querySelector("#lang-toggle-btn"),
   langCurrentCode: document.querySelector("#lang-current-code"),
@@ -309,14 +329,114 @@ function getDisplayDetails(item) {
   return item?.details || item?.detail || "";
 }
 
+function normalizedInstanceQuery(query) {
+  const lower = String(query || "").trim().toLowerCase();
+  if (!lower) return null;
+  const pos = lower.lastIndexOf("0x");
+  const candidate = (pos >= 0 ? lower.slice(pos + 2) : lower).trim();
+  if (candidate.length < 8 || candidate.length > 16 || !/^[0-9a-f]+$/i.test(candidate)) {
+    return null;
+  }
+  return candidate.toUpperCase().padStart(16, "0");
+}
+
+function itemMatchesSearch(item, query) {
+  const normalized = String(query || "").trim().toLowerCase();
+  if (!normalized) return true;
+
+  const haystack = [
+    item?.label,
+    item?.key,
+    item?.kind,
+    item?.details,
+    ...(Array.isArray(item?.contentCategories) ? item.contentCategories : []),
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+
+  if (haystack.includes(normalized)) return true;
+
+  const instance = normalizedInstanceQuery(normalized);
+  if (!instance) return false;
+
+  return String(item?.key || "")
+    .split("||")
+    .some((part) => {
+      const pieces = part.split("-");
+      if (pieces.length < 3) return false;
+      return pieces[2].replace(/^0x/i, "").toUpperCase().padStart(16, "0") === instance;
+    });
+}
+
+function getVisibleResources() {
+  return visibleItemsForFilter(state.resources, state.activeContentFilter)
+    .filter((item) => itemMatchesSearch(item, state.search));
+}
+
+function contentFilterText(filter, counts) {
+  const label = filter.value === "all" ? t("filterAll") : filter.label;
+  return `${label} (${counts[filter.value] ?? 0})`;
+}
+
+function renderContentFilter() {
+  if (!el.contentFilterMenu) return;
+
+  const counts = contentFilterCounts(state.resources);
+  const filters = availableContentFilters(state.resources);
+
+  if (!filters.some((filter) => filter.value === state.activeContentFilter)) {
+    state.activeContentFilter = "all";
+  }
+
+  const activeFilter =
+    filters.find((filter) => filter.value === state.activeContentFilter) || CONTENT_FILTERS[0];
+
+  if (el.contentFilterLabel) el.contentFilterLabel.textContent = `${t("contentFilter")}:`;
+  if (el.contentFilterCurrent) el.contentFilterCurrent.textContent = contentFilterText(activeFilter, counts);
+  if (el.contentFilterToggleBtn) {
+    el.contentFilterToggleBtn.setAttribute("aria-expanded", String(state.isContentFilterOpen));
+  }
+  if (el.contentFilterToggleIcon) {
+    el.contentFilterToggleIcon.className =
+      `fa-solid ${state.isContentFilterOpen ? "fa-angle-up" : "fa-angle-down"}`;
+  }
+  el.contentFilterMenu.classList.toggle("hidden", !state.isContentFilterOpen);
+  el.contentFilterMenu.setAttribute("aria-label", t("contentFilter"));
+  el.contentFilterMenu.innerHTML = "";
+
+  for (const filter of filters) {
+    const button = document.createElement("button");
+    const isActive = state.activeContentFilter === filter.value;
+    button.type = "button";
+    button.className = "lang-menu-item content-filter-menu-item" + (isActive ? " active" : "");
+    button.textContent = contentFilterText(filter, counts);
+    button.dataset.filter = filter.value;
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-selected", String(isActive));
+    button.disabled = isActive;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      state.activeContentFilter = filter.value;
+      state.isContentFilterOpen = false;
+      state.selectionAnchorKey = null;
+      if (state.preview && !getVisibleResources().some((item) => item.key === state.preview.key)) {
+        state.preview = null;
+      }
+      render();
+    });
+    el.contentFilterMenu.appendChild(button);
+  }
+}
+
 function render() {
   updatePathLabel(el.packagePath, state.packagePath);
   updatePathLabel(el.destinationPath, state.destinationFolder);
 
-  el.typeTabs.forEach((btn) => btn.classList.toggle("active", btn.dataset.type === state.resourceType));
+  const visibleResources = getVisibleResources();
   el.selectedCount.textContent = t("selectedCount", state.selectedKeys.length);
   el.resultsSummary.textContent = state.packagePath
-    ? t("packageReady", state.resources.length, state.resourceType)
+    ? t("packageReady", visibleResources.length)
     : t("noPackageLoaded");
 
   el.busyTitle.textContent = state.busyTitle || t("busyDefaultTitle");
@@ -331,21 +451,23 @@ function render() {
     el.emptyState.classList.remove("hidden");
   }
 
+  renderContentFilter();
   renderList();
   renderPreview();
 }
 
 function renderList() {
   el.resourceList.innerHTML = "";
+  const visibleResources = getVisibleResources();
 
   const duplicateCounts = new Map();
-  for (const item of state.resources) {
+  for (const item of visibleResources) {
     const duplicateKey = String(item.label || "").trim().toLowerCase();
     if (!duplicateKey) continue;
     duplicateCounts.set(duplicateKey, (duplicateCounts.get(duplicateKey) || 0) + 1);
   }
 
-  for (const item of state.resources) {
+  for (const item of visibleResources) {
     const displayType = getDisplayType(item);
     const displayDetails = getDisplayDetails(item);
 
@@ -425,10 +547,11 @@ function renderPreview() {
 }
 
 function handleSelectionClick(key, event) {
+  const visibleResources = getVisibleResources();
   const targetChecked = event.currentTarget.checked;
-  const currentIndex = state.resources.findIndex((item) => item.key === key);
+  const currentIndex = visibleResources.findIndex((item) => item.key === key);
   const anchorIndex = state.selectionAnchorKey
-    ? state.resources.findIndex((item) => item.key === state.selectionAnchorKey)
+    ? visibleResources.findIndex((item) => item.key === state.selectionAnchorKey)
     : -1;
 
   if (event.shiftKey && currentIndex >= 0 && anchorIndex >= 0) {
@@ -436,7 +559,7 @@ function handleSelectionClick(key, event) {
     const end = Math.max(anchorIndex, currentIndex);
     const selected = new Set(state.selectedKeys);
 
-    for (const item of state.resources.slice(start, end + 1)) {
+    for (const item of visibleResources.slice(start, end + 1)) {
       if (targetChecked) {
         selected.add(item.key);
       } else {
@@ -467,7 +590,8 @@ async function pickPackage() {
     state.resources = [];
     state.selectedKeys = [];
     state.selectionInitialized = false;
-    state.selectionKeysByType = {};
+    state.activeContentFilter = "all";
+    state.isContentFilterOpen = false;
     state.selectionAnchorKey = null;
     state.preview = null;
     render();
@@ -482,25 +606,6 @@ async function pickDestination() {
   }
 }
 
-async function getUnfilteredSelectionKeys(resourceType) {
-  const cached = state.selectionKeysByType[resourceType];
-  if (Array.isArray(cached)) {
-    return cached;
-  }
-
-  const result = await invoke("scan_package_resources", {
-    payload: {
-      packagePath: state.packagePath,
-      resourceType,
-      search: null,
-    },
-  });
-
-  const keys = (result.items || []).map((item) => item.key);
-  state.selectionKeysByType[resourceType] = keys;
-  return keys;
-}
-
 async function scanPackage() {
   if (!state.packagePath) return;
 
@@ -510,30 +615,24 @@ async function scanPackage() {
     const result = await invoke("scan_package_resources", {
       payload: {
         packagePath: state.packagePath,
-        resourceType: state.resourceType,
-        search: state.search.trim() || null,
+        resourceType: "all",
+        search: null,
       },
     });
 
     state.resources = result.items || [];
 
-    if (!state.search.trim()) {
-      state.selectionKeysByType[state.resourceType] = state.resources.map((item) => item.key);
-    }
-
     if (!state.selectionInitialized) {
-      state.selectedKeys =
-        state.resourceType === "all" && !state.search.trim()
-          ? state.resources.map((item) => item.key)
-          : await getUnfilteredSelectionKeys("all");
+      state.selectedKeys = state.resources.map((item) => item.key);
       state.selectionInitialized = true;
     }
 
     state.selectionAnchorKey = null;
     state.preview = null;
 
-    if (state.resources[0]) {
-      await loadPreview(state.resources[0]);
+    const firstVisible = getVisibleResources()[0] || state.resources[0];
+    if (firstVisible) {
+      await loadPreview(firstVisible);
     }
   } catch (error) {
     console.error(error);
@@ -604,7 +703,8 @@ async function removeSelectionFromMerged() {
       state.resources = [];
       state.selectedKeys = [];
       state.selectionInitialized = false;
-      state.selectionKeysByType = {};
+      state.activeContentFilter = "all";
+      state.isContentFilterOpen = false;
       state.selectionAnchorKey = null;
       state.preview = null;
       await scanPackage();
@@ -656,7 +756,8 @@ function clearAll() {
   state.resources = [];
   state.selectedKeys = [];
   state.selectionInitialized = false;
-  state.selectionKeysByType = {};
+  state.activeContentFilter = "all";
+  state.isContentFilterOpen = false;
   state.selectionAnchorKey = null;
   state.preview = null;
   state.search = "";
@@ -706,7 +807,8 @@ function bindDragAndDrop() {
         state.resources = [];
         state.selectedKeys = [];
         state.selectionInitialized = false;
-        state.selectionKeysByType = {};
+        state.activeContentFilter = "all";
+        state.isContentFilterOpen = false;
         state.selectionAnchorKey = null;
         state.preview = null;
         render();
@@ -735,71 +837,52 @@ function setupEvents() {
 
   el.clearBtn.addEventListener("click", clearAll);
 
-  el.selectAllBtn.addEventListener("click", async () => {
-    if (!state.packagePath) return;
-
-    try {
-      const categoryKeys = await getUnfilteredSelectionKeys(state.resourceType);
-      const selected = new Set(state.selectedKeys);
-      for (const key of categoryKeys) {
-        selected.add(key);
-      }
-      state.selectedKeys = [...selected];
-      state.selectionInitialized = true;
-      state.selectionAnchorKey = null;
-      render();
-    } catch (error) {
-      console.error(error);
-      alert(`${t("readError")}\n${error}`);
-    }
+  el.selectAllBtn.addEventListener("click", () => {
+    state.selectedKeys = selectVisibleItems(
+      state.resources,
+      state.selectedKeys,
+      state.activeContentFilter,
+    );
+    state.selectionInitialized = true;
+    state.selectionAnchorKey = null;
+    render();
   });
 
-  el.selectNoneBtn.addEventListener("click", async () => {
-    if (!state.packagePath) return;
-
-    try {
-      if (state.resourceType === "all") {
-        state.selectedKeys = [];
-      } else {
-        const categoryKeys = new Set(await getUnfilteredSelectionKeys(state.resourceType));
-        state.selectedKeys = state.selectedKeys.filter((key) => !categoryKeys.has(key));
-      }
-      state.selectionInitialized = true;
-      state.selectionAnchorKey = null;
-      render();
-    } catch (error) {
-      console.error(error);
-      alert(`${t("readError")}\n${error}`);
-    }
+  el.selectNoneBtn.addEventListener("click", () => {
+    state.selectedKeys = deselectVisibleItems(
+      state.resources,
+      state.selectedKeys,
+      state.activeContentFilter,
+    );
+    state.selectionInitialized = true;
+    state.selectionAnchorKey = null;
+    render();
   });
 
   if (el.searchInput) {
     el.searchInput.addEventListener("input", (event) => {
       state.search = event.target.value;
-    });
-
-    el.searchInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        scanPackage();
+      state.selectionAnchorKey = null;
+      if (state.preview && !getVisibleResources().some((item) => item.key === state.preview.key)) {
+        state.preview = null;
       }
+      render();
     });
   }
 
-  el.typeTabs.forEach((btn) =>
-    btn.addEventListener("click", () => {
-      state.resourceType = btn.dataset.type;
-      state.resources = [];
-      state.selectionAnchorKey = null;
-      state.preview = null;
+  if (el.contentFilterToggleBtn) {
+    el.contentFilterToggleBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      state.isContentFilterOpen = !state.isContentFilterOpen;
       render();
-      if (state.packagePath) scanPackage();
-    })
-  );
+    });
+  }
 
   if (el.langToggleBtn) {
     el.langToggleBtn.addEventListener("click", (event) => {
       event.stopPropagation();
       state.isLangMenuOpen = !state.isLangMenuOpen;
+      state.isContentFilterOpen = false;
       applyStaticTranslations();
       render();
     });
@@ -813,11 +896,22 @@ function setupEvents() {
   });
 
   document.addEventListener("click", (event) => {
-    if (!state.isLangMenuOpen) return;
-    if (el.langDropdown?.contains(event.target)) return;
-    state.isLangMenuOpen = false;
-    applyStaticTranslations();
-    render();
+    let changed = false;
+
+    if (state.isLangMenuOpen && !el.langDropdown?.contains(event.target)) {
+      state.isLangMenuOpen = false;
+      changed = true;
+    }
+
+    if (state.isContentFilterOpen && !el.contentFilterDropdown?.contains(event.target)) {
+      state.isContentFilterOpen = false;
+      changed = true;
+    }
+
+    if (changed) {
+      applyStaticTranslations();
+      render();
+    }
   });
 
   bindDragAndDrop();
