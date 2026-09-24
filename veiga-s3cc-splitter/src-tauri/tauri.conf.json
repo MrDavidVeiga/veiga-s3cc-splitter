@@ -15,9 +15,11 @@
         "title": "Veiga's S3CC Splitter",
         "width": 1280,
         "height": 800,
-        "resizable": false,
+        "minWidth": 820,
+        "minHeight": 620,
+        "resizable": true,
         "minimizable": true,
-        "maximizable": false,
+        "maximizable": true,
         "closable": true,
         "center": true
       }

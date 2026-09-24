@@ -773,7 +773,7 @@ fn casp_unknown1_name(data: &[u8]) -> Option<String> {
     }
 }
 
-fn safe_package_resource_names(package: &DBPF<'_>) -> BTreeMap<u64, String> {
+fn raw_package_key_names(package: &DBPF<'_>) -> BTreeMap<u64, String> {
     let mut names = BTreeMap::new();
     for entry in package
         .files
@@ -816,6 +816,67 @@ fn safe_package_resource_names(package: &DBPF<'_>) -> BTreeMap<u64, String> {
             }
         }
     }
+    names
+}
+
+fn normalized_key_resource_name(name: &str) -> String {
+    let original = name.trim_matches('\0').trim();
+    if original.is_empty() {
+        return String::new();
+    }
+
+    let mut current = original;
+    loop {
+        let Some((base, suffix)) = current.rsplit_once('_') else {
+            break;
+        };
+        if base.is_empty() || suffix.is_empty() {
+            break;
+        }
+
+        let token_end = suffix
+            .find(|ch: char| ch.is_ascii_digit())
+            .unwrap_or(suffix.len());
+        let token = suffix[..token_end].to_ascii_uppercase();
+        let numeric = &suffix[token_end..];
+        let numeric_ok = numeric.is_empty() || numeric.chars().all(|ch| ch.is_ascii_digit());
+
+        let technical = matches!(
+            token.as_str(),
+            "BONE"
+                | "GEOM"
+                | "IMG"
+                | "IMAG"
+                | "LOD"
+                | "MLOD"
+                | "MODL"
+                | "VPXY"
+                | "TXTC"
+                | "BGEO"
+                | "FBLN"
+                | "BBLN"
+                | "BOND"
+                | "RIG"
+                | "ICON"
+                | "THUM"
+                | "XML"
+        );
+
+        if !technical || !numeric_ok {
+            break;
+        }
+        current = base;
+    }
+
+    current.to_string()
+}
+
+fn safe_package_resource_names(package: &DBPF<'_>) -> BTreeMap<u64, String> {
+    let mut names: BTreeMap<u64, String> = raw_package_key_names(package)
+        .into_iter()
+        .map(|(instance, name)| (instance, normalized_key_resource_name(&name)))
+        .filter(|(_, name)| !name.is_empty())
+        .collect();
 
     for entry in package
         .files
@@ -834,11 +895,55 @@ fn safe_package_resource_names(package: &DBPF<'_>) -> BTreeMap<u64, String> {
         }
     }
 
+    // For objects, promote the same fallbacks used by the visible label into
+    // the shared name map so exported package/file names benefit as well.
+    for entry in package
+        .files
+        .iter()
+        .filter(|entry| entry.resource_type == TYPE_OBJD)
+    {
+        if names
+            .get(&entry.instance)
+            .map(|n| !n.trim().is_empty())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        let fallback = objd_catalog_name(entry.data())
+            .or_else(|| {
+                package.files.iter().find_map(|candidate| {
+                    if candidate.resource_type != TYPE_XML || candidate.instance != entry.instance {
+                        return None;
+                    }
+                    let text = String::from_utf8_lossy(candidate.data());
+                    extract_xml_value_attr(&text, "daeFileName")
+                })
+            })
+            .or_else(|| {
+                package.files.iter().find_map(|candidate| {
+                    if candidate.resource_type != TYPE_OBJK || candidate.instance != entry.instance {
+                        return None;
+                    }
+                    objk_script_class_name(candidate.data())
+                })
+            });
+
+        if let Some(name) = fallback {
+            let trimmed = name.trim();
+            if !trimmed.is_empty() {
+                names.insert(entry.instance, trimmed.to_string());
+            }
+        }
+    }
+
     names
 }
 
 fn build_filtered_key_data(package: &DBPF<'_>, selected_keys: &HashSet<String>) -> Vec<u8> {
-    let name_map = package_resource_names(package);
+    // Preserve the original KEY strings exactly when rebuilding package metadata.
+    // Display/export naming may normalize technical suffixes, but KEY metadata should not.
+    let name_map = raw_package_key_names(package);
     let mut filtered: BTreeMap<u64, String> = BTreeMap::new();
 
     for key in selected_keys {
@@ -4296,5 +4401,51 @@ mod remove_selected_tests {
 
         let _ = remove_file(&source);
         let _ = remove_file(&rebuilt);
+    }
+}
+
+
+#[cfg(test)]
+mod key_name_normalization_tests {
+    use super::normalized_key_resource_name;
+
+    #[test]
+    fn strips_numbered_bone_suffixes() {
+        assert_eq!(
+            normalized_key_resource_name("afHairLongWavyLayered_BONE0"),
+            "afHairLongWavyLayered"
+        );
+        assert_eq!(
+            normalized_key_resource_name("afHairLongWavyLayered_BONE72"),
+            "afHairLongWavyLayered"
+        );
+    }
+
+    #[test]
+    fn preserves_meaningful_underscores() {
+        assert_eq!(
+            normalized_key_resource_name("Creator_Name_afHairLongWavyLayered"),
+            "Creator_Name_afHairLongWavyLayered"
+        );
+        assert_eq!(
+            normalized_key_resource_name("Creator_Name_afHairLongWavyLayered_BONE12"),
+            "Creator_Name_afHairLongWavyLayered"
+        );
+    }
+
+    #[test]
+    fn strips_multiple_technical_suffixes() {
+        assert_eq!(
+            normalized_key_resource_name("afHairLongWavyLayered_BONE0_LOD1"),
+            "afHairLongWavyLayered"
+        );
+    }
+
+    #[test]
+    fn leaves_unknown_suffixes_unchanged() {
+        assert_eq!(
+            normalized_key_resource_name("afHairLongWavyLayered_CUSTOM12"),
+            "afHairLongWavyLayered_CUSTOM12"
+        );
     }
 }
