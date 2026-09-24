@@ -15,6 +15,12 @@ use sims3_core::dbpf::{DBPFEntry, DBPF};
 use sims3_pack::dbpf::{Package as WritablePackage, ResourceEntry as WritableEntry};
 use zip::write::FileOptions;
 
+use crate::merge_manifest::{
+    is_manifest_tgi, read_from_dbpf as read_merge_manifest_from_dbpf,
+    read_from_writable as read_merge_manifest_from_writable, ManifestAnchor, ManifestPackage,
+    ManifestResource, MergeManifest, MANIFEST_GROUP, MANIFEST_INSTANCE, MANIFEST_TYPE,
+};
+
 const TYPE_CASP: u32 = 0x034AEECB;
 const TYPE_FACE: u32 = 0x0358B08A;
 const TYPE_SKINTONE: u32 = 0x0354796A;
@@ -76,6 +82,7 @@ pub struct ResourceItem {
 #[serde(rename_all = "camelCase")]
 pub struct ScanResult {
     pub items: Vec<ResourceItem>,
+    pub manifest_package_count: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,6 +111,38 @@ pub struct ExportSelectionPayload {
     pub include_thumbnails: bool,
     pub enable_compression: bool,
     pub create_clone_package: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MergePackagesPayload {
+    pub package_paths: Vec<String>,
+    pub destination_folder: String,
+    pub output_name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergePackagesResult {
+    pub output_path: String,
+    pub package_count: usize,
+    pub resource_count: usize,
+    pub shared_resources: usize,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreManifestPayload {
+    pub package_path: String,
+    pub destination_folder: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreManifestResult {
+    pub destination_folder: String,
+    pub package_count: usize,
+    pub output_paths: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -1111,6 +1150,22 @@ fn safe_package_resource_names(package: &DBPF<'_>) -> BTreeMap<u64, String> {
             let trimmed = name.trim();
             if !trimmed.is_empty() {
                 names.insert(entry.instance, trimmed.to_string());
+            }
+        }
+    }
+
+    if let Ok(Some(manifest)) = read_merge_manifest_from_dbpf(package) {
+        for source in &manifest.packages {
+            let stem = Path::new(&source.name)
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.is_empty())
+                .unwrap_or(&source.name)
+                .to_string();
+            for anchor in &source.anchors {
+                if let Ok(parts) = parse_key(&anchor.key) {
+                    names.insert(parts.instance, stem.clone());
+                }
             }
         }
     }
@@ -3342,10 +3397,425 @@ fn files_are_identical(left: &Path, right: &Path) -> Result<bool, String> {
     }
 }
 
+fn merger_anchor_kind(resource_type: u32) -> Option<&'static str> {
+    match resource_type {
+        TYPE_CASP => Some("CASP"),
+        TYPE_OBJD => Some("OBJD"),
+        TYPE_FACE => Some("FACE"),
+        TYPE_SKINTONE => Some("SkinTone"),
+        TYPE_PATTERN => Some("Pattern"),
+        _ => None,
+    }
+}
+
+fn normalized_merged_output_name(name: &str) -> String {
+    let trimmed = name.trim();
+    let base = if trimmed.is_empty() { "Merged.package" } else { trimmed };
+    let mut safe = sanitize_file_name(base);
+    if !safe.to_ascii_lowercase().ends_with(".package") {
+        safe.push_str(".package");
+    }
+    safe
+}
+
+fn append_uncompressed_resource(
+    out_pkg: &mut WritablePackage,
+    out_f: &mut File,
+    type_id: u32,
+    group: u32,
+    instance: u64,
+    data: &[u8],
+    unknown2: u16,
+) -> Result<(), String> {
+    let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+    out_f.write_all(data).map_err(|e| e.to_string())?;
+    out_pkg.entries.push(WritableEntry {
+        type_id,
+        group,
+        id1: (instance >> 32) as u32,
+        id2: instance as u32,
+        instance,
+        chunk_offset,
+        file_size: data.len() as u32,
+        mem_size: data.len() as u32,
+        compressed: 0,
+        unknown2,
+    });
+    Ok(())
+}
+
+fn source_manifest_entries(
+    source: &WritablePackage,
+    source_path: &Path,
+    next_id: &mut u32,
+) -> Result<Vec<ManifestPackage>, String> {
+    let available: HashSet<String> = source
+        .entries
+        .iter()
+        .filter(|entry| entry.type_id != TYPE_KEY)
+        .filter(|entry| !is_manifest_tgi(entry.type_id, entry.group, entry.instance))
+        .map(key_string_from_writable)
+        .collect();
+
+    if let Some(existing) = read_merge_manifest_from_writable(source)? {
+        let mut nested = Vec::new();
+        let mut claimed = HashSet::new();
+        for package in existing.packages {
+            let resources: Vec<ManifestResource> = package
+                .resources
+                .into_iter()
+                .filter(|resource| available.contains(&resource.key))
+                .inspect(|resource| {
+                    claimed.insert(resource.key.clone());
+                })
+                .collect();
+            if resources.is_empty() {
+                continue;
+            }
+            let anchors = package
+                .anchors
+                .into_iter()
+                .filter(|anchor| available.contains(&anchor.key))
+                .collect();
+            nested.push(ManifestPackage {
+                id: *next_id,
+                name: package.name,
+                original_size: package.original_size,
+                anchors,
+                resources,
+            });
+            *next_id += 1;
+        }
+
+        let unclaimed: Vec<String> = available.difference(&claimed).cloned().collect();
+        if !unclaimed.is_empty() {
+            let file_name = source_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("MergedSource.package")
+                .to_string();
+            let anchors = source
+                .entries
+                .iter()
+                .filter_map(|entry| {
+                    let kind = merger_anchor_kind(entry.type_id)?;
+                    let key = key_string_from_writable(entry);
+                    if !unclaimed.contains(&key) {
+                        return None;
+                    }
+                    Some(ManifestAnchor {
+                        kind: kind.to_string(),
+                        key,
+                    })
+                })
+                .collect();
+            nested.push(ManifestPackage {
+                id: *next_id,
+                name: file_name,
+                original_size: std::fs::metadata(source_path).map(|m| m.len()).unwrap_or(0),
+                anchors,
+                resources: unclaimed
+                    .into_iter()
+                    .map(|key| ManifestResource { key })
+                    .collect(),
+            });
+            *next_id += 1;
+        }
+        return Ok(nested);
+    }
+
+    let file_name = source_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Source.package")
+        .to_string();
+    let mut resource_keys: Vec<String> = available.into_iter().collect();
+    resource_keys.sort();
+    let anchors = source
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            let kind = merger_anchor_kind(entry.type_id)?;
+            if entry.type_id == TYPE_KEY || is_manifest_tgi(entry.type_id, entry.group, entry.instance) {
+                return None;
+            }
+            Some(ManifestAnchor {
+                kind: kind.to_string(),
+                key: key_string_from_writable(entry),
+            })
+        })
+        .collect();
+
+    let package = ManifestPackage {
+        id: *next_id,
+        name: file_name,
+        original_size: std::fs::metadata(source_path).map(|m| m.len()).unwrap_or(0),
+        anchors,
+        resources: resource_keys
+            .into_iter()
+            .map(|key| ManifestResource { key })
+            .collect(),
+    };
+    *next_id += 1;
+    Ok(vec![package])
+}
+
+#[tauri::command]
+pub fn merge_packages_with_manifest(
+    payload: MergePackagesPayload,
+) -> Result<MergePackagesResult, String> {
+    if payload.package_paths.len() < 2 {
+        return Err("Selecione pelo menos dois packages para mesclar.".to_string());
+    }
+    if payload.destination_folder.trim().is_empty() {
+        return Err("Escolha uma pasta de destino.".to_string());
+    }
+
+    let destination = PathBuf::from(&payload.destination_folder);
+    create_dir_all(&destination).map_err(|e| e.to_string())?;
+    let output_path = destination.join(normalized_merged_output_name(&payload.output_name));
+    if output_path.exists() {
+        return Err(format!(
+            "Já existe um arquivo com esse nome no destino: {}",
+            output_path.display()
+        ));
+    }
+
+    let mut sources = Vec::new();
+    let mut source_paths = Vec::new();
+    for raw_path in &payload.package_paths {
+        validate_package_extension(raw_path)?;
+        let path = PathBuf::from(raw_path);
+        let package = WritablePackage::load(&path)
+            .map_err(|e| format!("Falha ao abrir {}: {e}", path.display()))?;
+        sources.push(package);
+        source_paths.push(path);
+    }
+
+    let mut first_owner: HashMap<String, (usize, usize)> = HashMap::new();
+    let mut shared_keys = HashSet::new();
+    for (source_index, source) in sources.iter().enumerate() {
+        for (entry_index, entry) in source.entries.iter().enumerate() {
+            if entry.type_id == TYPE_KEY || is_manifest_tgi(entry.type_id, entry.group, entry.instance) {
+                continue;
+            }
+            let key = key_string_from_writable(entry);
+            if let Some((previous_source, previous_entry)) = first_owner.get(&key).copied() {
+                let previous = &sources[previous_source].entries[previous_entry];
+                let previous_data = sources[previous_source]
+                    .get_uncompressed_data(previous)
+                    .map_err(|e| e.to_string())?;
+                let current_data = source
+                    .get_uncompressed_data(entry)
+                    .map_err(|e| e.to_string())?;
+                if previous_data != current_data {
+                    let left = source_paths[previous_source]
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("package");
+                    let right = source_paths[source_index]
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("package");
+                    return Err(format!(
+                        "Conflito de TGI: {key} existe em {left} e {right} com dados diferentes. O merge foi cancelado."
+                    ));
+                }
+                shared_keys.insert(key);
+            } else {
+                first_owner.insert(key, (source_index, entry_index));
+            }
+        }
+    }
+
+    let mut manifest_packages = Vec::new();
+    let mut next_id = 1u32;
+    for (source, source_path) in sources.iter().zip(source_paths.iter()) {
+        manifest_packages.extend(source_manifest_entries(source, source_path, &mut next_id)?);
+    }
+    let manifest = MergeManifest {
+        version: 1,
+        packages: manifest_packages,
+    };
+
+    let mut out_pkg = WritablePackage::new(&output_path, false).map_err(|e| e.to_string())?;
+    let mut out_f = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&out_pkg.path)
+        .map_err(|e| e.to_string())?;
+    out_f
+        .seek(SeekFrom::Start(out_pkg.index_position as u64))
+        .map_err(|e| e.to_string())?;
+
+    let mut written = HashSet::new();
+    for (source_index, source) in sources.iter().enumerate() {
+        for (entry_index, entry) in source.entries.iter().enumerate() {
+            if entry.type_id == TYPE_KEY || is_manifest_tgi(entry.type_id, entry.group, entry.instance) {
+                continue;
+            }
+            let key = key_string_from_writable(entry);
+            if !written.insert(key.clone()) {
+                continue;
+            }
+            if first_owner.get(&key).copied() != Some((source_index, entry_index)) {
+                continue;
+            }
+
+            let raw = source.get_raw_data(entry).map_err(|e| e.to_string())?;
+            let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+            out_f.write_all(&raw).map_err(|e| e.to_string())?;
+            out_pkg.entries.push(WritableEntry {
+                type_id: entry.type_id,
+                group: entry.group,
+                id1: entry.id1,
+                id2: entry.id2,
+                instance: entry.instance,
+                chunk_offset,
+                file_size: entry.file_size,
+                mem_size: entry.mem_size,
+                compressed: entry.compressed,
+                unknown2: entry.unknown2,
+            });
+        }
+    }
+
+    let manifest_bytes = manifest.to_xml_bytes();
+    append_uncompressed_resource(
+        &mut out_pkg,
+        &mut out_f,
+        MANIFEST_TYPE,
+        MANIFEST_GROUP,
+        MANIFEST_INSTANCE,
+        &manifest_bytes,
+        0,
+    )?;
+
+    out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+    out_pkg.write_index_and_header().map_err(|e| e.to_string())?;
+    drop(out_f);
+    drop(out_pkg);
+
+    let rebuilt = WritablePackage::load(&output_path)
+        .map_err(|e| format!("O merged final falhou na validação DBPF: {e}"))?;
+    let rebuilt_manifest = read_merge_manifest_from_writable(&rebuilt)?
+        .ok_or_else(|| "O merged final não contém o Merge Manifest.".to_string())?;
+    let available_keys: HashSet<String> = rebuilt
+        .entries
+        .iter()
+        .filter(|entry| !is_manifest_tgi(entry.type_id, entry.group, entry.instance))
+        .map(key_string_from_writable)
+        .collect();
+    rebuilt_manifest.validate_keys(&available_keys)?;
+
+    Ok(MergePackagesResult {
+        output_path: output_path.display().to_string(),
+        package_count: rebuilt_manifest.packages.len(),
+        resource_count: written.len(),
+        shared_resources: shared_keys.len(),
+    })
+}
+
+#[tauri::command]
+pub fn restore_manifest_packages(
+    payload: RestoreManifestPayload,
+) -> Result<RestoreManifestResult, String> {
+    validate_package_extension(&payload.package_path)?;
+    if payload.destination_folder.trim().is_empty() {
+        return Err("Escolha uma pasta de destino.".to_string());
+    }
+
+    let source = WritablePackage::load(&payload.package_path).map_err(|e| e.to_string())?;
+    let manifest = read_merge_manifest_from_writable(&source)?
+        .ok_or_else(|| "Este package não contém um Veiga Merge Manifest.".to_string())?;
+    let destination = PathBuf::from(&payload.destination_folder);
+    create_dir_all(&destination).map_err(|e| e.to_string())?;
+
+    let index: HashMap<String, usize> = source
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| !is_manifest_tgi(entry.type_id, entry.group, entry.instance))
+        .map(|(idx, entry)| (key_string_from_writable(entry), idx))
+        .collect();
+
+    let mut output_paths = Vec::new();
+    for package_info in &manifest.packages {
+        let mut file_name = sanitize_file_name(&package_info.name);
+        if file_name.trim().is_empty() {
+            file_name = format!("Package_{}.package", package_info.id);
+        }
+        if !file_name.to_ascii_lowercase().ends_with(".package") {
+            file_name.push_str(".package");
+        }
+        let output_path = destination.join(&file_name);
+        if output_path.exists() {
+            return Err(format!(
+                "A restauração foi cancelada porque já existe: {}",
+                output_path.display()
+            ));
+        }
+
+        let mut out_pkg = WritablePackage::new(&output_path, false).map_err(|e| e.to_string())?;
+        let mut out_f = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&out_pkg.path)
+            .map_err(|e| e.to_string())?;
+        out_f
+            .seek(SeekFrom::Start(out_pkg.index_position as u64))
+            .map_err(|e| e.to_string())?;
+
+        let mut written = HashSet::new();
+        for resource in &package_info.resources {
+            if !written.insert(resource.key.clone()) {
+                continue;
+            }
+            let entry_index = index.get(&resource.key).copied().ok_or_else(|| {
+                format!(
+                    "Não foi possível restaurar {}: recurso {} está ausente do merged.",
+                    package_info.name, resource.key
+                )
+            })?;
+            let entry = &source.entries[entry_index];
+            let raw = source.get_raw_data(entry).map_err(|e| e.to_string())?;
+            let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+            out_f.write_all(&raw).map_err(|e| e.to_string())?;
+            out_pkg.entries.push(WritableEntry {
+                type_id: entry.type_id,
+                group: entry.group,
+                id1: entry.id1,
+                id2: entry.id2,
+                instance: entry.instance,
+                chunk_offset,
+                file_size: entry.file_size,
+                mem_size: entry.mem_size,
+                compressed: entry.compressed,
+                unknown2: entry.unknown2,
+            });
+        }
+
+        out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+        out_pkg.write_index_and_header().map_err(|e| e.to_string())?;
+        drop(out_f);
+        drop(out_pkg);
+        WritablePackage::load(&output_path)
+            .map_err(|e| format!("Package restaurado inválido ({}): {e}", file_name))?;
+        output_paths.push(output_path.display().to_string());
+    }
+
+    Ok(RestoreManifestResult {
+        destination_folder: destination.display().to_string(),
+        package_count: output_paths.len(),
+        output_paths,
+    })
+}
+
 fn write_removed_package(
     package: &DBPF<'_>,
     source_package: &WritablePackage,
     source_file: &mut File,
+    selected_keys: &[String],
     resources_to_remove: &HashSet<String>,
     temp_path: &Path,
 ) -> Result<(), String> {
@@ -3371,9 +3841,15 @@ fn write_removed_package(
         .seek(SeekFrom::Start(out_pkg.index_position as u64))
         .map_err(|e| e.to_string())?;
 
+    let updated_manifest = read_merge_manifest_from_writable(source_package)?
+        .map(|manifest| manifest.update_after_removal(selected_keys, resources_to_remove));
+
     for entry in &source_package.entries {
         let key = key_string_from_writable(entry);
-        if entry.type_id == TYPE_KEY || resources_to_remove.contains(&key) {
+        if entry.type_id == TYPE_KEY
+            || is_manifest_tgi(entry.type_id, entry.group, entry.instance)
+            || resources_to_remove.contains(&key)
+        {
             continue;
         }
 
@@ -3416,6 +3892,21 @@ fn write_removed_package(
         });
     }
 
+    if let Some(manifest) = updated_manifest {
+        if !manifest.packages.is_empty() {
+            let data = manifest.to_xml_bytes();
+            append_uncompressed_resource(
+                &mut out_pkg,
+                &mut out_f,
+                MANIFEST_TYPE,
+                MANIFEST_GROUP,
+                MANIFEST_INSTANCE,
+                &data,
+                0,
+            )?;
+        }
+    }
+
     out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
     out_pkg
         .write_index_and_header()
@@ -3426,6 +3917,7 @@ fn write_removed_package(
 fn validate_removed_package(
     source_package: &WritablePackage,
     output_path: &Path,
+    selected_keys: &[String],
     resources_to_remove: &HashSet<String>,
 ) -> Result<(), String> {
     let rebuilt = WritablePackage::load(output_path)
@@ -3433,7 +3925,7 @@ fn validate_removed_package(
 
     let mut expected_counts: HashMap<String, usize> = HashMap::new();
     for entry in &source_package.entries {
-        if entry.type_id == TYPE_KEY {
+        if entry.type_id == TYPE_KEY || is_manifest_tgi(entry.type_id, entry.group, entry.instance) {
             continue;
         }
         let key = key_string_from_writable(entry);
@@ -3445,7 +3937,7 @@ fn validate_removed_package(
 
     let mut actual_counts: HashMap<String, usize> = HashMap::new();
     for entry in &rebuilt.entries {
-        if entry.type_id == TYPE_KEY {
+        if entry.type_id == TYPE_KEY || is_manifest_tgi(entry.type_id, entry.group, entry.instance) {
             continue;
         }
         let key = key_string_from_writable(entry);
@@ -3462,6 +3954,32 @@ fn validate_removed_package(
             "Validação falhou: os recursos mantidos não correspondem exatamente ao package original."
                 .to_string(),
         );
+    }
+
+    let expected_manifest = read_merge_manifest_from_writable(source_package)?
+        .map(|manifest| manifest.update_after_removal(selected_keys, resources_to_remove));
+    let actual_manifest = read_merge_manifest_from_writable(&rebuilt)?;
+    match expected_manifest {
+        Some(expected) if expected.packages.is_empty() => {
+            if actual_manifest.is_some() {
+                return Err("Validação falhou: o Merge Manifest deveria ter sido removido.".to_string());
+            }
+        }
+        Some(expected) => {
+            let actual = actual_manifest
+                .ok_or_else(|| "Validação falhou: o Merge Manifest atualizado está ausente.".to_string())?;
+            if actual != expected {
+                return Err("Validação falhou: o Merge Manifest atualizado não corresponde ao plano de remoção.".to_string());
+            }
+            let available: HashSet<String> = rebuilt
+                .entries
+                .iter()
+                .filter(|entry| !is_manifest_tgi(entry.type_id, entry.group, entry.instance))
+                .map(key_string_from_writable)
+                .collect();
+            actual.validate_keys(&available)?;
+        }
+        None => {}
     }
 
     let mmap = open_package(&output_path.display().to_string())?;
@@ -4083,6 +4601,9 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
         let package = parse_package(&mmap)?;
         let query = payload.search.unwrap_or_default().to_lowercase();
         let name_map = package_resource_names(&package);
+        let manifest_package_count = read_merge_manifest_from_dbpf(&package)?
+            .map(|manifest| manifest.packages.len())
+            .unwrap_or(0);
 
         let items = if resource_type == "skintone" {
             build_skintone_group_items(&package, &query, &name_map)
@@ -4122,7 +4643,7 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
             items
         };
 
-        Ok(ScanResult { items })
+        Ok(ScanResult { items, manifest_package_count })
     })
     .map_err(|_| "Falha ao carregar a lista de recursos deste package.".to_string())?
 }
@@ -4207,6 +4728,7 @@ pub fn remove_selected_from_merged(
         &package,
         &source_package,
         &mut source_file,
+        &payload.selected_keys,
         &resources_to_remove,
         &temp_path,
     )?;
@@ -4214,6 +4736,7 @@ pub fn remove_selected_from_merged(
     if let Err(error) = validate_removed_package(
         &source_package,
         &temp_path,
+        &payload.selected_keys,
         &resources_to_remove,
     ) {
         let _ = remove_file(&temp_path);
