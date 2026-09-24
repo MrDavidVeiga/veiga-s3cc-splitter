@@ -144,6 +144,8 @@ const state = {
   search: "",
   resources: [],
   selectedKeys: [],
+  selectionInitialized: false,
+  selectionKeysByType: {},
   selectionAnchorKey: null,
   preview: null,
   isBusy: false,
@@ -464,6 +466,8 @@ async function pickPackage() {
     state.packagePath = result;
     state.resources = [];
     state.selectedKeys = [];
+    state.selectionInitialized = false;
+    state.selectionKeysByType = {};
     state.selectionAnchorKey = null;
     state.preview = null;
     render();
@@ -476,6 +480,25 @@ async function pickDestination() {
     state.destinationFolder = result;
     render();
   }
+}
+
+async function getUnfilteredSelectionKeys(resourceType) {
+  const cached = state.selectionKeysByType[resourceType];
+  if (Array.isArray(cached)) {
+    return cached;
+  }
+
+  const result = await invoke("scan_package_resources", {
+    payload: {
+      packagePath: state.packagePath,
+      resourceType,
+      search: null,
+    },
+  });
+
+  const keys = (result.items || []).map((item) => item.key);
+  state.selectionKeysByType[resourceType] = keys;
+  return keys;
 }
 
 async function scanPackage() {
@@ -493,7 +516,19 @@ async function scanPackage() {
     });
 
     state.resources = result.items || [];
-    state.selectedKeys = state.resources.map((item) => item.key);
+
+    if (!state.search.trim()) {
+      state.selectionKeysByType[state.resourceType] = state.resources.map((item) => item.key);
+    }
+
+    if (!state.selectionInitialized) {
+      state.selectedKeys =
+        state.resourceType === "all" && !state.search.trim()
+          ? state.resources.map((item) => item.key)
+          : await getUnfilteredSelectionKeys("all");
+      state.selectionInitialized = true;
+    }
+
     state.selectionAnchorKey = null;
     state.preview = null;
 
@@ -568,6 +603,8 @@ async function removeSelectionFromMerged() {
     if (normalizeLocalPath(result.outputPath) === normalizeLocalPath(state.packagePath)) {
       state.resources = [];
       state.selectedKeys = [];
+      state.selectionInitialized = false;
+      state.selectionKeysByType = {};
       state.selectionAnchorKey = null;
       state.preview = null;
       await scanPackage();
@@ -618,6 +655,8 @@ function clearAll() {
   state.destinationFolder = "";
   state.resources = [];
   state.selectedKeys = [];
+  state.selectionInitialized = false;
+  state.selectionKeysByType = {};
   state.selectionAnchorKey = null;
   state.preview = null;
   state.search = "";
@@ -666,6 +705,8 @@ function bindDragAndDrop() {
         state.packagePath = path;
         state.resources = [];
         state.selectedKeys = [];
+        state.selectionInitialized = false;
+        state.selectionKeysByType = {};
         state.selectionAnchorKey = null;
         state.preview = null;
         render();
@@ -694,16 +735,42 @@ function setupEvents() {
 
   el.clearBtn.addEventListener("click", clearAll);
 
-  el.selectAllBtn.addEventListener("click", () => {
-    state.selectedKeys = state.resources.map((item) => item.key);
-    state.selectionAnchorKey = null;
-    render();
+  el.selectAllBtn.addEventListener("click", async () => {
+    if (!state.packagePath) return;
+
+    try {
+      const categoryKeys = await getUnfilteredSelectionKeys(state.resourceType);
+      const selected = new Set(state.selectedKeys);
+      for (const key of categoryKeys) {
+        selected.add(key);
+      }
+      state.selectedKeys = [...selected];
+      state.selectionInitialized = true;
+      state.selectionAnchorKey = null;
+      render();
+    } catch (error) {
+      console.error(error);
+      alert(`${t("readError")}\n${error}`);
+    }
   });
 
-  el.selectNoneBtn.addEventListener("click", () => {
-    state.selectedKeys = [];
-    state.selectionAnchorKey = null;
-    render();
+  el.selectNoneBtn.addEventListener("click", async () => {
+    if (!state.packagePath) return;
+
+    try {
+      if (state.resourceType === "all") {
+        state.selectedKeys = [];
+      } else {
+        const categoryKeys = new Set(await getUnfilteredSelectionKeys(state.resourceType));
+        state.selectedKeys = state.selectedKeys.filter((key) => !categoryKeys.has(key));
+      }
+      state.selectionInitialized = true;
+      state.selectionAnchorKey = null;
+      render();
+    } catch (error) {
+      console.error(error);
+      alert(`${t("readError")}\n${error}`);
+    }
   });
 
   if (el.searchInput) {
@@ -722,7 +789,6 @@ function setupEvents() {
     btn.addEventListener("click", () => {
       state.resourceType = btn.dataset.type;
       state.resources = [];
-      state.selectedKeys = [];
       state.selectionAnchorKey = null;
       state.preview = null;
       render();
