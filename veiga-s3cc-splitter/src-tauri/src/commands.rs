@@ -596,7 +596,7 @@ fn selection_export_root(
     base_key: &str,
     name_map: &BTreeMap<u64, String>,
 ) -> PathBuf {
-    let stem = selection_output_stem(package, base_key);
+    let stem = selection_output_stem(package, base_key, name_map);
     if let Ok(parts) = parse_key(first_compound_key(base_key)) {
         if parts.resource_type == TYPE_FACE {
             return PathBuf::from(destination_folder).join("Sliders").join(stem);
@@ -2812,6 +2812,7 @@ fn collect_clone_keys(
     package: &DBPF<'_>,
     base_keys: &HashSet<String>,
     include_thumbnails: bool,
+    name_map: &BTreeMap<u64, String>,
 ) -> Result<HashSet<String>, String> {
     let mut resolved = HashSet::new();
     let mut queue = VecDeque::new();
@@ -2832,7 +2833,7 @@ fn collect_clone_keys(
                 }
             }
             TYPE_FACE => {
-                for part in face_group_members(package, parts, &package_resource_names(package)) {
+                for part in face_group_members(package, parts, name_map) {
                     enqueue_key(package, include_thumbnails, &mut resolved, &mut queue, part);
                 }
             }
@@ -2848,7 +2849,7 @@ fn collect_clone_keys(
     while let Some(current) = queue.pop_front() {
         let discovered = match current.resource_type {
             TYPE_CASP => casp_direct_refs(package, current),
-            TYPE_FACE => face_group_members(package, current, &package_resource_names(package)),
+            TYPE_FACE => face_group_members(package, current, name_map),
             TYPE_OBJD => object_group_members(package, current),
             TYPE_OBJK => objk_direct_refs(package, current),
             TYPE_VPXY => vpxy_direct_refs(package, current),
@@ -2876,17 +2877,20 @@ fn expand_selection_for_export(
     package: &DBPF<'_>,
     base_keys: &HashSet<String>,
     include_thumbnails: bool,
+    name_map: &BTreeMap<u64, String>,
 ) -> Result<HashSet<String>, String> {
-    let name_map = package_resource_names(package);
-    let mut selected = expand_selected_for_tones(package, base_keys, &name_map);
-    selected = expand_selected_for_faces(package, &selected, &name_map);
-    let extra = collect_clone_keys(package, &selected, include_thumbnails)?;
+    let mut selected = expand_selected_for_tones(package, base_keys, name_map);
+    selected = expand_selected_for_faces(package, &selected, name_map);
+    let extra = collect_clone_keys(package, &selected, include_thumbnails, name_map)?;
     selected.extend(extra);
     Ok(selected)
 }
 
-fn selection_output_stem(package: &DBPF<'_>, base_key: &str) -> String {
-    let name_map = package_resource_names(package);
+fn selection_output_stem(
+    package: &DBPF<'_>,
+    base_key: &str,
+    name_map: &BTreeMap<u64, String>,
+) -> String {
     let expanded_parts: Vec<&str> = base_key
         .split("||")
         .map(|part| part.trim())
@@ -2905,7 +2909,7 @@ fn selection_output_stem(package: &DBPF<'_>, base_key: &str) -> String {
                         && entry.resource_group == first.resource_group
                         && entry.instance == first.instance
                 }) {
-                    let label = tone_display_name(entry, &name_map);
+                    let label = tone_display_name(entry, name_map);
                     if !label.trim().is_empty() {
                         return sanitize_file_name(label.trim());
                     }
@@ -2917,7 +2921,7 @@ fn selection_output_stem(package: &DBPF<'_>, base_key: &str) -> String {
                         && entry.resource_group == first.resource_group
                         && entry.instance == first.instance
                 }) {
-                    let label = object_display_label(package, entry, &name_map);
+                    let label = object_display_label(package, entry, name_map);
                     if is_bodyhair_label(&label) {
                         return sanitize_file_name(&format!(
                             "{}-BodyHair",
@@ -2932,7 +2936,7 @@ fn selection_output_stem(package: &DBPF<'_>, base_key: &str) -> String {
                         && entry.resource_group == first.resource_group
                         && entry.instance == first.instance
                 }) {
-                    let label = normalized_face_name(&resource_label(entry, &name_map));
+                    let label = normalized_face_name(&resource_label(entry, name_map));
                     if !label.trim().is_empty() {
                         return sanitize_file_name(label.trim());
                     }
@@ -2948,9 +2952,9 @@ fn selection_output_stem(package: &DBPF<'_>, base_key: &str) -> String {
                 && entry.instance == parts.instance
         }) {
             let label = if parts.resource_type == TYPE_SKINTONE {
-                tone_display_name(entry, &name_map)
+                tone_display_name(entry, name_map)
             } else {
-                object_display_label(package, entry, &name_map)
+                object_display_label(package, entry, name_map)
             };
             let trimmed = label.trim();
             if !trimmed.is_empty() {
@@ -2966,8 +2970,12 @@ fn selection_output_stem(package: &DBPF<'_>, base_key: &str) -> String {
     sanitize_file_name("resource")
 }
 
-fn clone_package_file_name(package: &DBPF<'_>, base_key: &str) -> String {
-    format!("{}.package", selection_output_stem(package, base_key))
+fn clone_package_file_name(
+    package: &DBPF<'_>,
+    base_key: &str,
+    name_map: &BTreeMap<u64, String>,
+) -> String {
+    format!("{}.package", selection_output_stem(package, base_key, name_map))
 }
 
 fn selected_label_file_name(
@@ -2995,7 +3003,7 @@ fn selected_label_file_name(
 
     format!(
         "{}.{}",
-        selection_output_stem(package, base_key),
+        selection_output_stem(package, base_key, name_map),
         extension_from_type(entry.resource_type)
     )
 }
@@ -3050,23 +3058,63 @@ fn unique_directory_path(path: PathBuf, used: &mut HashSet<String>) -> PathBuf {
     }
 }
 
-fn create_clone_package_single(
-    payload: &ExportSelectionPayload,
+fn read_raw_writable_entry(
+    source_file: &mut File,
+    entry: &WritableEntry,
+) -> Result<Vec<u8>, String> {
+    source_file
+        .seek(SeekFrom::Start(entry.chunk_offset as u64))
+        .map_err(|e| e.to_string())?;
+    let mut raw = vec![0u8; entry.file_size as usize];
+    source_file.read_exact(&mut raw).map_err(|e| e.to_string())?;
+    Ok(raw)
+}
+
+fn writable_entry_index(source_package: &WritablePackage) -> HashMap<String, usize> {
+    let mut index = HashMap::with_capacity(source_package.entries.len());
+    for (position, entry) in source_package.entries.iter().enumerate() {
+        index.entry(key_string_from_writable(entry)).or_insert(position);
+    }
+    index
+}
+
+fn read_uncompressed_writable_entry(
+    source_file: &mut File,
+    entry: &WritableEntry,
+) -> Result<Vec<u8>, String> {
+    let raw = read_raw_writable_entry(source_file, entry)?;
+    if entry.file_size == entry.mem_size {
+        return Ok(raw);
+    }
+
+    sims3_pack::compression::uncompress_stream(
+        &raw,
+        entry.file_size as usize,
+        entry.mem_size as usize,
+    )
+    .map_err(|e| e.to_string())
+}
+
+fn create_clone_package_from_loaded(
+    core_package: &DBPF<'_>,
+    name_map: &BTreeMap<u64, String>,
+    source_package: &WritablePackage,
+    source_file: &mut File,
+    selected_keys: &[String],
+    include_thumbnails: bool,
+    enable_compression: bool,
     clone_path: &Path,
 ) -> Result<(String, usize), String> {
-    let mmap = open_package(&payload.package_path)?;
-    let core_package = parse_package(&mmap)?;
-    let source_package = WritablePackage::load(&payload.package_path).map_err(|e| e.to_string())?;
-    let selected: HashSet<String> = payload.selected_keys.iter().cloned().collect();
+    let selected: HashSet<String> = selected_keys.iter().cloned().collect();
     let clone_keys =
-        expand_selection_for_export(&core_package, &selected, payload.include_thumbnails)?;
+        expand_selection_for_export(core_package, &selected, include_thumbnails, name_map)?;
 
     if let Some(parent) = clone_path.parent() {
         create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
     let mut out_pkg =
-        WritablePackage::new(clone_path, payload.enable_compression).map_err(|e| e.to_string())?;
+        WritablePackage::new(clone_path, enable_compression).map_err(|e| e.to_string())?;
     let mut out_f = OpenOptions::new()
         .read(true)
         .write(true)
@@ -3077,7 +3125,7 @@ fn create_clone_package_single(
         .map_err(|e| e.to_string())?;
 
     let filtered_key_data = if has_type_key(&clone_keys) {
-        Some(build_filtered_key_data(&core_package, &clone_keys))
+        Some(build_filtered_key_data(core_package, &clone_keys))
     } else {
         None
     };
@@ -3085,15 +3133,11 @@ fn create_clone_package_single(
     let mut count = 0usize;
     for entry in &source_package.entries {
         let key = key_string_from_writable(entry);
-        if !clone_keys.contains(&key) {
+        if !clone_keys.contains(&key) || entry.type_id == TYPE_KEY {
             continue;
         }
-        if entry.type_id == TYPE_KEY {
-            continue;
-        }
-        let raw = source_package
-            .get_raw_data(entry)
-            .map_err(|e| e.to_string())?;
+
+        let raw = read_raw_writable_entry(source_file, entry)?;
         let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
         out_f.write_all(&raw).map_err(|e| e.to_string())?;
         out_pkg.entries.push(WritableEntry {
@@ -3139,38 +3183,49 @@ fn create_clone_package_single(
     out_pkg
         .write_index_and_header()
         .map_err(|e| e.to_string())?;
+
     Ok((clone_path.display().to_string(), count))
 }
 
-fn export_selected_resources_single(
-    payload: &ExportSelectionPayload,
+fn export_selected_resources_from_loaded(
+    package: &DBPF<'_>,
+    name_map: &BTreeMap<u64, String>,
+    source_package: &WritablePackage,
+    source_file: &mut File,
+    source_index: &HashMap<String, usize>,
+    selected_keys: &[String],
+    include_thumbnails: bool,
     export_root: &Path,
 ) -> Result<String, String> {
-    let mmap = open_package(&payload.package_path)?;
-    let package = parse_package(&mmap)?;
-    let name_map = package_resource_names(&package);
-    let selected_compound: HashSet<String> = payload.selected_keys.iter().cloned().collect();
+    let selected_compound: HashSet<String> = selected_keys.iter().cloned().collect();
     let selected =
-        expand_selection_for_export(&package, &selected_compound, payload.include_thumbnails)?;
+        expand_selection_for_export(package, &selected_compound, include_thumbnails, name_map)?;
     create_dir_all(export_root).map_err(|e| e.to_string())?;
 
     let filtered_key_data = if has_type_key(&selected) {
-        Some(build_filtered_key_data(&package, &selected))
+        Some(build_filtered_key_data(package, &selected))
     } else {
         None
     };
 
     let mut seen_names = HashSet::new();
-    for idx in selected_entry_indices(&package, &selected) {
+    for idx in selected_entry_indices(package, &selected) {
         let entry = &package.files[idx];
         if entry.resource_type == TYPE_KEY {
             continue;
         }
+
         let file_name = unique_output_name(
-            selected_label_file_name(&package, &selected_compound, entry, &name_map),
+            selected_label_file_name(package, &selected_compound, entry, name_map),
             &mut seen_names,
         );
-        std::fs::write(export_root.join(file_name), entry.data()).map_err(|e| e.to_string())?;
+        let key = key_string(entry);
+        let source_entry = source_index
+            .get(&key)
+            .and_then(|idx| source_package.entries.get(*idx))
+            .ok_or_else(|| format!("Resource {key} was not found in the source package index."))?;
+        let data = read_uncompressed_writable_entry(source_file, source_entry)?;
+        std::fs::write(export_root.join(file_name), data).map_err(|e| e.to_string())?;
     }
 
     if let Some(raw) = filtered_key_data.filter(|raw| !raw.is_empty()) {
@@ -3179,68 +3234,99 @@ fn export_selected_resources_single(
             .iter()
             .find(|entry| entry.resource_type == TYPE_KEY)
         {
-            let file_name = unique_output_name(export_file_name(entry, &name_map), &mut seen_names);
+            let file_name = unique_output_name(export_file_name(entry, name_map), &mut seen_names);
             std::fs::write(export_root.join(file_name), raw).map_err(|e| e.to_string())?;
         }
     }
+
     Ok(export_root.display().to_string())
 }
 
-fn zip_selected_resources_single(
-    payload: &ExportSelectionPayload,
+fn zip_clone_from_loaded(
+    core_package: &DBPF<'_>,
+    name_map: &BTreeMap<u64, String>,
+    source_package: &WritablePackage,
+    source_file: &mut File,
+    selected_keys: &[String],
+    include_thumbnails: bool,
+    enable_compression: bool,
     zip_path: &Path,
 ) -> Result<String, String> {
-    if payload.create_clone_package {
-        let temp_clone = zip_path.with_extension("package");
-        let (clone_path, _count) = create_clone_package_single(payload, &temp_clone)?;
-        let clone_pathbuf = PathBuf::from(&clone_path);
-        let zip_file = File::create(zip_path).map_err(|e| e.to_string())?;
-        let mut zip = zip::ZipWriter::new(zip_file);
-        let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-        let file_name = clone_pathbuf
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        zip.start_file(file_name, options)
-            .map_err(|e| e.to_string())?;
-        let bytes = std::fs::read(&clone_pathbuf).map_err(|e| e.to_string())?;
-        zip.write_all(&bytes).map_err(|e| e.to_string())?;
-        zip.finish().map_err(|e| e.to_string())?;
-        let _ = std::fs::remove_file(&clone_pathbuf);
-        return Ok(zip_path.display().to_string());
-    }
+    let temp_clone = zip_path.with_extension("package");
+    let (clone_path, _count) = create_clone_package_from_loaded(
+        core_package,
+        name_map,
+        source_package,
+        source_file,
+        selected_keys,
+        include_thumbnails,
+        enable_compression,
+        &temp_clone,
+    )?;
+    let clone_pathbuf = PathBuf::from(&clone_path);
+    let zip_file = File::create(zip_path).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipWriter::new(zip_file);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let file_name = clone_pathbuf
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
 
-    let mmap = open_package(&payload.package_path)?;
-    let package = parse_package(&mmap)?;
-    let name_map = package_resource_names(&package);
-    let selected_compound: HashSet<String> = payload.selected_keys.iter().cloned().collect();
+    zip.start_file(file_name, options)
+        .map_err(|e| e.to_string())?;
+    let bytes = std::fs::read(&clone_pathbuf).map_err(|e| e.to_string())?;
+    zip.write_all(&bytes).map_err(|e| e.to_string())?;
+    zip.finish().map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&clone_pathbuf);
+
+    Ok(zip_path.display().to_string())
+}
+
+fn zip_raw_from_loaded(
+    package: &DBPF<'_>,
+    name_map: &BTreeMap<u64, String>,
+    source_package: &WritablePackage,
+    source_file: &mut File,
+    source_index: &HashMap<String, usize>,
+    selected_keys: &[String],
+    include_thumbnails: bool,
+    zip_path: &Path,
+) -> Result<String, String> {
+    let selected_compound: HashSet<String> = selected_keys.iter().cloned().collect();
     let selected =
-        expand_selection_for_export(&package, &selected_compound, payload.include_thumbnails)?;
+        expand_selection_for_export(package, &selected_compound, include_thumbnails, name_map)?;
 
     let zip_file = File::create(zip_path).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipWriter::new(zip_file);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     let filtered_key_data = if has_type_key(&selected) {
-        Some(build_filtered_key_data(&package, &selected))
+        Some(build_filtered_key_data(package, &selected))
     } else {
         None
     };
 
     let mut seen_names = HashSet::new();
-    for idx in selected_entry_indices(&package, &selected) {
+    for idx in selected_entry_indices(package, &selected) {
         let entry = &package.files[idx];
         if entry.resource_type == TYPE_KEY {
             continue;
         }
+
         let file_name = unique_output_name(
-            selected_label_file_name(&package, &selected_compound, entry, &name_map),
+            selected_label_file_name(package, &selected_compound, entry, name_map),
             &mut seen_names,
         );
+        let key = key_string(entry);
+        let source_entry = source_index
+            .get(&key)
+            .and_then(|idx| source_package.entries.get(*idx))
+            .ok_or_else(|| format!("Resource {key} was not found in the source package index."))?;
+        let data = read_uncompressed_writable_entry(source_file, source_entry)?;
         zip.start_file(file_name, options)
             .map_err(|e| e.to_string())?;
-        zip.write_all(entry.data()).map_err(|e| e.to_string())?;
+        zip.write_all(&data).map_err(|e| e.to_string())?;
     }
 
     if let Some(raw) = filtered_key_data.filter(|raw| !raw.is_empty()) {
@@ -3249,12 +3335,13 @@ fn zip_selected_resources_single(
             .iter()
             .find(|entry| entry.resource_type == TYPE_KEY)
         {
-            let file_name = unique_output_name(export_file_name(entry, &name_map), &mut seen_names);
+            let file_name = unique_output_name(export_file_name(entry, name_map), &mut seen_names);
             zip.start_file(file_name, options)
                 .map_err(|e| e.to_string())?;
             zip.write_all(&raw).map_err(|e| e.to_string())?;
         }
     }
+
     zip.finish().map_err(|e| e.to_string())?;
     Ok(zip_path.display().to_string())
 }
@@ -3291,17 +3378,31 @@ fn create_clone_package(payload: &ExportSelectionPayload) -> Result<(String, usi
     create_dir_all(&destination_dir).map_err(|e| e.to_string())?;
 
     if payload.selected_keys.len() <= 1 {
+        let mmap = open_package(&payload.package_path)?;
+        let package = parse_package(&mmap)?;
+        let name_map = package_resource_names(&package);
+        let source_package =
+            WritablePackage::load(&payload.package_path).map_err(|e| e.to_string())?;
+        let mut source_file = File::open(&payload.package_path).map_err(|e| e.to_string())?;
         let clone_path = if let Some(key) = payload.selected_keys.first() {
-            let mmap = open_package(&payload.package_path)?;
-    let package = parse_package(&mmap)?;
-            destination_dir.join(clone_package_file_name(&package, key))
+            destination_dir.join(clone_package_file_name(&package, key, &name_map))
         } else {
             destination_dir.join(format!(
                 "{}-clone.package",
                 export_folder_name(&payload.package_path)
             ))
         };
-        return create_clone_package_single(payload, &clone_path);
+
+        return create_clone_package_from_loaded(
+            &package,
+            &name_map,
+            &source_package,
+            &mut source_file,
+            &payload.selected_keys,
+            payload.include_thumbnails,
+            payload.enable_compression,
+            &clone_path,
+        );
     }
 
     let batch_root = multi_export_root(&payload.destination_folder, &payload.package_path);
@@ -3309,23 +3410,29 @@ fn create_clone_package(payload: &ExportSelectionPayload) -> Result<(String, usi
 
     let mmap = open_package(&payload.package_path)?;
     let package = parse_package(&mmap)?;
+    let name_map = package_resource_names(&package);
+    let source_package = WritablePackage::load(&payload.package_path).map_err(|e| e.to_string())?;
+    let mut source_file = File::open(&payload.package_path).map_err(|e| e.to_string())?;
     let mut total_count = 0usize;
     let mut used_clone_names = HashSet::new();
+
     for key in &payload.selected_keys {
         let clone_name = unique_output_name(
-            clone_package_file_name(&package, key),
+            clone_package_file_name(&package, key, &name_map),
             &mut used_clone_names,
         );
         let clone_path = batch_root.join(clone_name);
-        let single_payload = ExportSelectionPayload {
-            package_path: payload.package_path.clone(),
-            destination_folder: payload.destination_folder.clone(),
-            selected_keys: vec![key.clone()],
-            include_thumbnails: payload.include_thumbnails,
-            enable_compression: payload.enable_compression,
-            create_clone_package: true,
-        };
-        let (_path, count) = create_clone_package_single(&single_payload, &clone_path)?;
+        let selected_keys = vec![key.clone()];
+        let (_path, count) = create_clone_package_from_loaded(
+            &package,
+            &name_map,
+            &source_package,
+            &mut source_file,
+            &selected_keys,
+            payload.include_thumbnails,
+            payload.enable_compression,
+            &clone_path,
+        )?;
         total_count += count;
     }
 
@@ -3440,10 +3547,22 @@ pub fn export_selected_resources(payload: ExportSelectionPayload) -> Result<Stri
     let mmap = open_package(&payload.package_path)?;
     let package = parse_package(&mmap)?;
     let name_map = package_resource_names(&package);
+    let source_package = WritablePackage::load(&payload.package_path).map_err(|e| e.to_string())?;
+    let mut source_file = File::open(&payload.package_path).map_err(|e| e.to_string())?;
+    let source_index = writable_entry_index(&source_package);
 
     if payload.selected_keys.len() <= 1 {
         let export_root = PathBuf::from(&payload.destination_folder);
-        return export_selected_resources_single(&payload, &export_root);
+        return export_selected_resources_from_loaded(
+            &package,
+            &name_map,
+            &source_package,
+            &mut source_file,
+            &source_index,
+            &payload.selected_keys,
+            payload.include_thumbnails,
+            &export_root,
+        );
     }
 
     let destination_dir = PathBuf::from(&payload.destination_folder);
@@ -3452,20 +3571,23 @@ pub fn export_selected_resources(payload: ExportSelectionPayload) -> Result<Stri
     create_dir_all(&batch_root).map_err(|e| e.to_string())?;
     let batch_root_string = batch_root.display().to_string();
     let mut used_export_roots = HashSet::new();
+
     for key in &payload.selected_keys {
         let export_root = unique_directory_path(
             selection_export_root(&package, &batch_root_string, key, &name_map),
             &mut used_export_roots,
         );
-        let single_payload = ExportSelectionPayload {
-            package_path: payload.package_path.clone(),
-            destination_folder: payload.destination_folder.clone(),
-            selected_keys: vec![key.clone()],
-            include_thumbnails: payload.include_thumbnails,
-            enable_compression: payload.enable_compression,
-            create_clone_package: false,
-        };
-        let _ = export_selected_resources_single(&single_payload, &export_root)?;
+        let selected_keys = vec![key.clone()];
+        let _ = export_selected_resources_from_loaded(
+            &package,
+            &name_map,
+            &source_package,
+            &mut source_file,
+            &source_index,
+            &selected_keys,
+            payload.include_thumbnails,
+            &export_root,
+        )?;
     }
 
     Ok(batch_root.display().to_string())
@@ -3477,20 +3599,47 @@ pub fn zip_selected_resources(payload: ExportSelectionPayload) -> Result<String,
         return Err("Escolha uma pasta de destino.".to_string());
     }
     validate_package_extension(&payload.package_path)?;
+
+    let mmap = open_package(&payload.package_path)?;
+    let package = parse_package(&mmap)?;
+    let name_map = package_resource_names(&package);
+    let source_package = WritablePackage::load(&payload.package_path).map_err(|e| e.to_string())?;
+    let mut source_file = File::open(&payload.package_path).map_err(|e| e.to_string())?;
+    let source_index = writable_entry_index(&source_package);
+
     if payload.selected_keys.len() <= 1 {
         let zip_name = if let Some(base_key) = payload.selected_keys.first() {
-            let mmap = open_package(&payload.package_path)?;
-            let package = parse_package(&mmap)?;
-            format!("{}.zip", selection_output_stem(&package, base_key))
+            format!("{}.zip", selection_output_stem(&package, base_key, &name_map))
         } else {
             format!("{}.zip", export_folder_name(&payload.package_path))
         };
         let zip_path = PathBuf::from(&payload.destination_folder).join(zip_name);
-        return zip_selected_resources_single(&payload, &zip_path);
+
+        if payload.create_clone_package {
+            return zip_clone_from_loaded(
+                &package,
+                &name_map,
+                &source_package,
+                &mut source_file,
+                &payload.selected_keys,
+                payload.include_thumbnails,
+                payload.enable_compression,
+                &zip_path,
+            );
+        }
+
+        return zip_raw_from_loaded(
+            &package,
+            &name_map,
+            &source_package,
+            &mut source_file,
+            &source_index,
+            &payload.selected_keys,
+            payload.include_thumbnails,
+            &zip_path,
+        );
     }
 
-    let mmap = open_package(&payload.package_path)?;
-    let package = parse_package(&mmap)?;
     let destination_dir = PathBuf::from(&payload.destination_folder);
     create_dir_all(&destination_dir).map_err(|e| e.to_string())?;
     let batch_root = multi_export_root(&payload.destination_folder, &payload.package_path);
@@ -3499,21 +3648,35 @@ pub fn zip_selected_resources(payload: ExportSelectionPayload) -> Result<String,
     let mut used_zip_names = HashSet::new();
     for key in &payload.selected_keys {
         let zip_name = unique_output_name(
-            format!("{}.zip", selection_output_stem(&package, key)),
+            format!("{}.zip", selection_output_stem(&package, key, &name_map)),
             &mut used_zip_names,
         );
         let zip_path = batch_root.join(zip_name);
-        let single_payload = ExportSelectionPayload {
-            package_path: payload.package_path.clone(),
-            destination_folder: payload.destination_folder.clone(),
-            selected_keys: vec![key.clone()],
-            include_thumbnails: payload.include_thumbnails,
-            enable_compression: payload.enable_compression,
-            create_clone_package: payload.create_clone_package,
-        };
-        let _ = zip_selected_resources_single(&single_payload, &zip_path)?;
+        let selected_keys = vec![key.clone()];
+
+        if payload.create_clone_package {
+            let _ = zip_clone_from_loaded(
+                &package,
+                &name_map,
+                &source_package,
+                &mut source_file,
+                &selected_keys,
+                payload.include_thumbnails,
+                payload.enable_compression,
+                &zip_path,
+            )?;
+        } else {
+            let _ = zip_raw_from_loaded(
+                &package,
+                &name_map,
+                &source_package,
+                &mut source_file,
+                &source_index,
+                &selected_keys,
+                payload.include_thumbnails,
+                &zip_path,
+            )?;
+        }
     }
-    let name_map = package_resource_names(&package);
-    let batch_root_string = batch_root.display().to_string();
     Ok(batch_root.display().to_string())
 }
