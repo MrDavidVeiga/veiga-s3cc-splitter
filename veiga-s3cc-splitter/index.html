@@ -46,9 +46,9 @@
               <button class="tab-btn" data-type="all">All</button>
             </div>
           </section>
-          <section class="control-block hidden-controls" aria-hidden="true">
-            <div class="section-label hidden-label">Search</div>
-            <input id="search-input" class="text-input" type="text" placeholder="Search by name or type" />
+          <section class="control-block search-block">
+            <div id="search-label" class="section-label">Search</div>
+            <input id="search-input" class="text-input" type="text" placeholder="Search by name or Instance ID" autocomplete="off" spellcheck="false" />
           </section>
           <section class="control-block hidden-controls" aria-hidden="true">
             <div class="section-label hidden-label">Options</div>
@@ -100,7 +100,7 @@
                 </div>
                 <div id="preview-name" class="preview-name"></div>
                 <div id="preview-kind" class="preview-kind"></div>
-                <div id="preview-key" class="preview-path preview-key-hidden"></div>
+                <div id="preview-key" class="preview-path"></div>
               </aside>
             </div>
             <div class="footer-actions footer-actions-2">

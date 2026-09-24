@@ -88,6 +88,36 @@ body {
   margin: 0;
 }
 
+.search-block .section-label {
+  margin-bottom: 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.text-input {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(186, 196, 206, 0.26);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.26);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.82rem;
+  outline: none;
+}
+
+.text-input::placeholder {
+  color: var(--muted);
+  opacity: 0.78;
+}
+
+.text-input:focus {
+  border-color: rgba(127, 173, 45, 0.72);
+  box-shadow: 0 0 0 2px rgba(127, 173, 45, 0.12);
+}
+
+
 .drag-zone {
   padding: 10px;
   border: 1px dashed rgba(255, 255, 255, 0.14);
@@ -514,7 +544,6 @@ body {
   white-space: normal;
 }
 
-.preview-key-hidden,
 .hidden-controls,
 .hidden-label,
 .hidden-action {
