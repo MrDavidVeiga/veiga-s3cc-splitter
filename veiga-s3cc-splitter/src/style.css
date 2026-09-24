@@ -325,6 +325,47 @@ body {
   gap: 10px;
   flex-wrap: wrap;
   margin: 14px 0 12px;
+  align-items: center;
+}
+
+.content-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+}
+
+.content-filter-label {
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.content-filter-dropdown {
+  min-width: 210px;
+}
+
+.content-filter-toggle-btn {
+  width: 100%;
+  min-width: 210px;
+}
+
+.content-filter-current {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.content-filter-menu {
+  min-width: 100%;
+  max-height: min(58vh, 520px);
+  overflow-y: auto;
+  z-index: 30;
+}
+
+.content-filter-menu-item {
+  white-space: nowrap;
 }
 
 .selected-text,
@@ -689,6 +730,12 @@ body {
   }
 
   .secondary-btn {
+    width: 100%;
+  }
+
+  .content-filter,
+  .content-filter-dropdown,
+  .content-filter-toggle-btn {
     width: 100%;
   }
 

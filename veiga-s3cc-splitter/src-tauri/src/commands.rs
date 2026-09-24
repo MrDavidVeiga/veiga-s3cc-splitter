@@ -68,6 +68,8 @@ pub struct ResourceItem {
     pub key: String,
     pub kind: String,
     pub details: String,
+    #[serde(default)]
+    pub content_categories: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -414,6 +416,7 @@ fn build_casp_group_items(
             key: joined_key,
             kind: kind_from_type(first.resource_type).to_string(),
             details,
+            content_categories: vec!["Body Hair".to_string()],
         };
         if item_matches_query(&item, query) {
             items.push(item);
@@ -625,6 +628,181 @@ fn casp_folder_info(
         use_age_folder,
         use_gender_folder,
     })
+}
+
+fn push_unique_category(categories: &mut Vec<String>, category: &str) {
+    if !categories.iter().any(|existing| existing == category) {
+        categories.push(category.to_string());
+    }
+}
+
+fn casp_content_category(info: Option<CaspFolderInfo>, label: &str) -> &'static str {
+    let lowered = label.to_ascii_lowercase();
+
+    if lowered.contains("shoe") || lowered.contains("boot") || lowered.contains("sandal") {
+        return "Shoes";
+    }
+    if lowered.contains("eye") && !lowered.contains("eyebrow") {
+        return "Eyes";
+    }
+    if lowered.contains("face") {
+        return "Face Parts";
+    }
+    if lowered.contains("pet") && lowered.contains("coat") {
+        return "Pet Coats";
+    }
+    if lowered.contains("pet") && lowered.contains("accessor") {
+        return "Pet Accessories";
+    }
+    if lowered.contains("pet") {
+        return "Pet Parts";
+    }
+
+    let Some(info) = info else {
+        return "Other CASP";
+    };
+
+    match (info.main_category.as_str(), info.sub_category.as_deref()) {
+        ("Hair", Some("Body Hair")) => "Body Hair",
+        ("Hair", Some("Beard")) => "Facial Hair",
+        ("Hair", Some("Eyebrows")) => "Eyebrows",
+        ("Hair", _) => "Hair",
+        ("Clothing", _) => "Clothes",
+        ("Accessories", _) => "Accessories",
+        ("Makeup", Some("Moles" | "Freckles" | "Weathering" | "BirthMark")) => "Skin Details",
+        ("Makeup", Some("Tattoo" | "TattooTemplate")) => "Tattoos",
+        ("Makeup", Some("Dental")) => "Teeth",
+        ("Makeup", _) => "Makeup",
+        _ => "Other CASP",
+    }
+}
+
+fn object_content_category(label: &str) -> &'static str {
+    let lowered = label.to_ascii_lowercase();
+    let contains_any = |needles: &[&str]| needles.iter().any(|needle| lowered.contains(needle));
+
+    if contains_any(&["door", "arch"]) {
+        "Doors & Arches"
+    } else if contains_any(&["window"]) {
+        "Windows"
+    } else if contains_any(&["fence", "gate"]) {
+        "Fences & Gates"
+    } else if contains_any(&["stair", "railing"]) {
+        "Stairs & Railings"
+    } else if contains_any(&["column"]) {
+        "Columns"
+    } else if contains_any(&["foundation"]) {
+        "Foundations"
+    } else if contains_any(&["wall"]) {
+        "Walls"
+    } else if contains_any(&["floor"]) {
+        "Floors"
+    } else if contains_any(&["ceiling"]) {
+        "Ceilings"
+    } else if contains_any(&["roof"]) {
+        "Roofs"
+    } else if contains_any(&["fireplace", "chimney"]) {
+        "Fireplaces & Chimneys"
+    } else if contains_any(&["plant", "tree", "rock", "shrub"]) {
+        "Plants & Rocks"
+    } else if contains_any(&["terrain paint"]) {
+        "Terrain Paints"
+    } else if contains_any(&["terrain"]) {
+        "Terrain Tools"
+    } else if contains_any(&["pool", "fountain"]) {
+        "Pools & Fountains"
+    } else if contains_any(&["elevator"]) {
+        "Elevators"
+    } else if contains_any(&["rabbit hole", "rabbithole"]) {
+        "Rabbit Holes"
+    } else if contains_any(&["shell"]) {
+        "Building Shells"
+    } else if contains_any(&["landmark"]) {
+        "Landmarks"
+    } else if contains_any(&["blueprint"]) {
+        "Blueprints"
+    } else if contains_any(&["resort"]) {
+        "Resort"
+    } else if contains_any(&["debug"]) {
+        "Debug"
+    } else if contains_any(&["bed", "chair", "sofa", "loveseat", "seat", "bench"]) {
+        "Comfort"
+    } else if contains_any(&["table", "desk", "counter", "surface", "shelf"]) {
+        "Surfaces"
+    } else if contains_any(&["dresser", "cabinet", "storage", "bookcase"]) {
+        "Storage"
+    } else if contains_any(&["fridge", "stove", "oven", "dishwasher", "washer", "dryer"]) {
+        "Appliances"
+    } else if contains_any(&["tv", "stereo", "computer", "phone", "electronic"]) {
+        "Electronics"
+    } else if contains_any(&["toilet", "sink", "shower", "tub", "bath", "plumbing"]) {
+        "Plumbing"
+    } else if contains_any(&["lamp", "light", "lighting"]) {
+        "Lighting"
+    } else if contains_any(&["decor", "painting", "sculpture", "rug", "curtain", "mirror", "plant"]) {
+        "Decor"
+    } else if contains_any(&["game", "arcade", "instrument", "entertainment"]) {
+        "Entertainment"
+    } else if contains_any(&["toy", "crib", "kids", "child"]) {
+        "Kids"
+    } else if contains_any(&["car", "bike", "vehicle", "boat"]) {
+        "Vehicles"
+    } else if contains_any(&["pet"]) {
+        "Pets"
+    } else if contains_any(&["stage", "show"]) {
+        "Show Stage"
+    } else {
+        "Other Objects"
+    }
+}
+
+fn content_categories_for_key(
+    package: &DBPF<'_>,
+    key: &str,
+    name_map: &BTreeMap<u64, String>,
+) -> Vec<String> {
+    let mut categories = Vec::new();
+    let Ok(parts) = parse_key(key) else {
+        return categories;
+    };
+
+    match parts.resource_type {
+        TYPE_FACE => push_unique_category(&mut categories, "Sliders"),
+        TYPE_SKINTONE => push_unique_category(&mut categories, "Skins"),
+        TYPE_CASP => {
+            let entry = package.files.iter().find(|entry| {
+                entry.resource_type == parts.resource_type
+                    && entry.resource_group == parts.resource_group
+                    && entry.instance == parts.instance
+            });
+
+            if let Some(entry) = entry {
+                let label = object_display_label(package, entry, name_map);
+                push_unique_category(
+                    &mut categories,
+                    casp_content_category(casp_folder_info(entry, name_map), &label),
+                );
+            } else {
+                push_unique_category(&mut categories, "Other CASP");
+            }
+        }
+        TYPE_OBJD => {
+            let label = package
+                .files
+                .iter()
+                .find(|entry| {
+                    entry.resource_type == parts.resource_type
+                        && entry.resource_group == parts.resource_group
+                        && entry.instance == parts.instance
+                })
+                .map(|entry| object_display_label(package, entry, name_map))
+                .unwrap_or_default();
+            push_unique_category(&mut categories, object_content_category(&label));
+        }
+        _ => {}
+    }
+
+    categories
 }
 
 fn selection_export_root(
@@ -1478,6 +1656,7 @@ fn build_face_group_items(
             key: joined_key,
             kind: kind_from_type(first.resource_type).to_string(),
             details,
+            content_categories: vec!["Sliders".to_string()],
         };
         if item_matches_query(&item, query) {
             items.push(item);
@@ -1815,14 +1994,17 @@ fn build_item(
     name_map: &BTreeMap<u64, String>,
 ) -> ResourceItem {
     let kind = kind_from_type(entry.resource_type).to_string();
+    let key = key_string(entry);
+    let content_categories = content_categories_for_key(package, &key, name_map);
     ResourceItem {
         label: object_display_label(package, entry, name_map),
-        key: key_string(entry),
+        key,
         kind,
         details: format!(
             "Type 0x{:08X} • Group 0x{:08X}",
             entry.resource_type, entry.resource_group
         ),
+        content_categories,
     }
 }
 
@@ -1866,6 +2048,7 @@ fn build_skintone_group_items(
             key: joined_key,
             kind: kind_from_type(first.resource_type).to_string(),
             details,
+            content_categories: vec!["Skins".to_string()],
         };
         if item_matches_query(&item, query) {
             items.push(item);
@@ -4447,5 +4630,49 @@ mod key_name_normalization_tests {
             normalized_key_resource_name("afHairLongWavyLayered_CUSTOM12"),
             "afHairLongWavyLayered_CUSTOM12"
         );
+    }
+}
+
+
+#[cfg(test)]
+mod content_category_tests {
+    use super::{casp_content_category, object_content_category, CaspFolderInfo};
+
+    fn casp(main: &str, sub: Option<&str>) -> CaspFolderInfo {
+        CaspFolderInfo {
+            main_category: main.to_string(),
+            sub_category: sub.map(str::to_string),
+            age_folder: String::new(),
+            gender_folder: String::new(),
+            use_age_folder: false,
+            use_gender_folder: false,
+        }
+    }
+
+    #[test]
+    fn classifies_core_casp_categories_exclusively() {
+        assert_eq!(casp_content_category(Some(casp("Hair", Some("Hair"))), ""), "Hair");
+        assert_eq!(casp_content_category(Some(casp("Hair", Some("Beard"))), ""), "Facial Hair");
+        assert_eq!(casp_content_category(Some(casp("Hair", Some("Eyebrows"))), ""), "Eyebrows");
+        assert_eq!(casp_content_category(Some(casp("Hair", Some("Body Hair"))), ""), "Body Hair");
+        assert_eq!(casp_content_category(Some(casp("Accessories", Some("Rings"))), ""), "Accessories");
+        assert_eq!(casp_content_category(Some(casp("Clothing", None)), ""), "Clothes");
+        assert_eq!(casp_content_category(None, ""), "Other CASP");
+    }
+
+    #[test]
+    fn classifies_special_casp_name_fallbacks() {
+        assert_eq!(casp_content_category(None, "Creator_WinterBoot"), "Shoes");
+        assert_eq!(casp_content_category(None, "CustomEye"), "Eyes");
+        assert_eq!(casp_content_category(None, "PetCoatLong"), "Pet Coats");
+        assert_eq!(casp_content_category(None, "PetAccessoryCollar"), "Pet Accessories");
+    }
+
+    #[test]
+    fn classifies_object_and_build_names() {
+        assert_eq!(object_content_category("Modern Sofa"), "Comfort");
+        assert_eq!(object_content_category("Wall Lamp"), "Walls");
+        assert_eq!(object_content_category("Grand Window"), "Windows");
+        assert_eq!(object_content_category("Unknown Thing"), "Other Objects");
     }
 }
