@@ -184,11 +184,7 @@ impl MergeManifest {
         Ok(Self { version, packages })
     }
 
-    pub fn update_after_removal(
-        &self,
-        selected_keys: &[String],
-        removed_keys: &HashSet<String>,
-    ) -> Self {
+    pub fn selected_package_ids(&self, selected_keys: &[String]) -> HashSet<u32> {
         let selected: HashSet<String> = selected_keys
             .iter()
             .flat_map(|key| key.split("||"))
@@ -197,13 +193,32 @@ impl MergeManifest {
             .map(ToOwned::to_owned)
             .collect();
 
+        self.packages
+            .iter()
+            .filter(|package| {
+                package
+                    .anchors
+                    .iter()
+                    .any(|anchor| selected.contains(&anchor.key))
+                    || package
+                        .resources
+                        .iter()
+                        .any(|resource| selected.contains(&resource.key))
+            })
+            .map(|package| package.id)
+            .collect()
+    }
+
+    pub fn update_after_removal(
+        &self,
+        selected_keys: &[String],
+        removed_keys: &HashSet<String>,
+    ) -> Self {
+        let selected_packages = self.selected_package_ids(selected_keys);
+
         let mut packages = Vec::new();
         for package in &self.packages {
-            let remove_package = package
-                .anchors
-                .iter()
-                .any(|anchor| selected.contains(&anchor.key) || removed_keys.contains(&anchor.key));
-            if remove_package {
+            if selected_packages.contains(&package.id) {
                 continue;
             }
 
@@ -294,6 +309,32 @@ mod tests {
         let xml = manifest.to_xml_bytes();
         let parsed = MergeManifest::from_xml(&xml).unwrap();
         assert_eq!(parsed, manifest);
+    }
+
+    #[test]
+    fn manifest_only_removal_drops_selected_origin_even_when_all_resources_are_shared() {
+        let shared = "0x00B2D882-0x00000000-0x00000000000000AA".to_string();
+        let manifest = MergeManifest {
+            version: 1,
+            packages: vec![
+                ManifestPackage {
+                    id: 1,
+                    name: "DuplicateA.package".to_string(),
+                    original_size: 1,
+                    anchors: vec![],
+                    resources: vec![ManifestResource { key: shared.clone() }],
+                },
+                ManifestPackage {
+                    id: 2,
+                    name: "DuplicateB.package".to_string(),
+                    original_size: 1,
+                    anchors: vec![],
+                    resources: vec![ManifestResource { key: shared.clone() }],
+                },
+            ],
+        };
+        let updated = manifest.update_after_removal(&[shared.clone()], &HashSet::new());
+        assert!(updated.packages.is_empty());
     }
 
     #[test]
