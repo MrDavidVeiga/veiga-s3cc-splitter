@@ -52,23 +52,11 @@
             </section>
           </div>
           <div id="merger-controls" class="mode-controls hidden">
-            <section class="control-block drag-zone">
+            <section class="control-block drag-zone" id="merger-drop-zone">
               <button id="merger-add-packages-btn" class="primary-btn">Add packages</button>
-              <div id="merger-add-hint" class="drop-hint">Select two or more .package files to merge</div>
+              <div id="merger-add-hint" class="drop-hint">Select .package/.dbc files or drag files/folders here</div>
             </section>
             <div id="merger-source-count" class="path-label"></div>
-            <section class="control-block">
-              <button id="merger-pick-destination-btn" class="primary-btn">Choose destination folder</button>
-            </section>
-            <div id="merger-destination-path" class="path-label hidden"></div>
-            <section class="control-block merger-name-block">
-              <div id="merger-output-label" class="section-label">Merged package name</div>
-              <input id="merger-output-name" class="text-input" type="text" value="Merged.package" autocomplete="off" spellcheck="false" />
-            </section>
-            <section class="control-block last-action merger-action-row">
-              <button id="merger-run-btn" class="primary-btn large">Merge packages</button>
-              <button id="merger-clear-btn" class="secondary-btn">Clear</button>
-            </section>
           </div>
         </aside>
         <section class="right-panel card">
@@ -144,6 +132,10 @@
             </div>
             <div id="merger-source-list" class="merger-source-list"></div>
             <div id="merger-result" class="merger-result hidden"></div>
+            <div id="merger-footer-actions" class="footer-actions hidden">
+              <button id="merger-run-btn" class="primary-btn">Merge packages</button>
+              <button id="merger-clear-btn" class="secondary-btn">Clear</button>
+            </div>
           </div>
         </section>
       </main>
