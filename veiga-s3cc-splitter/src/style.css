@@ -8,6 +8,7 @@
   --green: #618422;
   --green-dark: #435c17;
   --danger: #b83232;
+  --button-font-size: 0.93rem;
   --workspace-height: clamp(520px, calc(100vh - 120px), 820px);
 }
 
@@ -72,6 +73,7 @@ body {
   background: transparent;
   color: var(--muted);
   font: inherit;
+  font-size: var(--button-font-size);
   font-weight: 800;
   cursor: pointer;
   transition: 0.18s ease;
@@ -156,7 +158,6 @@ body {
 
 .merger-name-block .section-label {
   margin-bottom: 6px;
-  font-size: 0.78rem;
   font-weight: 700;
   color: var(--muted);
 }
@@ -215,6 +216,7 @@ body {
   color: #f5c2c2;
   cursor: pointer;
   font-weight: 800;
+  font-size: var(--button-font-size);
 }
 
 .merger-result {
@@ -310,7 +312,7 @@ body {
   color: white;
   background: var(--green);
   font-weight: 700;
-  font-size: 0.93rem;
+  font-size: var(--button-font-size);
   line-height: 1.2;
 }
 
@@ -329,6 +331,8 @@ body {
 .secondary-btn {
   padding: 10px 14px;
   border-radius: 12px;
+  font-size: var(--button-font-size);
+  font-weight: 700;
   background: rgba(255, 255, 255, 0.06);
   color: var(--text);
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -345,6 +349,7 @@ body {
   color: white;
   background: var(--danger);
   font-weight: 700;
+  font-size: var(--button-font-size);
 }
 
 .danger-btn:hover {
@@ -358,6 +363,7 @@ body {
   background: var(--green);
   color: white;
   font-weight: 800;
+  font-size: var(--button-font-size);
 }
 
 .lang-btn.active {
@@ -368,6 +374,7 @@ body {
   padding: 10px 12px;
   border-radius: 12px;
   color: var(--text);
+  font-size: var(--button-font-size);
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.12);
 }
@@ -940,7 +947,6 @@ body {
   .primary-btn,
   .danger-btn {
     padding: 12px 13px;
-    font-size: 0.9rem;
   }
 
   .secondary-btn {
@@ -994,6 +1000,7 @@ body {
   background: var(--green);
   color: white;
   font-weight: 800;
+  font-size: var(--button-font-size);
   cursor: pointer;
   transition: 0.18s ease;
 }
@@ -1036,6 +1043,7 @@ body {
   color: var(--text);
   text-align: left;
   font-weight: 700;
+  font-size: var(--button-font-size);
   cursor: pointer;
   transition: 0.18s ease;
 }
