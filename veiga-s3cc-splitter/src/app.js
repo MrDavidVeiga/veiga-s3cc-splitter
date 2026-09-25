@@ -537,7 +537,7 @@ function applyStaticTranslations() {
   if (el.previewTitle) el.previewTitle.textContent = t("previewTitle");
   if (el.previewEmpty) el.previewEmpty.textContent = t("previewEmpty");
   if (el.exportBtn) el.exportBtn.innerHTML = `<img src="${exportIcon}" alt="" class="btn-icon" /><span>${t("exportSelection")}</span>`;
-  if (el.removeMergedBtn) el.removeMergedBtn.textContent = t("removeFromMerged");
+  if (el.removeMergedBtn) el.removeMergedBtn.innerHTML = `<img src="${clearIcon}" alt="" class="btn-icon" /><span>${t("removeFromMerged")}</span>`;
   if (el.zipBtn) el.zipBtn.innerHTML = `<img src="${zipIcon}" alt="" class="btn-icon" /><span>${t("busyZipTitle").replace("...", "")}</span>`;
   if (el.clearBtn) el.clearBtn.innerHTML = `<img src="${clearIcon}" alt="" class="btn-icon" /><span>${t("clear")}</span>`;
   if (el.emptyTitle) el.emptyTitle.textContent = t("emptyTitle");
