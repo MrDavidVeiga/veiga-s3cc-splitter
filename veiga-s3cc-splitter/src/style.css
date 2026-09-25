@@ -862,9 +862,6 @@ body {
     gap: 10px;
   }
 
-  .mode-btn {
-    min-width: 100px;
-  }
 }
 
 @media (min-width: 1500px) {
