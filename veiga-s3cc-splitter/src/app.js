@@ -530,8 +530,8 @@ function applyStaticTranslations() {
   if (el.modeMergerBtn) el.modeMergerBtn.textContent = t("modeMerger");
   if (el.mergerAddPackagesBtn) el.mergerAddPackagesBtn.textContent = t("mergerAddPackages");
   if (el.mergerAddHint) el.mergerAddHint.textContent = t("mergerAddHint");
-  if (el.mergerRunBtn) el.mergerRunBtn.textContent = state.mergerBusy ? t("mergerBusy") : t("mergerRun");
-  if (el.mergerClearBtn) el.mergerClearBtn.textContent = t("mergerClear");
+  if (el.mergerRunBtn) el.mergerRunBtn.innerHTML = `<img src="${zipIcon}" alt="" class="btn-icon" /><span>${state.mergerBusy ? t("mergerBusy") : t("mergerRun")}</span>`;
+  if (el.mergerClearBtn) el.mergerClearBtn.innerHTML = `<img src="${clearIcon}" alt="" class="btn-icon" /><span>${t("mergerClear")}</span>`;
   if (el.mergerTitle) el.mergerTitle.textContent = t("mergerTitle");
   if (el.restoreManifestBtn) el.restoreManifestBtn.textContent = t("restoreOriginals");
   if (el.searchInput) {
