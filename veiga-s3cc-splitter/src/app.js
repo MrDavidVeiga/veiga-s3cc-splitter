@@ -1,7 +1,7 @@
 import "@fortawesome/fontawesome-free/css/all.min.css";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import noPreviewImage from "./assets/no-preview.png";
 import exportIcon from "./assets/icons/export.png";
@@ -27,9 +27,7 @@ const translations = {
     modeSplitter: "Splitter",
     modeMerger: "Merger",
     mergerAddPackages: "Add Packages",
-    mergerAddHint: "Select two or more .package files to merge",
-    mergerPickDestination: "Choose Destination Folder",
-    mergerOutputLabel: "Merged Package Name",
+    mergerAddHint: "Select .package/.dbc files or drag files/folders here",
     mergerRun: "Merge Packages",
     mergerClear: "Clear",
     mergerTitle: "Packages to Merge",
@@ -149,9 +147,7 @@ const translations = {
     modeSplitter: "Splitter",
     modeMerger: "Merger",
     mergerAddPackages: "Adicionar Packages",
-    mergerAddHint: "Selecione dois ou mais arquivos .package para mesclar",
-    mergerPickDestination: "Escolher Pasta de Destino",
-    mergerOutputLabel: "Nome do Package Mesclado",
+    mergerAddHint: "Selecione .package/.dbc ou arraste arquivos/pastas aqui",
     mergerRun: "Mesclar Packages",
     mergerClear: "Limpar",
     mergerTitle: "Packages para Mesclar",
@@ -271,9 +267,7 @@ const translations = {
     modeSplitter: "Splitter",
     modeMerger: "Merger",
     mergerAddPackages: "Añadir Packages",
-    mergerAddHint: "Selecciona dos o más archivos .package para fusionar",
-    mergerPickDestination: "Elegir Carpeta de Destino",
-    mergerOutputLabel: "Nombre del Package Fusionado",
+    mergerAddHint: "Selecciona .package/.dbc o arrastra archivos/carpetas aquí",
     mergerRun: "Fusionar Packages",
     mergerClear: "Limpiar",
     mergerTitle: "Packages para Fusionar",
@@ -405,8 +399,6 @@ const state = {
   isContentFilterOpen: false,
   manifestPackageCount: 0,
   mergerSources: [],
-  mergerDestinationFolder: "",
-  mergerOutputName: "Merged.package",
   mergerBusy: false,
   mergerResult: null,
 };
@@ -419,12 +411,10 @@ const el = {
   splitterWorkspace: document.querySelector("#splitter-workspace"),
   mergerWorkspace: document.querySelector("#merger-workspace"),
   mergerAddPackagesBtn: document.querySelector("#merger-add-packages-btn"),
+  mergerDropZone: document.querySelector("#merger-drop-zone"),
   mergerAddHint: document.querySelector("#merger-add-hint"),
   mergerSourceCount: document.querySelector("#merger-source-count"),
-  mergerPickDestinationBtn: document.querySelector("#merger-pick-destination-btn"),
-  mergerDestinationPath: document.querySelector("#merger-destination-path"),
-  mergerOutputLabel: document.querySelector("#merger-output-label"),
-  mergerOutputName: document.querySelector("#merger-output-name"),
+  mergerFooterActions: document.querySelector("#merger-footer-actions"),
   mergerRunBtn: document.querySelector("#merger-run-btn"),
   mergerClearBtn: document.querySelector("#merger-clear-btn"),
   mergerTitle: document.querySelector("#merger-title"),
@@ -540,8 +530,6 @@ function applyStaticTranslations() {
   if (el.modeMergerBtn) el.modeMergerBtn.textContent = t("modeMerger");
   if (el.mergerAddPackagesBtn) el.mergerAddPackagesBtn.textContent = t("mergerAddPackages");
   if (el.mergerAddHint) el.mergerAddHint.textContent = t("mergerAddHint");
-  if (el.mergerPickDestinationBtn) el.mergerPickDestinationBtn.textContent = t("mergerPickDestination");
-  if (el.mergerOutputLabel) el.mergerOutputLabel.textContent = t("mergerOutputLabel");
   if (el.mergerRunBtn) el.mergerRunBtn.textContent = state.mergerBusy ? t("mergerBusy") : t("mergerRun");
   if (el.mergerClearBtn) el.mergerClearBtn.textContent = t("mergerClear");
   if (el.mergerTitle) el.mergerTitle.textContent = t("mergerTitle");
@@ -734,6 +722,9 @@ function renderMergerSources() {
       : "";
   }
 
+  const hasMergerSources = state.mergerSources.length > 0;
+  el.mergerFooterActions?.classList.toggle("hidden", !hasMergerSources);
+
   state.mergerSources.forEach((path, index) => {
     const row = document.createElement("div");
     row.className = "merger-source-row";
@@ -763,10 +754,7 @@ function renderMergerSources() {
   });
 
   if (el.mergerRunBtn) {
-    el.mergerRunBtn.disabled =
-      state.mergerBusy ||
-      state.mergerSources.length < 2 ||
-      !state.mergerDestinationFolder;
+    el.mergerRunBtn.disabled = state.mergerBusy || state.mergerSources.length < 2;
   }
 
   if (el.mergerResult) {
@@ -790,10 +778,6 @@ function render() {
 
   updatePathLabel(el.packagePath, state.packagePath);
   updatePathLabel(el.destinationPath, state.destinationFolder);
-  updatePathLabel(el.mergerDestinationPath, state.mergerDestinationFolder);
-  if (el.mergerOutputName && el.mergerOutputName.value !== state.mergerOutputName) {
-    el.mergerOutputName.value = state.mergerOutputName;
-  }
 
   const visibleResources = getVisibleResources();
   el.selectedCount.textContent = t("selectedCount", state.selectedKeys.length);
@@ -1029,34 +1013,74 @@ async function loadPreview(item) {
   }
 }
 
+function isMergerPackagePath(path) {
+  const extension = String(path || "").toLowerCase().split(".").pop();
+  return extension === "package" || extension === "dbc";
+}
+
+function addMergerSources(paths) {
+  const existing = new Set(state.mergerSources.map(normalizeLocalPath));
+  let added = 0;
+
+  for (const path of Array.isArray(paths) ? paths : []) {
+    if (!isMergerPackagePath(path)) continue;
+    const normalized = normalizeLocalPath(path);
+    if (!normalized || existing.has(normalized)) continue;
+    existing.add(normalized);
+    state.mergerSources.push(path);
+    added += 1;
+  }
+
+  if (added > 0) state.mergerResult = null;
+  render();
+  return added;
+}
+
+async function collectMergerDroppedPaths(paths) {
+  const droppedPaths = Array.isArray(paths) ? paths.filter(Boolean) : [];
+  if (!droppedPaths.length) return;
+
+  try {
+    const packagePaths = await invoke("collect_merge_package_files", {
+      payload: { paths: droppedPaths },
+    });
+    addMergerSources(packagePaths || []);
+  } catch (error) {
+    console.error(error);
+    alert(`${t("mergerError")}\n${error}`);
+  }
+}
+
 async function pickMergerPackages() {
   const result = await open({
     multiple: true,
     filters: [{ name: "Package", extensions: ["package", "dbc"] }],
   });
   const paths = Array.isArray(result) ? result : typeof result === "string" ? [result] : [];
-  const existing = new Set(state.mergerSources.map(normalizeLocalPath));
-  for (const path of paths) {
-    const normalized = normalizeLocalPath(path);
-    if (!normalized || existing.has(normalized)) continue;
-    existing.add(normalized);
-    state.mergerSources.push(path);
-  }
-  state.mergerResult = null;
-  render();
+  addMergerSources(paths);
 }
 
-async function pickMergerDestination() {
-  const result = await open({ directory: true, multiple: false });
-  if (typeof result === "string") {
-    state.mergerDestinationFolder = result;
-    state.mergerResult = null;
-    render();
-  }
+function splitSavePath(outputPath) {
+  const raw = String(outputPath || "").trim();
+  const slash = Math.max(raw.lastIndexOf("/"), raw.lastIndexOf("\\"));
+  if (slash < 0) return { destinationFolder: ".", outputName: raw };
+  return {
+    destinationFolder: raw.slice(0, slash),
+    outputName: raw.slice(slash + 1),
+  };
 }
 
 async function runMerger() {
-  if (state.mergerBusy || state.mergerSources.length < 2 || !state.mergerDestinationFolder) return;
+  if (state.mergerBusy || state.mergerSources.length < 2) return;
+
+  const outputPath = await save({
+    defaultPath: "Merged.package",
+    filters: [{ name: "The Sims 3 Package", extensions: ["package"] }],
+  });
+  if (typeof outputPath !== "string" || !outputPath.trim()) return;
+
+  const { destinationFolder, outputName } = splitSavePath(outputPath);
+  if (!outputName) return;
 
   state.mergerBusy = true;
   state.mergerResult = null;
@@ -1067,8 +1091,8 @@ async function runMerger() {
     const result = await invoke("merge_packages_with_manifest", {
       payload: {
         packagePaths: state.mergerSources,
-        destinationFolder: state.mergerDestinationFolder,
-        outputName: state.mergerOutputName || "Merged.package",
+        destinationFolder,
+        outputName,
       },
     });
     state.mergerResult = result;
@@ -1083,7 +1107,6 @@ async function runMerger() {
     render();
   }
 }
-
 async function restoreManifestPackages() {
   if (!state.packagePath || !state.manifestPackageCount) return;
   if (!state.destinationFolder) {
@@ -1113,10 +1136,7 @@ async function restoreManifestPackages() {
 
 function clearMerger() {
   state.mergerSources = [];
-  state.mergerDestinationFolder = "";
-  state.mergerOutputName = "Merged.package";
   state.mergerResult = null;
-  if (el.mergerOutputName) el.mergerOutputName.value = state.mergerOutputName;
   render();
 }
 
@@ -1229,24 +1249,28 @@ function clearAll() {
 }
 
 function bindDragAndDrop() {
-  const zone = el.packageDropZone;
+  const splitterZone = el.packageDropZone;
+  const mergerZone = el.mergerDropZone;
 
-  ["dragenter", "dragover"].forEach((eventName) => {
-    zone.addEventListener(eventName, (event) => {
-      event.preventDefault();
-      zone.classList.add("drag-over");
+  const bindZoneVisuals = (zone) => {
+    if (!zone) return;
+    ["dragenter", "dragover"].forEach((eventName) => {
+      zone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        zone.classList.add("drag-over");
+      });
     });
-  });
 
-  zone.addEventListener("dragleave", (event) => {
-    event.preventDefault();
-    zone.classList.remove("drag-over");
-  });
+    ["dragleave", "drop"].forEach((eventName) => {
+      zone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        zone.classList.remove("drag-over");
+      });
+    });
+  };
 
-  zone.addEventListener("drop", (event) => {
-    event.preventDefault();
-    zone.classList.remove("drag-over");
-  });
+  bindZoneVisuals(splitterZone);
+  bindZoneVisuals(mergerZone);
 
   let appWindow = null;
   try {
@@ -1255,16 +1279,28 @@ function bindDragAndDrop() {
     return;
   }
 
-  appWindow.onDragDropEvent((event) => {
-    if (state.mode !== "splitter") return;
+  appWindow.onDragDropEvent(async (event) => {
+    const mergerMode = state.mode === "merger";
+    const activeZone = mergerMode ? mergerZone : splitterZone;
+    const inactiveZone = mergerMode ? splitterZone : mergerZone;
+
     if (event.payload.type === "over") {
-      zone.classList.add("drag-over");
+      inactiveZone?.classList.remove("drag-over");
+      activeZone?.classList.add("drag-over");
       return;
     }
 
     if (event.payload.type === "drop") {
-      zone.classList.remove("drag-over");
-      const path = (event.payload.paths || [])[0];
+      splitterZone?.classList.remove("drag-over");
+      mergerZone?.classList.remove("drag-over");
+      const paths = event.payload.paths || [];
+
+      if (mergerMode) {
+        await collectMergerDroppedPaths(paths);
+        return;
+      }
+
+      const path = paths[0];
       const ext = path?.toLowerCase().split(".").pop();
       if (["package", "dbc"].includes(ext)) {
         state.packagePath = path;
@@ -1282,23 +1318,18 @@ function bindDragAndDrop() {
     }
 
     if (event.payload.type === "leave") {
-      zone.classList.remove("drag-over");
+      splitterZone?.classList.remove("drag-over");
+      mergerZone?.classList.remove("drag-over");
     }
   });
 }
-
 function setupEvents() {
   el.modeSplitterBtn?.addEventListener("click", () => setMode("splitter"));
   el.modeMergerBtn?.addEventListener("click", () => setMode("merger"));
   el.mergerAddPackagesBtn?.addEventListener("click", pickMergerPackages);
-  el.mergerPickDestinationBtn?.addEventListener("click", pickMergerDestination);
   el.mergerRunBtn?.addEventListener("click", runMerger);
   el.mergerClearBtn?.addEventListener("click", clearMerger);
   el.restoreManifestBtn?.addEventListener("click", restoreManifestPackages);
-  el.mergerOutputName?.addEventListener("input", (event) => {
-    state.mergerOutputName = event.target.value;
-    state.mergerResult = null;
-  });
 
   el.pickPackageBtn.addEventListener("click", pickPackage);
   el.pickDestinationBtn.addEventListener("click", pickDestination);
