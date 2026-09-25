@@ -73,7 +73,7 @@ stages:
 
               Get-ChildItem $stage -File | ForEach-Object {
                 $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
-                "$hash  $($_.Name)"
+                "{0}  {1}" -f $hash, $_.Name
               } | Set-Content (Join-Path $stage "SHA256SUMS.txt")
             displayName: Stage Windows artifacts
 
@@ -210,7 +210,7 @@ stages:
               set -euxo pipefail
               stage="$(Build.ArtifactStagingDirectory)/macos-universal"
               mkdir -p "$stage"
-              version="$(node -p "require('./$(appDir)/package.json').version")"
+              version=`node -p "require('./$(appDir)/package.json').version"`
               bundle="$(Build.SourcesDirectory)/target/universal-apple-darwin/release/bundle"
 
               app=`find "$bundle/macos" -maxdepth 1 -type d -name '*.app' | head -n 1`
