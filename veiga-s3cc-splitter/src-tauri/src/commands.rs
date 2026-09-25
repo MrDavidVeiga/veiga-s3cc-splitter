@@ -169,6 +169,7 @@ pub struct RemoveSelectionPlan {
     pub shared_resources_preserved: usize,
     pub selected_resources_preserved: usize,
     pub resources_to_remove: usize,
+    pub manifest_packages_to_remove: usize,
     pub remaining_resources: usize,
 }
 
@@ -178,6 +179,7 @@ pub struct RemoveSelectionResult {
     pub output_path: String,
     pub backup_path: String,
     pub removed_resources: usize,
+    pub removed_manifest_packages: usize,
     pub shared_resources_preserved: usize,
     pub selected_resources_preserved: usize,
 }
@@ -3402,7 +3404,12 @@ fn build_remove_selection_plan(
     selected_keys: &[String],
     name_map: &BTreeMap<u64, String>,
 ) -> Result<RemoveSelectionPlan, String> {
-    let manifest_backed = read_merge_manifest_from_dbpf(package)?.is_some();
+    let merge_manifest = read_merge_manifest_from_dbpf(package)?;
+    let manifest_backed = merge_manifest.is_some();
+    let manifest_packages_to_remove = merge_manifest
+        .as_ref()
+        .map(|manifest| manifest.selected_package_ids(selected_keys).len())
+        .unwrap_or(0);
     let (selected_resources, shared_preserved, resources_to_remove) =
         removal_plan_sets(package, selected_keys, name_map)?;
 
@@ -3430,6 +3437,7 @@ fn build_remove_selection_plan(
         shared_resources_preserved: shared_preserved.len(),
         selected_resources_preserved,
         resources_to_remove: resources_to_remove.len(),
+        manifest_packages_to_remove,
         remaining_resources: package
             .files
             .iter()
@@ -4911,9 +4919,9 @@ pub fn remove_selected_from_merged(
     let package = parse_package(&mmap)?;
     let name_map = package_resource_names(&package);
     let plan = build_remove_selection_plan(&package, &payload.selected_keys, &name_map)?;
-    if plan.resources_to_remove == 0 {
+    if plan.resources_to_remove == 0 && plan.manifest_packages_to_remove == 0 {
         return Err(
-            "Nenhum recurso pode ser removido com segurança; todos os recursos selecionados são compartilhados ou protegidos."
+            "Nenhum recurso ou entrada de manifesto pode ser removido com segurança."
                 .to_string(),
         );
     }
@@ -5005,6 +5013,7 @@ pub fn remove_selected_from_merged(
         output_path: output_path.display().to_string(),
         backup_path: backup_path.display().to_string(),
         removed_resources: resources_to_remove.len(),
+        removed_manifest_packages: plan.manifest_packages_to_remove,
         shared_resources_preserved: shared_preserved.len(),
         selected_resources_preserved: plan.selected_resources_preserved,
     })
