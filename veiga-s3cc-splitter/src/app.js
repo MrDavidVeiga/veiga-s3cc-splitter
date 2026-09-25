@@ -22,7 +22,6 @@ const translations = {
     langLabel: "Language:",
     pickPackage: "Open package",
     dropHint: "Select or drag a .package or .dbc here",
-    pickDestination: "Choose destination folder",
     scanList: "Load list",
     modeSplitter: "Splitter",
     modeMerger: "Merger",
@@ -142,7 +141,6 @@ const translations = {
     langLabel: "Idioma:",
     pickPackage: "Abrir package",
     dropHint: "Selecione ou arraste um .package ou .dbc aqui",
-    pickDestination: "Escolher pasta de destino",
     scanList: "Carregar lista",
     modeSplitter: "Splitter",
     modeMerger: "Merger",
@@ -262,7 +260,6 @@ const translations = {
     langLabel: "Idioma:",
     pickPackage: "Abrir package",
     dropHint: "Selecciona o arrastra un .package o .dbc aquí",
-    pickDestination: "Elegir carpeta de destino",
     scanList: "Cargar lista",
     modeSplitter: "Splitter",
     modeMerger: "Merger",
@@ -382,7 +379,6 @@ const translations = {
 const state = {
   mode: "splitter",
   packagePath: "",
-  destinationFolder: "",
   search: "",
   resources: [],
   activeContentFilter: "all",
@@ -423,7 +419,6 @@ const el = {
   mergerResult: document.querySelector("#merger-result"),
   restoreManifestBtn: document.querySelector("#restore-manifest-btn"),
   pickPackageBtn: document.querySelector("#pick-package-btn"),
-  pickDestinationBtn: document.querySelector("#pick-destination-btn"),
   scanBtn: document.querySelector("#scan-btn"),
   exportBtn: document.querySelector("#export-btn"),
   removeMergedBtn: document.querySelector("#remove-merged-btn"),
@@ -433,7 +428,6 @@ const el = {
   selectNoneBtn: document.querySelector("#select-none-btn"),
   packageDropZone: document.querySelector("#package-drop-zone"),
   packagePath: document.querySelector("#package-path"),
-  destinationPath: document.querySelector("#destination-path"),
   searchInput: document.querySelector("#search-input"),
   contentFilter: document.querySelector("#content-filter"),
   contentFilterLabel: document.querySelector("#content-filter-label"),
@@ -524,7 +518,6 @@ function applyStaticTranslations() {
   if (el.langLabel) el.langLabel.textContent = t("langLabel");
   if (el.pickPackageBtn) el.pickPackageBtn.textContent = t("pickPackage");
   if (el.dropHint) el.dropHint.textContent = t("dropHint");
-  if (el.pickDestinationBtn) el.pickDestinationBtn.textContent = t("pickDestination");
   if (el.scanBtn) el.scanBtn.textContent = t("scanList");
   if (el.modeSplitterBtn) el.modeSplitterBtn.textContent = t("modeSplitter");
   if (el.modeMergerBtn) el.modeMergerBtn.textContent = t("modeMerger");
@@ -777,7 +770,6 @@ function render() {
   el.mergerWorkspace?.classList.toggle("hidden", splitterMode);
 
   updatePathLabel(el.packagePath, state.packagePath);
-  updatePathLabel(el.destinationPath, state.destinationFolder);
 
   const visibleResources = getVisibleResources();
   el.selectedCount.textContent = t("selectedCount", state.selectedKeys.length);
@@ -952,12 +944,16 @@ async function pickPackage() {
   }
 }
 
-async function pickDestination() {
+async function chooseOutputFolder() {
   const result = await open({ directory: true, multiple: false });
-  if (typeof result === "string") {
-    state.destinationFolder = result;
-    render();
-  }
+  return typeof result === "string" && result.trim() ? result : null;
+}
+
+function parentFolderOfPath(path) {
+  const raw = String(path || "").trim();
+  const slash = Math.max(raw.lastIndexOf("/"), raw.lastIndexOf("\\"));
+  if (slash < 0) return ".";
+  return raw.slice(0, slash) || ".";
 }
 
 async function scanPackage() {
@@ -1109,17 +1105,16 @@ async function runMerger() {
 }
 async function restoreManifestPackages() {
   if (!state.packagePath || !state.manifestPackageCount) return;
-  if (!state.destinationFolder) {
-    alert(t("removeDestinationRequired"));
-    return;
-  }
+
+  const destinationFolder = await chooseOutputFolder();
+  if (!destinationFolder) return;
 
   setBusy(t("restoreBusyTitle"), t("restoreBusyMessage"));
   try {
     const result = await invoke("restore_manifest_packages", {
       payload: {
         packagePath: state.packagePath,
-        destinationFolder: state.destinationFolder,
+        destinationFolder,
       },
     });
     alert(t("restoreSuccess", result.packageCount));
@@ -1146,10 +1141,8 @@ function normalizeLocalPath(path) {
 
 async function removeSelectionFromMerged() {
   if (!state.packagePath || !state.selectedKeys.length) return;
-  if (!state.destinationFolder) {
-    alert(t("removeDestinationRequired"));
-    return;
-  }
+
+  const destinationFolder = parentFolderOfPath(state.packagePath);
 
   try {
     const plan = await invoke("analyze_remove_selection", {
@@ -1173,7 +1166,7 @@ async function removeSelectionFromMerged() {
     const result = await invoke("remove_selected_from_merged", {
       payload: {
         packagePath: state.packagePath,
-        destinationFolder: state.destinationFolder,
+        destinationFolder,
         selectedKeys: state.selectedKeys,
       },
     });
@@ -1202,11 +1195,14 @@ async function removeSelectionFromMerged() {
 }
 
 async function exportSelection(zip) {
-  if (!state.packagePath || !state.selectedKeys.length || !state.destinationFolder) return;
+  if (!state.packagePath || !state.selectedKeys.length) return;
+
+  const destinationFolder = await chooseOutputFolder();
+  if (!destinationFolder) return;
 
   const payload = {
     packagePath: state.packagePath,
-    destinationFolder: state.destinationFolder,
+    destinationFolder,
     selectedKeys: state.selectedKeys,
     includeThumbnails: el.optThumbs.checked,
     enableCompression: el.optCompression.checked,
@@ -1234,7 +1230,6 @@ async function exportSelection(zip) {
 
 function clearAll() {
   state.packagePath = "";
-  state.destinationFolder = "";
   state.resources = [];
   state.selectedKeys = [];
   state.selectionInitialized = false;
@@ -1332,7 +1327,6 @@ function setupEvents() {
   el.restoreManifestBtn?.addEventListener("click", restoreManifestPackages);
 
   el.pickPackageBtn.addEventListener("click", pickPackage);
-  el.pickDestinationBtn.addEventListener("click", pickDestination);
   el.scanBtn.addEventListener("click", scanPackage);
   el.exportBtn.addEventListener("click", () => exportSelection(false));
   if (el.removeMergedBtn) {
