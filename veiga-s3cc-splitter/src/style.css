@@ -1205,7 +1205,7 @@ body {
 
   .mode-btn {
     min-width: 64px;
-    font-size: 0.78rem;
+    font-size: var(--button-font-size);
   }
 }
 
