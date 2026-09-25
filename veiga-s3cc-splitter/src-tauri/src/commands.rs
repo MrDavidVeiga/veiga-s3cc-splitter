@@ -18,7 +18,8 @@ use zip::write::FileOptions;
 use crate::merge_manifest::{
     is_manifest_tgi, read_from_dbpf as read_merge_manifest_from_dbpf,
     read_from_writable as read_merge_manifest_from_writable, ManifestAnchor, ManifestPackage,
-    ManifestResource, MergeManifest, MANIFEST_GROUP, MANIFEST_INSTANCE, MANIFEST_TYPE,
+    ManifestPreservedResource, ManifestResource, MergeManifest, MANIFEST_GROUP, MANIFEST_INSTANCE,
+    MANIFEST_TYPE,
 };
 
 const TYPE_CASP: u32 = 0x034AEECB;
@@ -37,6 +38,7 @@ const TYPE_GEOM: u32 = 0x015A1849;
 const TYPE_VPXY: u32 = 0x736884F1;
 const TYPE_MODL: u32 = 0x01661233;
 const TYPE_KEY: u32 = 0x0166038C;
+const TYPE_PACKAGE_MANIFEST: u32 = 0x73E93EEB;
 const TYPE_MLOD: u32 = 0x01D10F34;
 const TYPE_MTST: u32 = 0x02019972;
 const TYPE_BONE: u32 = 0x00AE6C67;
@@ -3538,6 +3540,30 @@ fn append_uncompressed_resource(
     Ok(())
 }
 
+fn is_per_source_metadata_type(resource_type: u32) -> bool {
+    matches!(resource_type, TYPE_KEY | TYPE_PACKAGE_MANIFEST)
+}
+
+fn preserved_source_metadata(
+    source: &WritablePackage,
+) -> Result<Vec<ManifestPreservedResource>, String> {
+    let mut preserved = Vec::new();
+    for entry in &source.entries {
+        if !is_per_source_metadata_type(entry.type_id) {
+            continue;
+        }
+        let data = source
+            .get_uncompressed_data(entry)
+            .map_err(|e| format!("Não foi possível preservar metadado {}: {e}", key_string_from_writable(entry)))?;
+        preserved.push(ManifestPreservedResource {
+            key: key_string_from_writable(entry),
+            data_base64: STANDARD.encode(data),
+            unknown2: entry.unknown2,
+        });
+    }
+    Ok(preserved)
+}
+
 fn source_manifest_entries(
     source: &WritablePackage,
     source_path: &Path,
@@ -3546,7 +3572,7 @@ fn source_manifest_entries(
     let available: HashSet<String> = source
         .entries
         .iter()
-        .filter(|entry| entry.type_id != TYPE_KEY)
+        .filter(|entry| !is_per_source_metadata_type(entry.type_id))
         .filter(|entry| !is_manifest_tgi(entry.type_id, entry.group, entry.instance))
         .map(key_string_from_writable)
         .collect();
@@ -3577,6 +3603,7 @@ fn source_manifest_entries(
                 original_size: package.original_size,
                 anchors,
                 resources,
+                preserved_resources: package.preserved_resources,
             });
             *next_id += 1;
         }
@@ -3612,6 +3639,7 @@ fn source_manifest_entries(
                     .into_iter()
                     .map(|key| ManifestResource { key })
                     .collect(),
+                preserved_resources: Vec::new(),
             });
             *next_id += 1;
         }
@@ -3649,6 +3677,7 @@ fn source_manifest_entries(
             .into_iter()
             .map(|key| ManifestResource { key })
             .collect(),
+        preserved_resources: preserved_source_metadata(source)?,
     };
     *next_id += 1;
     Ok(vec![package])
@@ -3769,7 +3798,9 @@ pub fn merge_packages_with_manifest(
     let mut shared_keys = HashSet::new();
     for (source_index, source) in sources.iter().enumerate() {
         for (entry_index, entry) in source.entries.iter().enumerate() {
-            if entry.type_id == TYPE_KEY || is_manifest_tgi(entry.type_id, entry.group, entry.instance) {
+            if is_per_source_metadata_type(entry.type_id)
+                || is_manifest_tgi(entry.type_id, entry.group, entry.instance)
+            {
                 continue;
             }
             let key = key_string_from_writable(entry);
@@ -3807,7 +3838,7 @@ pub fn merge_packages_with_manifest(
         manifest_packages.extend(source_manifest_entries(source, source_path, &mut next_id)?);
     }
     let manifest = MergeManifest {
-        version: 1,
+        version: 2,
         packages: manifest_packages,
     };
 
@@ -3824,7 +3855,9 @@ pub fn merge_packages_with_manifest(
     let mut written = HashSet::new();
     for (source_index, source) in sources.iter().enumerate() {
         for (entry_index, entry) in source.entries.iter().enumerate() {
-            if entry.type_id == TYPE_KEY || is_manifest_tgi(entry.type_id, entry.group, entry.instance) {
+            if is_per_source_metadata_type(entry.type_id)
+                || is_manifest_tgi(entry.type_id, entry.group, entry.instance)
+            {
                 continue;
             }
             let key = key_string_from_writable(entry);
@@ -3948,6 +3981,20 @@ pub fn restore_manifest_packages(
                 ));
             }
         }
+        for resource in &package_info.preserved_resources {
+            parse_key(&resource.key).map_err(|e| {
+                format!(
+                    "A restauração foi cancelada: metadado preservado inválido em {} ({}): {e}",
+                    package_info.name, resource.key
+                )
+            })?;
+            STANDARD.decode(&resource.data_base64).map_err(|e| {
+                format!(
+                    "A restauração foi cancelada: metadado preservado corrompido em {} ({}): {e}",
+                    package_info.name, resource.key
+                )
+            })?;
+        }
     }
 
     let mut output_paths = Vec::new();
@@ -4004,6 +4051,30 @@ pub fn restore_manifest_packages(
                 compressed: entry.compressed,
                 unknown2: entry.unknown2,
             });
+        }
+
+        for resource in &package_info.preserved_resources {
+            let parts = parse_key(&resource.key).map_err(|e| {
+                format!(
+                    "Não foi possível restaurar {}: metadado preservado {} é inválido: {e}",
+                    package_info.name, resource.key
+                )
+            })?;
+            let data = STANDARD.decode(&resource.data_base64).map_err(|e| {
+                format!(
+                    "Não foi possível restaurar {}: metadado preservado {} está corrompido: {e}",
+                    package_info.name, resource.key
+                )
+            })?;
+            append_uncompressed_resource(
+                &mut out_pkg,
+                &mut out_f,
+                parts.resource_type,
+                parts.resource_group,
+                parts.instance,
+                &data,
+                resource.unknown2,
+            )?;
         }
 
         out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
