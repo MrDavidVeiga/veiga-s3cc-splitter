@@ -753,6 +753,11 @@ body {
   margin-top: 14px;
 }
 
+.merger-footer-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-height: 0;
+}
+
 .footer-actions-2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
