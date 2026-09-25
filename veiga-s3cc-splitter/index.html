@@ -79,19 +79,23 @@
               <div class="selected-pill"><span id="selected-count">0 selected</span></div>
             </div>
             <div class="results-actions">
-              <div id="content-filter" class="content-filter">
-                <span id="content-filter-label" class="content-filter-label">Filter:</span>
-                <div class="lang-dropdown content-filter-dropdown" id="content-filter-dropdown">
-                  <button id="content-filter-toggle-btn" class="lang-toggle-btn content-filter-toggle-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
-                    <span id="content-filter-current" class="content-filter-current">All</span>
-                    <i id="content-filter-toggle-icon" class="fa-solid fa-angle-down" aria-hidden="true"></i>
-                  </button>
-                  <div id="content-filter-menu" class="lang-menu content-filter-menu hidden" role="listbox"></div>
+              <div class="results-query-controls">
+                <div id="content-filter" class="content-filter">
+                  <span id="content-filter-label" class="content-filter-label">Filter:</span>
+                  <div class="lang-dropdown content-filter-dropdown" id="content-filter-dropdown">
+                    <button id="content-filter-toggle-btn" class="lang-toggle-btn content-filter-toggle-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
+                      <span id="content-filter-current" class="content-filter-current">All</span>
+                      <i id="content-filter-toggle-icon" class="fa-solid fa-angle-down" aria-hidden="true"></i>
+                    </button>
+                    <div id="content-filter-menu" class="lang-menu content-filter-menu hidden" role="listbox"></div>
+                  </div>
                 </div>
+                <input id="search-input" class="text-input results-search-input" type="text" placeholder="Search by name or Instance ID" autocomplete="off" spellcheck="false" aria-label="Search by name or Instance ID" />
               </div>
-              <input id="search-input" class="text-input results-search-input" type="text" placeholder="Search by name or Instance ID" autocomplete="off" spellcheck="false" aria-label="Search by name or Instance ID" />
-              <button id="select-all-btn" class="secondary-btn">Select All</button>
-              <button id="select-none-btn" class="secondary-btn">Select None</button>
+              <div class="results-selection-controls">
+                <button id="select-all-btn" class="secondary-btn">Select All</button>
+                <button id="select-none-btn" class="secondary-btn">Select None</button>
+              </div>
             </div>
 
 <div class="results-grid">
