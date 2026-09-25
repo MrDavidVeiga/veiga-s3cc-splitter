@@ -19,12 +19,20 @@ pub struct ManifestResource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestPreservedResource {
+    pub key: String,
+    pub data_base64: String,
+    pub unknown2: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestPackage {
     pub id: u32,
     pub name: String,
     pub original_size: u64,
     pub anchors: Vec<ManifestAnchor>,
     pub resources: Vec<ManifestResource>,
+    pub preserved_resources: Vec<ManifestPreservedResource>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +103,14 @@ impl MergeManifest {
                 out.push_str(&format!(
                     "    <Resource key=\"{}\" />\n",
                     xml_escape(&resource.key)
+                ));
+            }
+            for resource in &package.preserved_resources {
+                out.push_str(&format!(
+                    "    <PreservedResource key=\"{}\" unknown2=\"{}\" dataBase64=\"{}\" />\n",
+                    xml_escape(&resource.key),
+                    resource.unknown2,
+                    xml_escape(&resource.data_base64)
                 ));
             }
             out.push_str("  </Package>\n");
@@ -171,12 +187,37 @@ impl MergeManifest {
                 resource_cursor = r_end;
             }
 
+            let mut preserved_resources = Vec::new();
+            let mut preserved_cursor = 0usize;
+            while let Some(rel) = body[preserved_cursor..].find("<PreservedResource ") {
+                let p_start = preserved_cursor + rel;
+                let p_end = body[p_start..]
+                    .find('>')
+                    .map(|v| p_start + v + 1)
+                    .ok_or_else(|| "Merge Manifest inválido: PreservedResource incompleto.".to_string())?;
+                let p_tag = &body[p_start..p_end];
+                if let (Some(key), Some(data_base64)) =
+                    (attr(p_tag, "key"), attr(p_tag, "dataBase64"))
+                {
+                    let unknown2 = attr(p_tag, "unknown2")
+                        .and_then(|v| v.parse::<u16>().ok())
+                        .unwrap_or(0);
+                    preserved_resources.push(ManifestPreservedResource {
+                        key,
+                        data_base64,
+                        unknown2,
+                    });
+                }
+                preserved_cursor = p_end;
+            }
+
             packages.push(ManifestPackage {
                 id,
                 name,
                 original_size,
                 anchors,
                 resources,
+                preserved_resources,
             });
             cursor = close + "</Package>".len();
         }
@@ -304,6 +345,11 @@ mod tests {
                 resources: vec![ManifestResource {
                     key: "0x034AEECB-0x00000000-0x1234567890ABCDEF".to_string(),
                 }],
+                preserved_resources: vec![ManifestPreservedResource {
+                    key: "0x73E93EEB-0x00000000-0x0000000000000000".to_string(),
+                    data_base64: "PG1hbmlmZXN0IC8+".to_string(),
+                    unknown2: 0,
+                }],
             }],
         };
         let xml = manifest.to_xml_bytes();
@@ -323,6 +369,7 @@ mod tests {
                     original_size: 1,
                     anchors: vec![],
                     resources: vec![ManifestResource { key: shared.clone() }],
+                    preserved_resources: vec![],
                 },
                 ManifestPackage {
                     id: 2,
@@ -330,6 +377,7 @@ mod tests {
                     original_size: 1,
                     anchors: vec![],
                     resources: vec![ManifestResource { key: shared.clone() }],
+                    preserved_resources: vec![],
                 },
             ],
         };
@@ -354,6 +402,7 @@ mod tests {
                         ManifestResource { key: a_anchor.clone() },
                         ManifestResource { key: shared.clone() },
                     ],
+                    preserved_resources: vec![],
                 },
                 ManifestPackage {
                     id: 2,
@@ -364,6 +413,7 @@ mod tests {
                         ManifestResource { key: b_anchor.clone() },
                         ManifestResource { key: shared.clone() },
                     ],
+                    preserved_resources: vec![],
                 },
             ],
         };
