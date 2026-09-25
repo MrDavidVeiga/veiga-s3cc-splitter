@@ -39,34 +39,34 @@ stages:
             displayName: Use Rust stable
 
           - script: npm ci
-            workingDirectory: '$D(Build.SourcesDirectory)/$D(appDir)'
+            workingDirectory: '$(Build.SourcesDirectory)/$(appDir)'
             displayName: Install frontend dependencies
 
           - script: cargo check --workspace
-            workingDirectory: '$D(Build.SourcesDirectory)'
+            workingDirectory: '$(Build.SourcesDirectory)'
             displayName: Cargo check
 
           - script: cargo test --workspace
-            workingDirectory: '$D(Build.SourcesDirectory)'
+            workingDirectory: '$(Build.SourcesDirectory)'
             displayName: Rust tests
 
           - script: npm run tauri -- build --bundles msi --ci
-            workingDirectory: '$D(Build.SourcesDirectory)/$D(appDir)'
+            workingDirectory: '$(Build.SourcesDirectory)/$(appDir)'
             displayName: Build Tauri for Windows
 
           - powershell: |
               $ErrorActionPreference = "Stop"
-              $stage = "$D(Build.ArtifactStagingDirectory)\windows-x64"
+              $stage = "$(Build.ArtifactStagingDirectory)\windows-x64"
               New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
-              $pkg = Get-Content "$D(Build.SourcesDirectory)\$D(appDir)\package.json" | ConvertFrom-Json
+              $pkg = Get-Content "$(Build.SourcesDirectory)\$(appDir)\package.json" | ConvertFrom-Json
               $version = $pkg.version
-              $exe = "$D(Build.SourcesDirectory)\target\release\veiga-s3cc-splitter.exe"
+              $exe = "$(Build.SourcesDirectory)\target\release\veiga-s3cc-splitter.exe"
               if (-not (Test-Path $exe)) { throw "Portable Windows executable not found: $exe" }
 
               Copy-Item $exe (Join-Path $stage "Veigas-S3CC-Splitter-v$version-Windows-x64.exe")
 
-              $msi = Get-ChildItem "$D(Build.SourcesDirectory)\target\release\bundle\msi" -Filter *.msi -File |
+              $msi = Get-ChildItem "$(Build.SourcesDirectory)\target\release\bundle\msi" -Filter *.msi -File |
                 Select-Object -First 1
               if (-not $msi) { throw "Windows MSI not found." }
               Copy-Item $msi.FullName (Join-Path $stage "Veigas-S3CC-Splitter-v$version-Windows-x64.msi")
@@ -80,7 +80,7 @@ stages:
           - task: PublishPipelineArtifact@1
             displayName: Publish Windows artifact
             inputs:
-              targetPath: '$D(Build.ArtifactStagingDirectory)/windows-x64'
+              targetPath: '$(Build.ArtifactStagingDirectory)/windows-x64'
               artifact: 'Veigas-S3CC-Splitter-Windows-x64'
               publishLocation: 'pipeline'
 
@@ -122,49 +122,49 @@ stages:
             displayName: Install Tauri Linux dependencies
 
           - script: npm ci
-            workingDirectory: '$D(Build.SourcesDirectory)/$D(appDir)'
+            workingDirectory: '$(Build.SourcesDirectory)/$(appDir)'
             displayName: Install frontend dependencies
 
           - script: cargo check --workspace
-            workingDirectory: '$D(Build.SourcesDirectory)'
+            workingDirectory: '$(Build.SourcesDirectory)'
             displayName: Cargo check
 
           - script: cargo test --workspace
-            workingDirectory: '$D(Build.SourcesDirectory)'
+            workingDirectory: '$(Build.SourcesDirectory)'
             displayName: Rust tests
 
           - script: npm run tauri -- build --bundles appimage,deb --ci
-            workingDirectory: '$D(Build.SourcesDirectory)/$D(appDir)'
+            workingDirectory: '$(Build.SourcesDirectory)/$(appDir)'
             displayName: Build Tauri for Linux
 
           - bash: |
               set -euxo pipefail
-              stage="$D(Build.ArtifactStagingDirectory)/linux-x64"
+              stage="$(Build.ArtifactStagingDirectory)/linux-x64"
               mkdir -p "$stage"
-              version="$D(node -p "require('./$D(appDir)/package.json').version")"
+              version=`node -p "require('./$(appDir)/package.json').version"`
 
-              binary="$D(Build.SourcesDirectory)/target/release/veiga-s3cc-splitter"
+              binary="$(Build.SourcesDirectory)/target/release/veiga-s3cc-splitter"
               test -f "$binary"
-              cp "$binary" "$stage/Veigas-S3CC-Splitter-v$D{version}-Linux-x64"
-              chmod +x "$stage/Veigas-S3CC-Splitter-v$D{version}-Linux-x64"
+              cp "$binary" "$stage/Veigas-S3CC-Splitter-v${version}-Linux-x64"
+              chmod +x "$stage/Veigas-S3CC-Splitter-v${version}-Linux-x64"
 
-              appimage="$D(find "$D(Build.SourcesDirectory)/target/release/bundle/appimage" -maxdepth 1 -type f -name '*.AppImage' | head -n 1)"
-              deb="$D(find "$D(Build.SourcesDirectory)/target/release/bundle/deb" -maxdepth 1 -type f -name '*.deb' | head -n 1)"
+              appimage=`find "$(Build.SourcesDirectory)/target/release/bundle/appimage" -maxdepth 1 -type f -name '*.AppImage' | head -n 1`
+              deb=`find "$(Build.SourcesDirectory)/target/release/bundle/deb" -maxdepth 1 -type f -name '*.deb' | head -n 1`
               test -n "$appimage"
               test -n "$deb"
 
-              cp "$appimage" "$stage/Veigas-S3CC-Splitter-v$D{version}-Linux-x64.AppImage"
-              chmod +x "$stage/Veigas-S3CC-Splitter-v$D{version}-Linux-x64.AppImage"
-              cp "$deb" "$stage/Veigas-S3CC-Splitter-v$D{version}-Linux-x64.deb"
+              cp "$appimage" "$stage/Veigas-S3CC-Splitter-v${version}-Linux-x64.AppImage"
+              chmod +x "$stage/Veigas-S3CC-Splitter-v${version}-Linux-x64.AppImage"
+              cp "$deb" "$stage/Veigas-S3CC-Splitter-v${version}-Linux-x64.deb"
 
-              tar -C "$stage" -czf "$stage/Veigas-S3CC-Splitter-v$D{version}-Linux-x64-portable.tar.gz" "Veigas-S3CC-Splitter-v$D{version}-Linux-x64"
+              tar -C "$stage" -czf "$stage/Veigas-S3CC-Splitter-v${version}-Linux-x64-portable.tar.gz" "Veigas-S3CC-Splitter-v${version}-Linux-x64"
               (cd "$stage" && sha256sum Veigas-S3CC-Splitter-v* > SHA256SUMS.txt)
             displayName: Stage Linux artifacts
 
           - task: PublishPipelineArtifact@1
             displayName: Publish Linux artifact
             inputs:
-              targetPath: '$D(Build.ArtifactStagingDirectory)/linux-x64'
+              targetPath: '$(Build.ArtifactStagingDirectory)/linux-x64'
               artifact: 'Veigas-S3CC-Splitter-Linux-x64'
               publishLocation: 'pipeline'
 
@@ -191,40 +191,40 @@ stages:
             displayName: Use Rust stable and macOS targets
 
           - script: npm ci
-            workingDirectory: '$D(Build.SourcesDirectory)/$D(appDir)'
+            workingDirectory: '$(Build.SourcesDirectory)/$(appDir)'
             displayName: Install frontend dependencies
 
           - script: cargo check --workspace
-            workingDirectory: '$D(Build.SourcesDirectory)'
+            workingDirectory: '$(Build.SourcesDirectory)'
             displayName: Cargo check
 
           - script: cargo test --workspace
-            workingDirectory: '$D(Build.SourcesDirectory)'
+            workingDirectory: '$(Build.SourcesDirectory)'
             displayName: Rust tests
 
           - script: npm run tauri -- build --target universal-apple-darwin --bundles app,dmg --ci
-            workingDirectory: '$D(Build.SourcesDirectory)/$D(appDir)'
+            workingDirectory: '$(Build.SourcesDirectory)/$(appDir)'
             displayName: Build universal Tauri app for macOS
 
           - bash: |
               set -euxo pipefail
-              stage="$D(Build.ArtifactStagingDirectory)/macos-universal"
+              stage="$(Build.ArtifactStagingDirectory)/macos-universal"
               mkdir -p "$stage"
-              version="$D(node -p "require('./$D(appDir)/package.json').version")"
-              bundle="$D(Build.SourcesDirectory)/target/universal-apple-darwin/release/bundle"
+              version="$(node -p "require('./$(appDir)/package.json').version")"
+              bundle="$(Build.SourcesDirectory)/target/universal-apple-darwin/release/bundle"
 
-              app="$D(find "$bundle/macos" -maxdepth 1 -type d -name '*.app' | head -n 1)"
-              dmg="$D(find "$bundle/dmg" -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+              app=`find "$bundle/macos" -maxdepth 1 -type d -name '*.app' | head -n 1`
+              dmg=`find "$bundle/dmg" -maxdepth 1 -type f -name '*.dmg' | head -n 1`
               test -n "$app"
               test -n "$dmg"
 
-              ditto -c -k --sequesterRsrc --keepParent "$app" "$stage/Veigas-S3CC-Splitter-v$D{version}-macOS-Universal.app.zip"
-              cp "$dmg" "$stage/Veigas-S3CC-Splitter-v$D{version}-macOS-Universal.dmg"
+              ditto -c -k --sequesterRsrc --keepParent "$app" "$stage/Veigas-S3CC-Splitter-v${version}-macOS-Universal.app.zip"
+              cp "$dmg" "$stage/Veigas-S3CC-Splitter-v${version}-macOS-Universal.dmg"
 
-              binary="$D(Build.SourcesDirectory)/target/universal-apple-darwin/release/veiga-s3cc-splitter"
+              binary="$(Build.SourcesDirectory)/target/universal-apple-darwin/release/veiga-s3cc-splitter"
               if [ -f "$binary" ]; then
-                cp "$binary" "$stage/Veigas-S3CC-Splitter-v$D{version}-macOS-Universal"
-                chmod +x "$stage/Veigas-S3CC-Splitter-v$D{version}-macOS-Universal"
+                cp "$binary" "$stage/Veigas-S3CC-Splitter-v${version}-macOS-Universal"
+                chmod +x "$stage/Veigas-S3CC-Splitter-v${version}-macOS-Universal"
               fi
 
               (cd "$stage" && shasum -a 256 Veigas-S3CC-Splitter-v* > SHA256SUMS.txt)
@@ -233,6 +233,6 @@ stages:
           - task: PublishPipelineArtifact@1
             displayName: Publish macOS artifact
             inputs:
-              targetPath: '$D(Build.ArtifactStagingDirectory)/macos-universal'
+              targetPath: '$(Build.ArtifactStagingDirectory)/macos-universal'
               artifact: 'Veigas-S3CC-Splitter-macOS-Universal'
               publishLocation: 'pipeline'
