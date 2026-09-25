@@ -34,7 +34,7 @@ body {
 
 .topbar {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
   gap: 14px;
   margin-top: 2px;
@@ -840,6 +840,15 @@ body {
     width: 100%;
   }
 
+  .social-footer {
+    flex-wrap: wrap;
+  }
+
+  .footer-mode-switcher {
+    width: auto;
+    margin-left: auto;
+  }
+
   .mode-btn {
     flex: 1 1 50%;
     min-width: 0;
@@ -981,10 +990,17 @@ body {
 /* ── Social Footer ── */
 .social-footer {
   display: flex;
-  justify-content: left;
-  align-items: left;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
   padding: clamp(14px, 1.5vw, 14px) 0 clamp(10px, 1vw, 16px);
   margin-top: clamp(14px, 1.5vw, 0);
+}
+
+.footer-mode-switcher {
+  margin-left: auto;
+  width: auto;
+  flex: 0 0 auto;
 }
 
 .social-icons-list {
