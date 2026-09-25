@@ -132,8 +132,8 @@ const translations = {
     removeBusyMessage: "Preserving shared resources and validating the new package.",
     removeDestinationRequired: "Choose a destination folder first.",
     removeNothing: "None of the selected resources can be removed safely.",
-    removeConfirm: (plan) => `Remove ${plan.resourcesToRemove} resources associated with ${plan.selectedItems} selected item(s)?\n\n${plan.sharedResourcesPreserved} shared resource(s) will be preserved.${plan.selectedResourcesPreserved ? `\n${plan.selectedResourcesPreserved} selected resource(s) are shared and will remain in the merged package.` : ""}\nA bit-for-bit backup of the original will be created before the final replacement.`,
-    removeSuccess: (result) => `Merged package rebuilt successfully.\n\nRemoved resources: ${result.removedResources}\nShared resources preserved: ${result.sharedResourcesPreserved}\nBackup: ${result.backupPath}`,
+    removeConfirm: (plan) => `Remove ${plan.resourcesToRemove} resource(s) and ${plan.manifestPackagesToRemove || 0} original package entr${(plan.manifestPackagesToRemove || 0) === 1 ? "y" : "ies"} associated with ${plan.selectedItems} selected item(s)?\n\n${plan.sharedResourcesPreserved} shared resource(s) will be preserved.${plan.selectedResourcesPreserved ? `\n${plan.selectedResourcesPreserved} selected resource(s) are shared and will remain in the merged package.` : ""}\nA bit-for-bit backup of the original will be created before the final replacement.`,
+    removeSuccess: (result) => `Merged package rebuilt successfully.\n\nRemoved resources: ${result.removedResources}\nManifest package entries removed: ${result.removedManifestPackages || 0}\nShared resources preserved: ${result.sharedResourcesPreserved}\nBackup: ${result.backupPath}`,
     removeError: "Failed to remove selected items:",
     clear: "Clear",
     readError: "Failed to read package:",
@@ -254,8 +254,8 @@ const translations = {
     removeBusyMessage: "Preservando recursos compartilhados e validando o novo package.",
     removeDestinationRequired: "Escolha primeiro uma pasta de destino.",
     removeNothing: "Nenhum dos recursos selecionados pode ser removido com segurança.",
-    removeConfirm: (plan) => `Remover ${plan.resourcesToRemove} recursos associados a ${plan.selectedItems} item(ns) selecionado(s)?\n\n${plan.sharedResourcesPreserved} recurso(s) compartilhado(s) serão preservados.${plan.selectedResourcesPreserved ? `\n${plan.selectedResourcesPreserved} recurso(s) selecionado(s) são compartilhados e permanecerão no merged.` : ""}\nUm backup bit a bit do original será criado antes da substituição final.`,
-    removeSuccess: (result) => `Merged reconstruído com sucesso.\n\nRecursos removidos: ${result.removedResources}\nRecursos compartilhados preservados: ${result.sharedResourcesPreserved}\nBackup: ${result.backupPath}`,
+    removeConfirm: (plan) => `Remover ${plan.resourcesToRemove} recurso(s) e ${plan.manifestPackagesToRemove || 0} entrada(s) de package original do manifesto, associados a ${plan.selectedItems} item(ns) selecionado(s)?\n\n${plan.sharedResourcesPreserved} recurso(s) compartilhado(s) serão preservados.${plan.selectedResourcesPreserved ? `\n${plan.selectedResourcesPreserved} recurso(s) selecionado(s) são compartilhados e permanecerão no merged.` : ""}\nUm backup bit a bit do original será criado antes da substituição final.`,
+    removeSuccess: (result) => `Merged reconstruído com sucesso.\n\nRecursos removidos: ${result.removedResources}\nEntradas removidas do manifesto: ${result.removedManifestPackages || 0}\nRecursos compartilhados preservados: ${result.sharedResourcesPreserved}\nBackup: ${result.backupPath}`,
     removeError: "Falha ao remover os itens selecionados:",
     clear: "Limpar",
     readError: "Falha ao ler package:",
@@ -376,8 +376,8 @@ const translations = {
     removeBusyMessage: "Conservando recursos compartidos y validando el nuevo package.",
     removeDestinationRequired: "Elige primero una carpeta de destino.",
     removeNothing: "Ninguno de los recursos seleccionados puede eliminarse de forma segura.",
-    removeConfirm: (plan) => `¿Eliminar ${plan.resourcesToRemove} recursos asociados a ${plan.selectedItems} elemento(s) seleccionado(s)?\n\nSe conservarán ${plan.sharedResourcesPreserved} recurso(s) compartido(s).${plan.selectedResourcesPreserved ? `\n${plan.selectedResourcesPreserved} recurso(s) seleccionado(s) son compartidos y permanecerán en el merged.` : ""}\nSe creará una copia de seguridad bit a bit del original antes del reemplazo final.`,
-    removeSuccess: (result) => `Merged reconstruido correctamente.\n\nRecursos eliminados: ${result.removedResources}\nRecursos compartidos conservados: ${result.sharedResourcesPreserved}\nBackup: ${result.backupPath}`,
+    removeConfirm: (plan) => `¿Eliminar ${plan.resourcesToRemove} recurso(s) y ${plan.manifestPackagesToRemove || 0} entrada(s) de package original del manifiesto, asociados a ${plan.selectedItems} elemento(s) seleccionado(s)?\n\nSe conservarán ${plan.sharedResourcesPreserved} recurso(s) compartido(s).${plan.selectedResourcesPreserved ? `\n${plan.selectedResourcesPreserved} recurso(s) seleccionado(s) son compartidos y permanecerán en el merged.` : ""}\nSe creará una copia de seguridad bit a bit del original antes del reemplazo final.`,
+    removeSuccess: (result) => `Merged reconstruido correctamente.\n\nRecursos eliminados: ${result.removedResources}\nEntradas eliminadas del manifiesto: ${result.removedManifestPackages || 0}\nRecursos compartidos conservados: ${result.sharedResourcesPreserved}\nBackup: ${result.backupPath}`,
     removeError: "Error al eliminar los elementos seleccionados:",
     clear: "Limpiar",
     readError: "Error al leer el package:",
@@ -1139,7 +1139,7 @@ async function removeSelectionFromMerged() {
       },
     });
 
-    if (!plan.resourcesToRemove) {
+    if (!plan.resourcesToRemove && !plan.manifestPackagesToRemove) {
       alert(t("removeNothing"));
       return;
     }
