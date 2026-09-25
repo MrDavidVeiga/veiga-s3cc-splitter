@@ -5630,6 +5630,122 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn reversible_merger_preserves_package_manifest_and_key_metadata_per_source() {
+        let root = test_dir("merge-source-metadata");
+        let source_a = root.join("Eyebrows N01.package");
+        let source_b = root.join("Eyebrows N02.package");
+        let destination = root.join("out");
+        let restore_dir = root.join("restored");
+        std::fs::create_dir_all(&destination).unwrap();
+        std::fs::create_dir_all(&restore_dir).unwrap();
+
+        let casp_a = 0x7777_0000_0000_0001u64;
+        let casp_b = 0x7777_0000_0000_0002u64;
+        let package_manifest_a = b"<packageManifest name=\"N01\" />".to_vec();
+        let package_manifest_b = b"<packageManifest name=\"N02\" />".to_vec();
+        let key_a = b"KEY-N01".to_vec();
+        let key_b = b"KEY-N02".to_vec();
+
+        write_test_package(
+            &source_a,
+            &[
+                (TYPE_CASP, 0, casp_a, vec![1, 2, 3]),
+                (TYPE_PACKAGE_MANIFEST, 0, 0, package_manifest_a.clone()),
+                (TYPE_KEY, 0, 0, key_a.clone()),
+            ],
+        );
+        write_test_package(
+            &source_b,
+            &[
+                (TYPE_CASP, 0, casp_b, vec![4, 5, 6]),
+                (TYPE_PACKAGE_MANIFEST, 0, 0, package_manifest_b.clone()),
+                (TYPE_KEY, 0, 0, key_b.clone()),
+            ],
+        );
+
+        let merged = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![
+                source_a.display().to_string(),
+                source_b.display().to_string(),
+            ],
+            destination_folder: destination.display().to_string(),
+            output_name: "EyebrowsMerged.package".to_string(),
+        })
+        .unwrap();
+
+        let merged_package = WritablePackage::load(&merged.output_path).unwrap();
+        assert!(!merged_package
+            .entries
+            .iter()
+            .any(|entry| entry.type_id == TYPE_PACKAGE_MANIFEST));
+        assert!(!merged_package
+            .entries
+            .iter()
+            .any(|entry| entry.type_id == TYPE_KEY));
+
+        let manifest = read_merge_manifest_from_writable(&merged_package)
+            .unwrap()
+            .unwrap();
+        assert_eq!(manifest.version, 2);
+        assert_eq!(manifest.packages.len(), 2);
+        assert!(manifest.packages.iter().all(|package| {
+            package
+                .preserved_resources
+                .iter()
+                .any(|resource| resource.key.starts_with("0x73E93EEB-"))
+        }));
+        assert!(manifest.packages.iter().all(|package| {
+            package
+                .preserved_resources
+                .iter()
+                .any(|resource| resource.key.starts_with("0x0166038C-"))
+        }));
+
+        restore_manifest_packages(RestoreManifestPayload {
+            package_path: merged.output_path.clone(),
+            destination_folder: restore_dir.display().to_string(),
+        })
+        .unwrap();
+
+        let restored_a = WritablePackage::load(restore_dir.join("Eyebrows N01.package")).unwrap();
+        let restored_b = WritablePackage::load(restore_dir.join("Eyebrows N02.package")).unwrap();
+
+        let restored_manifest_a = restored_a
+            .entries
+            .iter()
+            .find(|entry| entry.type_id == TYPE_PACKAGE_MANIFEST)
+            .unwrap();
+        let restored_manifest_b = restored_b
+            .entries
+            .iter()
+            .find(|entry| entry.type_id == TYPE_PACKAGE_MANIFEST)
+            .unwrap();
+        assert_eq!(
+            restored_a.get_uncompressed_data(restored_manifest_a).unwrap(),
+            package_manifest_a
+        );
+        assert_eq!(
+            restored_b.get_uncompressed_data(restored_manifest_b).unwrap(),
+            package_manifest_b
+        );
+
+        let restored_key_a = restored_a
+            .entries
+            .iter()
+            .find(|entry| entry.type_id == TYPE_KEY)
+            .unwrap();
+        let restored_key_b = restored_b
+            .entries
+            .iter()
+            .find(|entry| entry.type_id == TYPE_KEY)
+            .unwrap();
+        assert_eq!(restored_a.get_uncompressed_data(restored_key_a).unwrap(), key_a);
+        assert_eq!(restored_b.get_uncompressed_data(restored_key_b).unwrap(), key_b);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn removing_merged_cc_updates_embedded_manifest() {
         let root = test_dir("manifest-removal");
         let source_a = root.join("A.package");
