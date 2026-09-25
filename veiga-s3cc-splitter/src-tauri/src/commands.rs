@@ -121,6 +121,12 @@ pub struct MergePackagesPayload {
     pub output_name: String,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectMergeSourcesPayload {
+    pub paths: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MergePackagesResult {
@@ -3648,6 +3654,76 @@ fn source_manifest_entries(
     Ok(vec![package])
 }
 
+fn is_merge_source_file(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "package" | "dbc"))
+            .unwrap_or(false)
+}
+
+fn collect_merge_sources_from_path(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|e| format!("Não foi possível acessar {}: {e}", path.display()))?;
+
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+
+    if metadata.is_file() {
+        if is_merge_source_file(path) {
+            files.push(path.to_path_buf());
+        }
+        return Ok(());
+    }
+
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+
+    let mut entries = std::fs::read_dir(path)
+        .map_err(|e| format!("Não foi possível ler a pasta {}: {e}", path.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Falha ao enumerar a pasta {}: {e}", path.display()))?;
+
+    entries.sort_by_key(|entry| entry.path().to_string_lossy().to_ascii_lowercase());
+    for entry in entries {
+        collect_merge_sources_from_path(&entry.path(), files)?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn collect_merge_package_files(
+    payload: CollectMergeSourcesPayload,
+) -> Result<Vec<String>, String> {
+    let mut files = Vec::new();
+
+    for raw_path in payload.paths {
+        let trimmed = raw_path.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        collect_merge_sources_from_path(Path::new(trimmed), &mut files)?;
+    }
+
+    files.sort_by_key(|path| path.to_string_lossy().to_ascii_lowercase());
+
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    for path in files {
+        let display = path.to_string_lossy().into_owned();
+        let normalized = display.replace('\\', "/").to_ascii_lowercase();
+        if seen.insert(normalized) {
+            result.push(display);
+        }
+    }
+
+    Ok(result)
+}
+
 #[tauri::command]
 pub fn merge_packages_with_manifest(
     payload: MergePackagesPayload,
@@ -5655,5 +5731,40 @@ mod content_category_tests {
         assert_eq!(object_content_category("Wall Lamp"), "Walls");
         assert_eq!(object_content_category("Grand Window"), "Windows");
         assert_eq!(object_content_category("Unknown Thing"), "Other Objects");
+    }
+}
+
+
+#[cfg(test)]
+mod merge_source_collection_tests {
+    use super::*;
+    use std::fs::{create_dir_all, remove_dir_all, write};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn dropped_folder_collects_packages_recursively_and_ignores_other_files() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("veiga-merger-drop-{nonce}"));
+        let nested = root.join("Nested");
+        create_dir_all(&nested).unwrap();
+
+        write(root.join("A.package"), b"DBPF").unwrap();
+        write(nested.join("B.DBC"), b"DBPF").unwrap();
+        write(nested.join("ignore.txt"), b"ignore").unwrap();
+
+        let result = collect_merge_package_files(CollectMergeSourcesPayload {
+            paths: vec![root.to_string_lossy().into_owned()],
+        })
+        .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().any(|path| path.ends_with("A.package")));
+        assert!(result.iter().any(|path| path.ends_with("B.DBC")));
+        assert!(!result.iter().any(|path| path.ends_with("ignore.txt")));
+
+        remove_dir_all(root).unwrap();
     }
 }
