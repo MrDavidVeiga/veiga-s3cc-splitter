@@ -57,36 +57,33 @@ body {
 }
 
 .mode-switcher {
-  display: inline-flex;
-  padding: 4px;
-  gap: 4px;
-  border: 1px solid rgba(186, 196, 206, 0.22);
-  border-radius: 14px;
-  background: rgba(0, 0, 0, 0.22);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
 }
 
 .mode-btn {
-  min-width: 120px;
-  padding: 9px 16px;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 11px;
+  padding: 9px 10px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.05);
   color: var(--muted);
   font: inherit;
   font-size: var(--button-font-size);
-  font-weight: 800;
-  cursor: pointer;
+  font-weight: 700;
   transition: 0.18s ease;
 }
 
 .mode-btn:hover {
+  background: rgba(97, 132, 34, 0.12);
   color: var(--text);
-  background: rgba(127, 173, 45, 0.12);
 }
 
 .mode-btn.active {
-  color: white;
-  background: var(--green);
+  border-color: rgba(127, 173, 45, 0.55);
+  background: rgba(97, 132, 34, 0.2);
+  color: #ebebeb;
 }
 
 .language-switcher {
@@ -936,18 +933,8 @@ body {
     flex-wrap: nowrap;
   }
 
-  .mode-switcher {
-    width: auto;
-  }
-
   .social-footer {
     flex-wrap: nowrap;
-  }
-
-  .mode-btn {
-    flex: 0 1 auto;
-    min-width: 76px;
-    padding-inline: 9px;
   }
 
   .left-panel,
@@ -1128,11 +1115,9 @@ body {
 .sidebar-mode-switcher {
   width: 100%;
   margin-top: auto;
-  flex: 0 0 auto;
 }
 
 .sidebar-mode-switcher .mode-btn {
-  flex: 1 1 50%;
   min-width: 0;
 }
 
@@ -1190,10 +1175,6 @@ body {
     height: 36px;
   }
 
-  .mode-btn {
-    padding-top: 7px;
-    padding-bottom: 7px;
-  }
 }
 
 
@@ -1233,20 +1214,5 @@ body {
     height: 32px;
   }
 
-  .mode-btn {
-    min-width: 64px;
-    font-size: var(--button-font-size);
-  }
 }
 
-
-@media (max-width: 700px) {
-  .sidebar-mode-switcher {
-    width: 100%;
-  }
-
-  .sidebar-mode-switcher .mode-btn {
-    flex: 1 1 50%;
-    min-width: 0;
-  }
-}
