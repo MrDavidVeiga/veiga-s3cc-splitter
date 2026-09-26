@@ -9,6 +9,10 @@
   <body>
     <div class="app-shell">
       <header class="topbar">
+        <div class="mode-switcher topbar-mode-switcher" role="tablist" aria-label="Tool mode">
+          <button id="mode-splitter-btn" class="mode-btn active" type="button" role="tab" aria-selected="true">Splitter</button>
+          <button id="mode-merger-btn" class="mode-btn" type="button" role="tab" aria-selected="false">Merger</button>
+        </div>
         <div class="language-switcher">
           <span id="lang-label"></span>
           <div class="lang-dropdown" id="lang-dropdown">
@@ -27,40 +31,32 @@
       <main class="layout">
         <aside class="left-panel card">
           <h1 class="app-title">Veiga's S3CC Splitter</h1>
-          <section class="control-block drag-zone" id="package-drop-zone">
-            <button id="pick-package-btn" class="primary-btn">Open package</button>
-            <div id="package-drop-hint" class="drop-hint">Select or drag a .package or .dbc here</div>
-          </section>
-          <div id="package-path" class="path-label hidden"></div>
-          <section class="control-block">
-            <button id="pick-destination-btn" class="primary-btn">Choose destination folder</button>
-          </section>
-          <div id="destination-path" class="path-label hidden"></div>
-          <section class="control-block hidden-controls" aria-hidden="true">
-            <div class="section-label hidden-label">Type</div>
-            <div class="type-tabs" id="type-tabs">
-              <button class="tab-btn active" data-type="casp">CASP</button>
-              <button class="tab-btn" data-type="face">FACE</button>
-              <button class="tab-btn" data-type="skintone">SkinTone</button>
-              <button class="tab-btn" data-type="pattern">Pattern</button>
-              <button class="tab-btn" data-type="all">All</button>
-            </div>
-          </section>
-          <section class="control-block hidden-controls" aria-hidden="true">
-            <div class="section-label hidden-label">Search</div>
-            <input id="search-input" class="text-input" type="text" placeholder="Search by name or type" />
-          </section>
-          <section class="control-block hidden-controls" aria-hidden="true">
-            <div class="section-label hidden-label">Options</div>
-            <label class="check-row"><input type="checkbox" id="opt-thumbs" checked /> <span>Include thumbnails</span></label>
-            <label class="check-row"><input type="checkbox" id="opt-compression" checked /> <span>Enable compression</span></label>
-            <label class="check-row"><input type="checkbox" id="opt-clone" checked /> <span>Create clone package</span></label>
-          </section>
-          <section class="control-block last-action">
-            <button id="scan-btn" class="primary-btn large">Load list</button>
-          </section>
+          <div id="splitter-controls" class="mode-controls">
+            <section class="control-block drag-zone" id="package-drop-zone">
+              <button id="pick-package-btn" class="primary-btn">Open Package</button>
+              <div id="package-drop-hint" class="drop-hint">Select or drag a .package or .dbc here</div>
+            </section>
+            <div id="package-path" class="path-label hidden"></div>
+            <section class="control-block hidden-controls" aria-hidden="true">
+              <div class="section-label hidden-label">Options</div>
+              <label class="check-row"><input type="checkbox" id="opt-thumbs" checked /> <span>Include thumbnails</span></label>
+              <label class="check-row"><input type="checkbox" id="opt-compression" checked /> <span>Enable compression</span></label>
+              <label class="check-row"><input type="checkbox" id="opt-clone" checked /> <span>Create clone package</span></label>
+            </section>
+            <section class="control-block last-action">
+              <button id="scan-btn" class="primary-btn large">Load List</button>
+            </section>
+          </div>
+          <div id="merger-controls" class="mode-controls hidden">
+            <section class="control-block drag-zone" id="merger-drop-zone">
+              <button id="merger-add-packages-btn" class="primary-btn">Add packages</button>
+              <div id="merger-add-hint" class="drop-hint">Select .package/.dbc files or drag files/folders here</div>
+            </section>
+            <div id="merger-source-count" class="path-label"></div>
+          </div>
         </aside>
         <section class="right-panel card">
+          <div id="splitter-workspace" class="mode-workspace">
           <div id="busy-state" class="panel-state hidden">
             <div class="progress-card">
               <div id="busy-title" class="state-title">Reading package...</div>
@@ -83,8 +79,23 @@
               <div class="selected-pill"><span id="selected-count">0 selected</span></div>
             </div>
             <div class="results-actions">
-              <button id="select-all-btn" class="secondary-btn">Select all</button>
-              <button id="select-none-btn" class="secondary-btn">Select none</button>
+              <div class="results-query-controls">
+                <div id="content-filter" class="content-filter">
+                  <span id="content-filter-label" class="content-filter-label">Filter:</span>
+                  <div class="lang-dropdown content-filter-dropdown" id="content-filter-dropdown">
+                    <button id="content-filter-toggle-btn" class="lang-toggle-btn content-filter-toggle-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
+                      <span id="content-filter-current" class="content-filter-current">All</span>
+                      <i id="content-filter-toggle-icon" class="fa-solid fa-angle-down" aria-hidden="true"></i>
+                    </button>
+                    <div id="content-filter-menu" class="lang-menu content-filter-menu hidden" role="listbox"></div>
+                  </div>
+                </div>
+                <input id="search-input" class="text-input results-search-input" type="text" placeholder="Search by name or Instance ID" autocomplete="off" spellcheck="false" aria-label="Search by name or Instance ID" />
+              </div>
+              <div class="results-selection-controls">
+                <button id="select-all-btn" class="secondary-btn">Select All</button>
+                <button id="select-none-btn" class="secondary-btn">Select None</button>
+              </div>
             </div>
 
 <div class="results-grid">
@@ -100,17 +111,57 @@
                 </div>
                 <div id="preview-name" class="preview-name"></div>
                 <div id="preview-kind" class="preview-kind"></div>
-                <div id="preview-key" class="preview-path preview-key-hidden"></div>
+                <div id="preview-key" class="preview-path"></div>
               </aside>
             </div>
-            <div class="footer-actions footer-actions-2">
-              <button id="export-btn" class="primary-btn">Export selection</button>
-              <button id="clear-btn" class="danger-btn">Clear</button>
-              <button id="zip-btn" class="primary-btn hidden-action" aria-hidden="true" tabindex="-1">Compress selection</button>
+            <div class="footer-actions">
+              <button id="export-btn" class="primary-btn">Export Selection</button>
+              <button id="remove-merged-btn" class="danger-btn hidden">Remove from Merged</button>
+              <button id="restore-manifest-btn" class="secondary-btn hidden">Unmerge</button>
+              <button id="clear-btn" class="danger-btn">Clear List</button>
+            </div>
+          </div>
+          </div>
+          <div id="merger-workspace" class="mode-workspace hidden">
+            <div class="results-header">
+              <div>
+                <div id="merger-title" class="state-title">Packages to Merge</div>
+                <div id="merger-summary" class="state-subtitle">No packages selected.</div>
+              </div>
+            </div>
+            <div id="merger-source-list" class="merger-source-list"></div>
+            <div id="merger-result" class="merger-result hidden"></div>
+            <div id="merger-footer-actions" class="footer-actions merger-footer-actions hidden">
+              <button id="merger-run-btn" class="primary-btn">Merge packages</button>
+              <button id="merger-clear-btn" class="danger-btn">Clear List</button>
             </div>
           </div>
         </section>
       </main>
+
+      <div id="app-modal" class="app-modal hidden" aria-hidden="true">
+        <section
+          id="app-modal-panel"
+          class="app-modal-panel"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="app-modal-title"
+          aria-describedby="app-modal-message"
+          tabindex="-1"
+        >
+          <div class="app-modal-header">
+            <h2 id="app-modal-title" class="app-modal-title"></h2>
+            <button id="app-modal-close" class="app-modal-close" type="button" aria-label="">
+              <span aria-hidden="true">×</span>
+            </button>
+          </div>
+          <div id="app-modal-message" class="app-modal-message"></div>
+          <div class="app-modal-actions">
+            <button id="app-modal-cancel" class="secondary-btn hidden" type="button"></button>
+            <button id="app-modal-primary" class="primary-btn" type="button"></button>
+          </div>
+        </section>
+      </div>
 
     <!-- SVG Symbols -->
     <svg aria-hidden="true" style="display:none" xmlns="http://www.w3.org/2000/svg">
