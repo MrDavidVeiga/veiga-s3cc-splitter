@@ -1,12 +1,14 @@
-name: portable
+name: Portable Builds
 
-run-name: portable by @${{ github.actor }}
+run-name: Portable builds by @${{ github.actor }}
 
 on:
   workflow_dispatch:
 
 jobs:
   build-portable:
+    name: ${{ matrix.artifact_name }}
+
     strategy:
       fail-fast: false
       matrix:
@@ -15,33 +17,61 @@ jobs:
             target: ""
             build_args: --no-bundle
             binary_name: veiga-s3cc-splitter.exe
-            artifact_name: windows-portable-exe
+            artifact_name: S3CC-Splitter-Windows-x64
+
+          - platform: windows-2022
+            target: i686-pc-windows-msvc
+            build_args: --target i686-pc-windows-msvc --no-bundle
+            binary_name: veiga-s3cc-splitter.exe
+            artifact_name: S3CC-Splitter-Windows-x86
+
+          - platform: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            build_args: --target aarch64-pc-windows-msvc --no-bundle
+            binary_name: veiga-s3cc-splitter.exe
+            artifact_name: S3CC-Splitter-Windows-ARM64
 
           - platform: ubuntu-22.04
             target: ""
             build_args: --no-bundle
             binary_name: veiga-s3cc-splitter
-            artifact_name: linux-portable-binary
+            artifact_name: S3CC-Splitter-Linux-x64
+
+          - platform: ubuntu-22.04
+            target: i686-unknown-linux-gnu
+            build_args: --target i686-unknown-linux-gnu --no-bundle
+            binary_name: veiga-s3cc-splitter
+            artifact_name: S3CC-Splitter-Linux-x86
+
+          - platform: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            build_args: --target aarch64-unknown-linux-gnu --no-bundle
+            binary_name: veiga-s3cc-splitter
+            artifact_name: S3CC-Splitter-Linux-ARM64
 
           - platform: macos-15-intel
             target: x86_64-apple-darwin
             build_args: --target x86_64-apple-darwin --no-bundle
             binary_name: veiga-s3cc-splitter
-            artifact_name: macos-intel-portable-binary
+            artifact_name: S3CC-Splitter-macOS-Intel
 
           - platform: macos-15
             target: aarch64-apple-darwin
             build_args: --target aarch64-apple-darwin --no-bundle
             binary_name: veiga-s3cc-splitter
-            artifact_name: macos-apple-silicon-portable-binary
+            artifact_name: S3CC-Splitter-macOS-Apple-Silicon
 
     runs-on: ${{ matrix.platform }}
 
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
     steps:
-      - uses: actions/checkout@v5
+      - name: Checkout
+        uses: actions/checkout@v5
 
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu') && matrix.target != 'i686-unknown-linux-gnu'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -54,6 +84,19 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev
+
+      - name: Install Linux x86 dependencies
+        if: matrix.target == 'i686-unknown-linux-gnu'
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-i686-linux-gnu \
+            g++-i686-linux-gnu \
+            pkg-config \
+            libwebkit2gtk-4.1-dev:i386 \
+            libssl-dev:i386 \
+            librsvg2-dev:i386
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -76,55 +119,85 @@ jobs:
         working-directory: veiga-s3cc-splitter
         run: npm ci
 
+      - name: Run frontend tests
+        working-directory: veiga-s3cc-splitter
+        shell: bash
+        run: |
+          node src/filter-logic.test.mjs
+          node src/remove-confirm.test.mjs
+          node src/modal.test.mjs
+
+      - name: Check Rust workspace
+        run: cargo check --workspace
+
+      - name: Run Rust tests
+        run: cargo test --workspace
+
       - name: Build portable binary
+        if: matrix.target != 'i686-unknown-linux-gnu'
         working-directory: veiga-s3cc-splitter
         run: npm run tauri build -- ${{ matrix.build_args }}
 
-      - name: Locate portable binary on Windows
-        if: matrix.platform == 'windows-2022'
+      - name: Build Linux x86 portable binary
+        if: matrix.target == 'i686-unknown-linux-gnu'
+        working-directory: veiga-s3cc-splitter
+        env:
+          PKG_CONFIG_ALLOW_CROSS: "1"
+          PKG_CONFIG_LIBDIR: /usr/lib/i386-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          CC_i686_unknown_linux_gnu: i686-linux-gnu-gcc
+          CXX_i686_unknown_linux_gnu: i686-linux-gnu-g++
+          CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER: i686-linux-gnu-gcc
+        run: npm run tauri build -- ${{ matrix.build_args }}
+
+      - name: Locate Windows binary
+        if: startsWith(matrix.platform, 'windows')
         id: locate_windows
         shell: pwsh
         run: |
           $file = Get-ChildItem -Path "target" -Filter "${{ matrix.binary_name }}" -Recurse -File |
-            Where-Object { $_.FullName -match '\\release\\' -and $_.FullName -notmatch '\\bundle\\' } |
+            Where-Object {
+              $_.FullName -match '\\release\\' -and
+              $_.FullName -notmatch '\\bundle\\'
+            } |
             Select-Object -First 1 -ExpandProperty FullName
 
           if (-not $file) {
-            Write-Host "Arquivos encontrados em target:"
+            Write-Host "Files found in target:"
             Get-ChildItem -Path "target" -Recurse -File | Select-Object FullName
             throw "Portable binary not found."
           }
 
           "artifact_path=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Locate portable binary on Unix
-        if: matrix.platform != 'windows-2022'
+      - name: Locate Unix binary
+        if: ${{ !startsWith(matrix.platform, 'windows') }}
         id: locate_unix
         shell: bash
         run: |
           set -euo pipefail
+
           file_path="$(find target -type f -name "${{ matrix.binary_name }}" ! -path "*/bundle/*" | grep "/release/" | head -n 1 || true)"
 
           if [ -z "$file_path" ]; then
-            echo "Arquivos encontrados em target:"
+            echo "Files found in target:"
             find target -type f | sort || true
             exit 1
           fi
 
           echo "artifact_path=$file_path" >> "$GITHUB_OUTPUT"
 
-      - name: Upload portable artifact on Windows
-        if: matrix.platform == 'windows-2022'
-        uses: actions/upload-artifact@v4
+      - name: Upload Windows portable
+        if: startsWith(matrix.platform, 'windows')
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ steps.locate_windows.outputs.artifact_path }}
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload portable artifact on Unix
-        if: matrix.platform != 'windows-2022'
-        uses: actions/upload-artifact@v4
+      - name: Upload Unix portable
+        if: ${{ !startsWith(matrix.platform, 'windows') }}
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ steps.locate_unix.outputs.artifact_path }}
