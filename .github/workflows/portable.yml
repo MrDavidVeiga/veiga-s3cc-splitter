@@ -189,20 +189,31 @@ jobs:
 
           echo "artifact_path=$file_path" >> "$GITHUB_OUTPUT"
 
-      - name: Upload Windows portable
+      - name: Prepare Windows portable package
         if: startsWith(matrix.platform, 'windows')
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ steps.locate_windows.outputs.artifact_path }}
-          if-no-files-found: error
-          retention-days: 30
+        shell: pwsh
+        run: |
+          $out = Join-Path $PWD "portable/${{ matrix.artifact_name }}"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item "${{ steps.locate_windows.outputs.artifact_path }}" (Join-Path $out "${{ matrix.binary_name }}")
+          Copy-Item "README.txt" (Join-Path $out "README.txt")
+          Copy-Item "LICENSE.txt" (Join-Path $out "LICENSE.txt")
 
-      - name: Upload Unix portable
+      - name: Prepare Unix portable package
         if: ${{ !startsWith(matrix.platform, 'windows') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="portable/${{ matrix.artifact_name }}"
+          mkdir -p "$out"
+          cp "${{ steps.locate_unix.outputs.artifact_path }}" "$out/${{ matrix.binary_name }}"
+          cp README.txt "$out/README.txt"
+          cp LICENSE.txt "$out/LICENSE.txt"
+
+      - name: Upload portable package
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ steps.locate_unix.outputs.artifact_path }}
+          path: portable/${{ matrix.artifact_name }}/*
           if-no-files-found: error
           retention-days: 30
