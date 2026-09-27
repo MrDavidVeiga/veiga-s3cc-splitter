@@ -80,11 +80,19 @@ pub struct ResourceItem {
     pub content_categories: Vec<String>,
 }
 
+#[derive(Debug, Serialize, Clone, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceRelation {
+    pub duplicate_count: usize,
+    pub tgi_conflict_count: usize,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanResult {
     pub items: Vec<ResourceItem>,
     pub manifest_package_count: usize,
+    pub relations: BTreeMap<String, ResourceRelation>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3290,6 +3298,302 @@ fn expand_selection_for_export(
     Ok(selected)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct LogicalAtomKey {
+    resource_type: u32,
+    resource_group: u32,
+    data_len: usize,
+    hash_a: u64,
+    hash_b: u64,
+}
+
+#[derive(Clone, Debug)]
+struct LogicalAtom {
+    key: LogicalAtomKey,
+    entry_index: usize,
+}
+
+#[derive(Clone, Debug)]
+struct LogicalProfile {
+    atoms: Vec<LogicalAtom>,
+}
+
+fn relation_ignored_resource(parts: ResourceKeyParts) -> bool {
+    parts.resource_type == TYPE_KEY
+        || parts.resource_type == TYPE_PACKAGE_MANIFEST
+        || is_manifest_tgi(parts.resource_type, parts.resource_group, parts.instance)
+}
+
+fn relation_hash_pair(data: &[u8]) -> (u64, u64) {
+    let mut a = 0xcbf29ce484222325u64;
+    let mut b = 0x84222325cbf29ce4u64 ^ data.len() as u64;
+
+    for &byte in data {
+        a ^= byte as u64;
+        a = a.wrapping_mul(0x100000001b3);
+
+        b ^= (byte as u64).wrapping_add(0x9e3779b97f4a7c15);
+        b = b.rotate_left(13).wrapping_mul(0xff51afd7ed558ccd);
+        b ^= b >> 29;
+    }
+
+    (a, b)
+}
+
+fn relation_tgi_index(package: &DBPF<'_>) -> HashMap<ResourceKeyParts, Vec<usize>> {
+    let mut index: HashMap<ResourceKeyParts, Vec<usize>> = HashMap::new();
+
+    for (entry_index, entry) in package.files.iter().enumerate() {
+        let parts = ResourceKeyParts {
+            resource_type: entry.resource_type,
+            resource_group: entry.resource_group,
+            instance: entry.instance,
+        };
+        index.entry(parts).or_default().push(entry_index);
+    }
+
+    index
+}
+
+fn relation_entries_have_same_payload(package: &DBPF<'_>, indices: &[usize]) -> bool {
+    let Some(first_index) = indices.first().copied() else {
+        return true;
+    };
+    let first = package.files[first_index].data();
+    indices
+        .iter()
+        .copied()
+        .skip(1)
+        .all(|entry_index| package.files[entry_index].data() == first)
+}
+
+fn relation_tgi_conflicts(
+    package: &DBPF<'_>,
+    tgi_index: &HashMap<ResourceKeyParts, Vec<usize>>,
+) -> HashMap<ResourceKeyParts, usize> {
+    let mut conflicts = HashMap::new();
+
+    for (parts, indices) in tgi_index {
+        if relation_ignored_resource(*parts) || indices.len() < 2 {
+            continue;
+        }
+        if !relation_entries_have_same_payload(package, indices) {
+            conflicts.insert(*parts, indices.len());
+        }
+    }
+
+    conflicts
+}
+
+fn logical_profile_for_item(
+    package: &DBPF<'_>,
+    item: &ResourceItem,
+    name_map: &BTreeMap<u64, String>,
+    tgi_index: &HashMap<ResourceKeyParts, Vec<usize>>,
+    tgi_conflicts: &HashMap<ResourceKeyParts, usize>,
+    atom_cache: &mut HashMap<usize, LogicalAtomKey>,
+) -> Result<(Option<LogicalProfile>, usize), String> {
+    let base_keys: HashSet<String> = item
+        .key
+        .split("||")
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+
+    if base_keys.is_empty() {
+        return Ok((None, 0));
+    }
+
+    let expanded = expand_selection_for_export(package, &base_keys, false, name_map)?;
+    let mut ordered_keys: Vec<String> = expanded.into_iter().collect();
+    ordered_keys.sort();
+
+    let mut atoms = Vec::new();
+    let mut conflict_count = 0usize;
+
+    for key in ordered_keys {
+        let parts = parse_key(&key)?;
+        if relation_ignored_resource(parts) {
+            continue;
+        }
+
+        let Some(indices) = tgi_index.get(&parts) else {
+            continue;
+        };
+        if indices.is_empty() {
+            continue;
+        }
+
+        if let Some(count) = tgi_conflicts.get(&parts) {
+            conflict_count = conflict_count.max(*count);
+            continue;
+        }
+
+        let entry_index = indices[0];
+        let atom_key = *atom_cache.entry(entry_index).or_insert_with(|| {
+            let data = package.files[entry_index].data();
+            let (hash_a, hash_b) = relation_hash_pair(data);
+            LogicalAtomKey {
+                resource_type: parts.resource_type,
+                resource_group: parts.resource_group,
+                data_len: data.len(),
+                hash_a,
+                hash_b,
+            }
+        });
+        atoms.push(LogicalAtom {
+            key: atom_key,
+            entry_index,
+        });
+    }
+
+    if conflict_count > 1 {
+        return Ok((None, conflict_count));
+    }
+    if atoms.is_empty() {
+        return Ok((None, 0));
+    }
+
+    atoms.sort_by_key(|atom| atom.key);
+    Ok((Some(LogicalProfile { atoms }), 0))
+}
+
+fn logical_profiles_exactly_equal(
+    package: &DBPF<'_>,
+    left: &LogicalProfile,
+    right: &LogicalProfile,
+) -> bool {
+    if left.atoms.len() != right.atoms.len() {
+        return false;
+    }
+
+    let left_keys: Vec<LogicalAtomKey> = left.atoms.iter().map(|atom| atom.key).collect();
+    let right_keys: Vec<LogicalAtomKey> = right.atoms.iter().map(|atom| atom.key).collect();
+    if left_keys != right_keys {
+        return false;
+    }
+
+    let mut start = 0usize;
+    while start < left.atoms.len() {
+        let atom_key = left.atoms[start].key;
+        let mut end = start + 1;
+        while end < left.atoms.len() && left.atoms[end].key == atom_key {
+            end += 1;
+        }
+
+        let mut used = vec![false; end - start];
+        for left_atom in &left.atoms[start..end] {
+            let left_data = package.files[left_atom.entry_index].data();
+            let mut matched = false;
+
+            for (offset, right_atom) in right.atoms[start..end].iter().enumerate() {
+                if used[offset] {
+                    continue;
+                }
+                let right_data = package.files[right_atom.entry_index].data();
+                if left_data == right_data {
+                    used[offset] = true;
+                    matched = true;
+                    break;
+                }
+            }
+
+            if !matched {
+                return false;
+            }
+        }
+
+        start = end;
+    }
+
+    true
+}
+
+fn build_resource_relations(
+    package: &DBPF<'_>,
+    name_map: &BTreeMap<u64, String>,
+    items: &[ResourceItem],
+) -> BTreeMap<String, ResourceRelation> {
+    let tgi_index = relation_tgi_index(package);
+    let tgi_conflicts = relation_tgi_conflicts(package, &tgi_index);
+    let mut atom_cache: HashMap<usize, LogicalAtomKey> = HashMap::new();
+    let mut profiles: Vec<Option<LogicalProfile>> = vec![None; items.len()];
+    let mut relations: Vec<ResourceRelation> = vec![ResourceRelation::default(); items.len()];
+
+    for (item_index, item) in items.iter().enumerate() {
+        let Ok((profile, conflict_count)) = logical_profile_for_item(
+            package,
+            item,
+            name_map,
+            &tgi_index,
+            &tgi_conflicts,
+            &mut atom_cache,
+        )
+        else {
+            continue;
+        };
+        if conflict_count > 1 {
+            relations[item_index].tgi_conflict_count = conflict_count;
+        } else {
+            profiles[item_index] = profile;
+        }
+    }
+
+    let mut buckets: HashMap<Vec<LogicalAtomKey>, Vec<usize>> = HashMap::new();
+    for (item_index, profile) in profiles.iter().enumerate() {
+        let Some(profile) = profile else {
+            continue;
+        };
+        let summary: Vec<LogicalAtomKey> = profile.atoms.iter().map(|atom| atom.key).collect();
+        buckets.entry(summary).or_default().push(item_index);
+    }
+
+    for candidates in buckets.values().filter(|candidates| candidates.len() > 1) {
+        let mut remaining = candidates.clone();
+
+        while let Some(seed) = remaining.pop() {
+            let Some(seed_profile) = profiles[seed].as_ref() else {
+                continue;
+            };
+
+            let mut exact_group = vec![seed];
+            let mut keep = Vec::new();
+
+            for candidate in remaining {
+                let Some(candidate_profile) = profiles[candidate].as_ref() else {
+                    keep.push(candidate);
+                    continue;
+                };
+
+                if logical_profiles_exactly_equal(package, seed_profile, candidate_profile) {
+                    exact_group.push(candidate);
+                } else {
+                    keep.push(candidate);
+                }
+            }
+
+            remaining = keep;
+
+            if exact_group.len() > 1 {
+                let duplicate_count = exact_group.len();
+                for item_index in exact_group {
+                    relations[item_index].duplicate_count = duplicate_count;
+                }
+            }
+        }
+    }
+
+    let mut by_key = BTreeMap::new();
+    for (item, relation) in items.iter().zip(relations.into_iter()) {
+        if relation.duplicate_count > 1 || relation.tgi_conflict_count > 1 {
+            by_key.insert(item.key.clone(), relation);
+        }
+    }
+
+    by_key
+}
+
 fn manifest_removal_plan_sets(
     package: &DBPF<'_>,
     manifest: &MergeManifest,
@@ -5064,9 +5368,12 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
             items
         };
 
+        let relations = build_resource_relations(&package, &name_map, &items);
+
         Ok(ScanResult {
             items,
             manifest_package_count,
+            relations,
         })
     })
     .map_err(|_| "Falha ao carregar a lista de recursos deste package.".to_string())?
@@ -5546,6 +5853,190 @@ mod remove_selected_tests {
         ));
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn relation_for<'a>(
+        scan: &'a ScanResult,
+        key: &str,
+    ) -> ResourceRelation {
+        scan.relations.get(key).cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn same_name_and_shared_dependency_do_not_make_different_items_duplicates() {
+        let root = test_dir("same-name-shared-dependency");
+        let path = root.join("SameNameSharedDependency.package");
+        let first = 0xAAAA_2000_0000_0001u64;
+        let second = 0xBBBB_2000_0000_0002u64;
+        let shared = 0xCCCC_2000_0000_0003u64;
+        let shared_key_text = format!("key:{TYPE_IMG:08X}:{:08X}:{shared:016X}", 0u32);
+
+        write_test_package(
+            &path,
+            &[
+                (
+                    TYPE_XML,
+                    0,
+                    first,
+                    format!("<first>{shared_key_text}</first>").into_bytes(),
+                ),
+                (
+                    TYPE_XML,
+                    0,
+                    second,
+                    format!("<second>{shared_key_text}</second>").into_bytes(),
+                ),
+                (TYPE_IMG, 0, shared, vec![7, 7, 7, 7]),
+            ],
+        );
+
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let name_map = BTreeMap::new();
+        let items = vec![
+            ResourceItem {
+                label: "Same Internal Name".to_string(),
+                key: test_resource_key(TYPE_XML, 0, first),
+                kind: "XML".to_string(),
+                details: String::new(),
+                content_categories: Vec::new(),
+            },
+            ResourceItem {
+                label: "Same Internal Name".to_string(),
+                key: test_resource_key(TYPE_XML, 0, second),
+                kind: "XML".to_string(),
+                details: String::new(),
+                content_categories: Vec::new(),
+            },
+        ];
+
+        let relations = build_resource_relations(&package, &name_map, &items);
+        assert!(relations.is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scan_marks_exact_logical_content_as_duplicate_even_with_different_tgi() {
+        let root = test_dir("duplicate-content");
+        let path = root.join("DuplicateContent.package");
+        let first = 0xAAAA_0000_0000_0001u64;
+        let second = 0xBBBB_0000_0000_0002u64;
+        let payload = vec![1, 2, 3, 4, 5, 6];
+
+        write_test_package(
+            &path,
+            &[
+                (TYPE_CASP, 0, first, payload.clone()),
+                (TYPE_CASP, 0, second, payload),
+            ],
+        );
+
+        let scan = scan_package_resources(ScanPayload {
+            package_path: path.display().to_string(),
+            resource_type: "casp".to_string(),
+            search: None,
+        })
+        .unwrap();
+
+        assert_eq!(scan.items.len(), 2);
+        assert_ne!(scan.items[0].label, scan.items[1].label);
+        for item in &scan.items {
+            let relation = relation_for(&scan, &item.key);
+            assert_eq!(relation.duplicate_count, 2);
+            assert_eq!(relation.tgi_conflict_count, 0);
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scan_does_not_mark_different_payloads_as_duplicate() {
+        let root = test_dir("different-content");
+        let path = root.join("DifferentContent.package");
+        let first = 0xAAAA_1000_0000_0001u64;
+        let second = 0xBBBB_1000_0000_0002u64;
+
+        write_test_package(
+            &path,
+            &[
+                (TYPE_CASP, 0, first, vec![1, 2, 3]),
+                (TYPE_CASP, 0, second, vec![1, 2, 4]),
+            ],
+        );
+
+        let scan = scan_package_resources(ScanPayload {
+            package_path: path.display().to_string(),
+            resource_type: "casp".to_string(),
+            search: None,
+        })
+        .unwrap();
+
+        assert_eq!(scan.items.len(), 2);
+        assert!(scan.relations.is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scan_reports_tgi_conflict_when_same_tgi_has_different_payloads() {
+        let root = test_dir("tgi-conflict");
+        let path = root.join("TgiConflict.package");
+        let instance = 0xCCCC_0000_0000_0003u64;
+
+        write_test_package(
+            &path,
+            &[
+                (TYPE_CASP, 0, instance, vec![1, 2, 3]),
+                (TYPE_CASP, 0, instance, vec![9, 8, 7]),
+            ],
+        );
+
+        let scan = scan_package_resources(ScanPayload {
+            package_path: path.display().to_string(),
+            resource_type: "casp".to_string(),
+            search: None,
+        })
+        .unwrap();
+
+        assert_eq!(scan.items.len(), 2);
+        let key = scan.items[0].key.clone();
+        let relation = relation_for(&scan, &key);
+        assert_eq!(relation.duplicate_count, 0);
+        assert_eq!(relation.tgi_conflict_count, 2);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scan_marks_repeated_identical_tgi_as_duplicate_not_conflict() {
+        let root = test_dir("repeated-identical-tgi");
+        let path = root.join("RepeatedIdenticalTgi.package");
+        let instance = 0xDDDD_0000_0000_0004u64;
+        let payload = vec![4, 4, 4, 4];
+
+        write_test_package(
+            &path,
+            &[
+                (TYPE_CASP, 0, instance, payload.clone()),
+                (TYPE_CASP, 0, instance, payload),
+            ],
+        );
+
+        let scan = scan_package_resources(ScanPayload {
+            package_path: path.display().to_string(),
+            resource_type: "casp".to_string(),
+            search: None,
+        })
+        .unwrap();
+
+        assert_eq!(scan.items.len(), 2);
+        let key = scan.items[0].key.clone();
+        let relation = relation_for(&scan, &key);
+        assert_eq!(relation.duplicate_count, 2);
+        assert_eq!(relation.tgi_conflict_count, 0);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

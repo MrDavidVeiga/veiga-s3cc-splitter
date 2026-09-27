@@ -18,6 +18,7 @@ import {
   selectVisibleItems,
   visibleItemsForFilter,
 } from "./filter-logic.js";
+import { buildSameNameCounts, displayRelationForItem, sameNameCountForItem } from "./label-relations.js";
 
 const countForm = (value, singular, plural) => Number(value) === 1 ? singular : plural;
 
@@ -110,6 +111,11 @@ const translations = {
     searchPlaceholder: "Search by name or Instance ID",
     instanceLabel: "Instance",
     duplicateLabel: (count) => `Duplicate ×${count}`,
+    duplicateHint: "Verified duplicate logical content. Names alone are never used to make this classification.",
+    tgiConflictLabel: (count) => `TGI conflict ×${count}`,
+    tgiConflictHint: "The same TGI appears with different payload data in this item or one of its dependencies.",
+    sameNameLabel: (count) => `Same name ×${count}`,
+    sameNameHint: "These items share the same internal/display name, but they have not been identified as duplicate content.",
     resourcesTitle: "Resources",
     noPackageLoaded: "No package loaded.",
     packageReady: (count) => `${count} found:`,
@@ -236,6 +242,11 @@ const translations = {
     searchPlaceholder: "Buscar por nome ou Instance ID",
     instanceLabel: "Instance",
     duplicateLabel: (count) => `Duplicado ×${count}`,
+    duplicateHint: "Conteúdo lógico duplicado verificado. O nome sozinho nunca é usado para esta classificação.",
+    tgiConflictLabel: (count) => `Conflito de TGI ×${count}`,
+    tgiConflictHint: "O mesmo TGI aparece com dados diferentes neste item ou em uma de suas dependências.",
+    sameNameLabel: (count) => `Mesmo nome ×${count}`,
+    sameNameHint: "Estes itens usam o mesmo nome interno/exibido, mas não foram identificados como conteúdo duplicado.",
     resourcesTitle: "Recursos",
     noPackageLoaded: "Nenhum package carregado.",
     packageReady: (count) => `${count} ${count === 1 ? "encontrado" : "encontrados"}:`,
@@ -362,6 +373,11 @@ const translations = {
     searchPlaceholder: "Buscar por nombre o Instance ID",
     instanceLabel: "Instance",
     duplicateLabel: (count) => `Duplicado ×${count}`,
+    duplicateHint: "Contenido lógico duplicado verificado. El nombre por sí solo nunca se usa para esta clasificación.",
+    tgiConflictLabel: (count) => `Conflicto TGI ×${count}`,
+    tgiConflictHint: "El mismo TGI aparece con datos diferentes en este elemento o en una de sus dependencias.",
+    sameNameLabel: (count) => `Mismo nombre ×${count}`,
+    sameNameHint: "Estos elementos usan el mismo nombre interno/visible, pero no han sido identificados como contenido duplicado.",
     resourcesTitle: "Recursos",
     noPackageLoaded: "Ningún package cargado.",
     packageReady: (count) => `${count} ${count === 1 ? "encontrado" : "encontrados"}:`,
@@ -867,24 +883,19 @@ function renderList() {
   el.resourceList.innerHTML = "";
   const visibleResources = getVisibleResources();
 
-  const duplicateCounts = new Map();
-  for (const item of visibleResources) {
-    const duplicateKey = String(item.label || "").trim().toLowerCase();
-    if (!duplicateKey) continue;
-    duplicateCounts.set(duplicateKey, (duplicateCounts.get(duplicateKey) || 0) + 1);
-  }
+  const sameNameCounts = buildSameNameCounts(visibleResources);
 
   for (const item of visibleResources) {
     const displayType = getDisplayType(item);
     const displayDetails = getDisplayDetails(item);
 
-    const duplicateKey = String(item.label || "").trim().toLowerCase();
-    const duplicateCount = duplicateCounts.get(duplicateKey) || 0;
+    const sameNameCount = sameNameCountForItem(item, sameNameCounts);
+    const relation = displayRelationForItem(item, sameNameCount);
     const row = document.createElement("div");
     row.className =
       "resource-row" +
       (state.preview?.key === item.key ? " active" : "") +
-      (duplicateCount > 1 ? " duplicate" : "");
+      (relation ? ` ${relation.kind}` : "");
 
     const checkWrap = document.createElement("div");
     checkWrap.className = "resource-check";
@@ -901,8 +912,18 @@ function renderList() {
     const metaLines = [];
     if (displayType) metaLines.push(displayType);
     if (displayDetails) metaLines.push(displayDetails);
-    if (duplicateCount > 1) {
-      metaLines.push(`<span class="duplicate-badge">${t("duplicateLabel", duplicateCount)}</span>`);
+    if (relation?.kind === "tgi-conflict") {
+      metaLines.push(
+        `<span class="tgi-conflict-badge" title="${t("tgiConflictHint")}">${t("tgiConflictLabel", relation.count)}</span>`,
+      );
+    } else if (relation?.kind === "duplicate") {
+      metaLines.push(
+        `<span class="duplicate-badge" title="${t("duplicateHint")}">${t("duplicateLabel", relation.count)}</span>`,
+      );
+    } else if (relation?.kind === "same-name") {
+      metaLines.push(
+        `<span class="same-name-badge" title="${t("sameNameHint")}">${t("sameNameLabel", relation.count)}</span>`,
+      );
     }
 
     button.innerHTML = `
@@ -1032,7 +1053,11 @@ async function scanPackage() {
       },
     });
 
-    state.resources = result.items || [];
+    const relations = result.relations || {};
+    state.resources = (result.items || []).map((item) => ({
+      ...item,
+      relation: relations[item.key] || null,
+    }));
     state.manifestPackageCount = result.manifestPackageCount || 0;
 
     state.selectedKeys = [];

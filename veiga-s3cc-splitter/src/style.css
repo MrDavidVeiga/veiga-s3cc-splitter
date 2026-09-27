@@ -643,17 +643,61 @@ body {
   background: rgba(97, 132, 34, 0.08);
 }
 
-.resource-row.duplicate {
+.resource-row.same-name {
   border-color: rgba(202, 156, 55, 0.34);
   background: rgba(202, 156, 55, 0.06);
 }
 
-.resource-row.duplicate:hover,
-.resource-row.duplicate.active {
+.resource-row.same-name:hover,
+.resource-row.same-name.active {
   border-color: rgba(202, 156, 55, 0.58);
 }
 
+.resource-row.duplicate {
+  border-color: rgba(127, 173, 45, 0.42);
+  background: rgba(127, 173, 45, 0.07);
+}
+
+.resource-row.duplicate:hover,
+.resource-row.duplicate.active {
+  border-color: rgba(127, 173, 45, 0.68);
+}
+
+.resource-row.tgi-conflict {
+  border-color: rgba(196, 72, 72, 0.48);
+  background: rgba(196, 72, 72, 0.08);
+}
+
+.resource-row.tgi-conflict:hover,
+.resource-row.tgi-conflict.active {
+  border-color: rgba(196, 72, 72, 0.74);
+}
+
+.duplicate-badge,
+.tgi-conflict-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-top: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 0.7rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
 .duplicate-badge {
+  border: 1px solid rgba(127, 173, 45, 0.52);
+  background: rgba(127, 173, 45, 0.12);
+}
+
+.tgi-conflict-badge {
+  border: 1px solid rgba(196, 72, 72, 0.58);
+  background: rgba(196, 72, 72, 0.12);
+}
+
+.same-name-badge {
   display: inline-flex;
   align-items: center;
   width: fit-content;

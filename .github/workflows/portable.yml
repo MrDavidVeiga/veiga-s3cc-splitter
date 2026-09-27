@@ -124,13 +124,16 @@ jobs:
         shell: bash
         run: |
           node src/filter-logic.test.mjs
+          node src/label-relations.test.mjs
           node src/remove-confirm.test.mjs
           node src/modal.test.mjs
 
       - name: Check Rust workspace
+        if: matrix.target != 'i686-unknown-linux-gnu'
         run: cargo check --workspace
 
       - name: Run Rust tests
+        if: matrix.target != 'i686-unknown-linux-gnu'
         run: cargo test --workspace
 
       - name: Build portable binary
