@@ -55,6 +55,8 @@ const TYPE_FTPT: u32 = 0xD382BF57;
 const TYPE_LITE: u32 = 0x03B4C61D;
 const TYPE_RIG: u32 = 0x8EAF13DE;
 const TYPE_ICON: u32 = 0x2E75C765;
+const TYPE_CLIP: u32 = 0x6B20C4F3;
+const TYPE_S3SA: u32 = 0x073FAA07;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -257,6 +259,8 @@ fn kind_from_type(resource_type: u32) -> &'static str {
         TYPE_LITE => "LITE",
         TYPE_RIG => "RIG",
         TYPE_ICON => "ICON",
+        TYPE_CLIP => "CLIP",
+        TYPE_S3SA => "S3SA",
         _ => "Resource",
     }
 }
@@ -292,6 +296,8 @@ fn extension_from_type(resource_type: u32) -> &'static str {
         TYPE_LITE => "light",
         TYPE_RIG => "grannyrig",
         TYPE_ICON => "png",
+        TYPE_CLIP => "clip",
+        TYPE_S3SA => "s3sa",
         _ => "bin",
     }
 }
@@ -358,9 +364,16 @@ fn filter_matches(entry: &DBPFEntry<'_>, mode: &str) -> bool {
         "skintone" => entry.resource_type == ResourceType::SkinTone.to_u32().unwrap(),
         "pattern" => entry.resource_type == ResourceType::PTRN.to_u32().unwrap(),
         "object" => entry.resource_type == TYPE_OBJD,
+        "clip" => entry.resource_type == TYPE_CLIP,
         _ => matches!(
             entry.resource_type,
-            TYPE_CASP | TYPE_FACE | TYPE_SKINTONE | TYPE_PATTERN | TYPE_XML | TYPE_OBJD
+            TYPE_CASP
+                | TYPE_FACE
+                | TYPE_SKINTONE
+                | TYPE_PATTERN
+                | TYPE_XML
+                | TYPE_OBJD
+                | TYPE_CLIP
         ),
     }
 }
@@ -852,6 +865,13 @@ fn content_categories_for_key(
                 push_unique_category(&mut categories, "Other CASP");
             }
         }
+        TYPE_CLIP => {
+            if pose_list_clip_instances(package).contains(&parts.instance) {
+                push_unique_category(&mut categories, "Pose");
+            } else {
+                push_unique_category(&mut categories, "Clip");
+            }
+        }
         TYPE_OBJD => {
             let label = package
                 .files
@@ -1017,6 +1037,60 @@ fn casp_unknown1_name(data: &[u8]) -> Option<String> {
     }
 }
 
+fn parse_key_names_data(data: &[u8]) -> BTreeMap<u64, String> {
+    let mut names = BTreeMap::new();
+    if data.len() < 8 {
+        return names;
+    }
+    let Some(count) = read_le_u32(data, 4).map(|v| v as usize) else {
+        return names;
+    };
+    if count > 100_000 {
+        return names;
+    }
+
+    let mut offset = 8usize;
+    for _ in 0..count {
+        if offset + 12 > data.len() {
+            break;
+        }
+        let Some(instance) = read_le_u64(data, offset) else {
+            break;
+        };
+        let Some(length) = read_le_u32(data, offset + 8).map(|v| v as usize) else {
+            break;
+        };
+        offset += 12;
+        if length > 4096 || offset + length > data.len() {
+            break;
+        }
+        let raw = &data[offset..offset + length];
+        offset += length;
+        let name = String::from_utf8_lossy(raw)
+            .trim_matches('\0')
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            names.entry(instance).or_insert(name);
+        }
+    }
+    names
+}
+
+fn build_key_data_from_names(names: &BTreeMap<u64, String>) -> Vec<u8> {
+    let mut out =
+        Vec::with_capacity(8 + names.values().map(|name| 12 + name.len()).sum::<usize>());
+    out.extend_from_slice(&1u32.to_le_bytes());
+    out.extend_from_slice(&(names.len() as u32).to_le_bytes());
+    for (instance, name) in names {
+        let raw = name.as_bytes();
+        out.extend_from_slice(&instance.to_le_bytes());
+        out.extend_from_slice(&(raw.len() as u32).to_le_bytes());
+        out.extend_from_slice(raw);
+    }
+    out
+}
+
 fn raw_package_key_names(package: &DBPF<'_>) -> BTreeMap<u64, String> {
     let mut names = BTreeMap::new();
     for entry in package
@@ -1024,43 +1098,195 @@ fn raw_package_key_names(package: &DBPF<'_>) -> BTreeMap<u64, String> {
         .iter()
         .filter(|entry| entry.resource_type == TYPE_KEY)
     {
-        let data = entry.data();
-        if data.len() < 8 {
-            continue;
-        }
-        let Some(count) = read_le_u32(data, 4).map(|v| v as usize) else {
-            continue;
-        };
-        if count > 100_000 {
-            continue;
-        }
-        let mut offset = 8usize;
-        for _ in 0..count {
-            if offset + 12 > data.len() {
-                break;
-            }
-            let Some(instance) = read_le_u64(data, offset) else {
-                break;
-            };
-            let Some(length) = read_le_u32(data, offset + 8).map(|v| v as usize) else {
-                break;
-            };
-            offset += 12;
-            if length > 4096 || offset + length > data.len() {
-                break;
-            }
-            let raw = &data[offset..offset + length];
-            offset += length;
-            let name = String::from_utf8_lossy(raw)
-                .trim_matches('\0')
-                .trim()
-                .to_string();
-            if !name.is_empty() {
-                names.entry(instance).or_insert(name);
-            }
+        for (instance, name) in parse_key_names_data(entry.data()) {
+            names.entry(instance).or_insert(name);
         }
     }
     names
+}
+
+fn writable_key_names(source: &WritablePackage) -> Result<BTreeMap<u64, String>, String> {
+    let mut names = BTreeMap::new();
+    for entry in source.entries.iter().filter(|entry| entry.type_id == TYPE_KEY) {
+        let data = source.get_uncompressed_data(entry).map_err(|e| {
+            format!(
+                "Não foi possível ler o _KEY {}: {e}",
+                key_string_from_writable(entry)
+            )
+        })?;
+        for (instance, name) in parse_key_names_data(&data) {
+            names.entry(instance).or_insert(name);
+        }
+    }
+    Ok(names)
+}
+
+fn merged_clip_key_data(sources: &[WritablePackage]) -> Result<Option<Vec<u8>>, String> {
+    let mut merged = BTreeMap::<u64, String>::new();
+
+    for source in sources {
+        let clip_instances: HashSet<u64> = source
+            .entries
+            .iter()
+            .filter(|entry| entry.type_id == TYPE_CLIP)
+            .map(|entry| entry.instance)
+            .collect();
+        if clip_instances.is_empty() {
+            continue;
+        }
+
+        for (instance, name) in writable_key_names(source)? {
+            if !clip_instances.contains(&instance) {
+                continue;
+            }
+            if let Some(existing) = merged.get(&instance) {
+                if !existing.eq_ignore_ascii_case(&name) {
+                    return Err(format!(
+                        "Conflito no _KEY de CLIP: a Instance 0x{instance:016X} possui os nomes '{existing}' e '{name}'."
+                    ));
+                }
+            } else {
+                merged.insert(instance, name);
+            }
+        }
+    }
+
+    if merged.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(build_key_data_from_names(&merged)))
+    }
+}
+
+fn fnv64_name_hash(value: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in value.trim().to_ascii_lowercase().bytes() {
+        hash = hash.wrapping_mul(0x100000001b3);
+        hash ^= byte as u64;
+    }
+    hash
+}
+
+fn clip_age_mask(actor: &str) -> Option<u8> {
+    match actor {
+        "b" => Some(0x01),
+        "p" => Some(0x02),
+        "c" => Some(0x03),
+        "t" => Some(0x04),
+        "h" => Some(0x05),
+        "e" => Some(0x06),
+        "ad" => Some(0x08),
+        "cd" => Some(0x09),
+        "al" => Some(0x0A),
+        "ac" => Some(0x0D),
+        "cc" => Some(0x0E),
+        "ah" => Some(0x10),
+        "ch" => Some(0x11),
+        "ab" => Some(0x12),
+        "ar" => Some(0x13),
+        _ => None,
+    }
+}
+
+fn clip_name_hash(value: &str) -> u64 {
+    let lower = value.trim().to_ascii_lowercase();
+    let Some((actors, suffix)) = lower.split_once('_') else {
+        return fnv64_name_hash(&lower) & 0x7FFF_FFFF_FFFF_FFFF;
+    };
+
+    if let Some((primary, target)) = actors.split_once('2') {
+        if matches!(primary, "a" | "o") && matches!(target, "a" | "o") {
+            return fnv64_name_hash(&lower) & 0x7FFF_FFFF_FFFF_FFFF;
+        }
+
+        let base_primary = if primary == "o" { "o" } else { "a" };
+        let base_target = if target == "o" { "o" } else { "a" };
+        let base = format!("{base_primary}2{base_target}_{suffix}");
+        let mut hash = fnv64_name_hash(&base) | 0x8000_0000_0000_0000;
+        if let Some(mask) = clip_age_mask(primary) {
+            hash ^= (mask as u64) << 56;
+        }
+        if let Some(mask) = clip_age_mask(target) {
+            hash ^= (mask as u64) << 48;
+        }
+        return hash;
+    }
+
+    if matches!(actors, "a" | "o") {
+        return fnv64_name_hash(&lower) & 0x7FFF_FFFF_FFFF_FFFF;
+    }
+
+    let Some(mask) = clip_age_mask(actors) else {
+        return fnv64_name_hash(&lower) & 0x7FFF_FFFF_FFFF_FFFF;
+    };
+    let base = format!("a_{suffix}");
+    (fnv64_name_hash(&base) | 0x8000_0000_0000_0000) ^ ((mask as u64) << 56)
+}
+
+fn xml_tag_values(text: &str, tag: &str) -> Vec<String> {
+    let pattern = format!(
+        r"(?is)<{}>\s*([^<]*?)\s*</{}>",
+        regex::escape(tag),
+        regex::escape(tag)
+    );
+    let re = Regex::new(&pattern).unwrap();
+    re.captures_iter(text)
+        .filter_map(|captures| captures.get(1))
+        .map(|value| value.as_str().trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn is_pose_list_text(text: &str) -> bool {
+    text.to_ascii_lowercase().contains("<poselist")
+}
+
+fn is_pose_list_xml(entry: &DBPFEntry<'_>) -> bool {
+    entry.resource_type == TYPE_XML && is_pose_list_text(&String::from_utf8_lossy(entry.data()))
+}
+
+fn pose_list_clip_hashes(text: &str) -> HashSet<u64> {
+    xml_tag_values(text, "Key")
+        .into_iter()
+        .map(|name| clip_name_hash(&name))
+        .collect()
+}
+
+fn pose_list_icon_hashes(text: &str) -> HashSet<u64> {
+    xml_tag_values(text, "IconKey")
+        .into_iter()
+        .map(|name| fnv64_name_hash(&name))
+        .collect()
+}
+
+fn pose_list_clip_instances(package: &DBPF<'_>) -> HashSet<u64> {
+    let available: HashSet<u64> = package
+        .files
+        .iter()
+        .filter(|entry| entry.resource_type == TYPE_CLIP)
+        .map(|entry| entry.instance)
+        .collect();
+    let mut found = HashSet::new();
+
+    for xml in package.files.iter().filter(|entry| is_pose_list_xml(entry)) {
+        let text = String::from_utf8_lossy(xml.data());
+        for instance in pose_list_clip_hashes(&text) {
+            if available.contains(&instance) {
+                found.insert(instance);
+            }
+        }
+    }
+    found
+}
+
+fn pose_list_display_label(text: &str, instance: u64) -> String {
+    if let Some(description) = xml_tag_values(text, "Description").into_iter().next() {
+        return format!("Pose Pack — {description}");
+    }
+    if let Some(creator) = xml_tag_values(text, "Creator").into_iter().next() {
+        return format!("Pose Pack — {creator}");
+    }
+    format!("Pose Pack 0x{instance:016X}")
 }
 
 fn normalized_key_resource_name(name: &str) -> String {
@@ -1226,17 +1452,7 @@ fn build_filtered_key_data(package: &DBPF<'_>, selected_keys: &HashSet<String>) 
             .or_insert_with(|| trimmed.to_string());
     }
 
-    let mut out =
-        Vec::with_capacity(8 + filtered.values().map(|name| 12 + name.len()).sum::<usize>());
-    out.extend_from_slice(&1u32.to_le_bytes());
-    out.extend_from_slice(&(filtered.len() as u32).to_le_bytes());
-    for (instance, name) in filtered {
-        let raw = name.as_bytes();
-        out.extend_from_slice(&instance.to_le_bytes());
-        out.extend_from_slice(&(raw.len() as u32).to_le_bytes());
-        out.extend_from_slice(raw);
-    }
-    out
+    build_key_data_from_names(&filtered)
 }
 
 fn has_type_key(selected_keys: &HashSet<String>) -> bool {
@@ -2087,6 +2303,95 @@ fn build_item(
         ),
         content_categories,
     }
+}
+
+fn build_clip_group_items(
+    package: &DBPF<'_>,
+    query: &str,
+    name_map: &BTreeMap<u64, String>,
+) -> Vec<ResourceItem> {
+    let pose_clip_instances = pose_list_clip_instances(package);
+    let mut items = Vec::new();
+
+    for xml in package.files.iter().filter(|entry| is_pose_list_xml(entry)) {
+        let text = String::from_utf8_lossy(xml.data());
+        let declared_clip_hashes = pose_list_clip_hashes(&text);
+        let icon_hashes = pose_list_icon_hashes(&text);
+        let mut keys = vec![key_string(xml)];
+        let mut matched_pose_count = 0usize;
+
+        for entry in package.files.iter().filter(|entry| entry.resource_type == TYPE_CLIP) {
+            if declared_clip_hashes.contains(&entry.instance) {
+                keys.push(key_string(entry));
+                matched_pose_count += 1;
+            }
+        }
+
+        for entry in package.files.iter().filter(|entry| {
+            entry.resource_type == TYPE_S3SA && entry.instance == xml.instance
+        }) {
+            keys.push(key_string(entry));
+        }
+
+        for entry in package.files.iter().filter(|entry| {
+            matches!(
+                entry.resource_type,
+                TYPE_IMG | TYPE_IMAG_JPG | TYPE_IMAG_PNG | TYPE_IMAG_TGA
+            ) && icon_hashes.contains(&entry.instance)
+        }) {
+            keys.push(key_string(entry));
+        }
+
+        let xml_parts = ResourceKeyParts {
+            resource_type: xml.resource_type,
+            resource_group: xml.resource_group,
+            instance: xml.instance,
+        };
+        for dep in xml_direct_refs(package, xml_parts) {
+            keys.push(key_string_from_parts(dep));
+        }
+
+        keys.sort();
+        keys.dedup();
+        let declared_count = xml_tag_values(&text, "Key").len();
+        let creator = xml_tag_values(&text, "Creator")
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        let creator_detail = if creator.is_empty() {
+            String::new()
+        } else {
+            format!(" • {creator}")
+        };
+
+        let item = ResourceItem {
+            label: pose_list_display_label(&text, xml.instance),
+            key: keys.join("||"),
+            kind: "Pose".to_string(),
+            details: format!(
+                "Pose List • {matched_pose_count}/{declared_count} pose(s) vinculada(s){creator_detail}"
+            ),
+            content_categories: vec!["Pose".to_string()],
+        };
+        if item_matches_query(&item, query) {
+            items.push(item);
+        }
+    }
+
+    for entry in package
+        .files
+        .iter()
+        .filter(|entry| entry.resource_type == TYPE_CLIP)
+        .filter(|entry| !pose_clip_instances.contains(&entry.instance))
+    {
+        let item = build_item(package, entry, name_map);
+        if item_matches_query(&item, query) {
+            items.push(item);
+        }
+    }
+
+    items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    items
 }
 
 fn build_skintone_group_items(
@@ -3295,6 +3600,23 @@ fn expand_selection_for_export(
     selected = expand_selected_for_faces(package, &selected, name_map);
     let extra = collect_clone_keys(package, &selected, include_thumbnails, name_map)?;
     selected.extend(extra);
+
+    let key_names = raw_package_key_names(package);
+    let needs_key = selected.iter().any(|key| {
+        parse_key(key)
+            .map(|parts| parts.resource_type == TYPE_CLIP && key_names.contains_key(&parts.instance))
+            .unwrap_or(false)
+    });
+    if needs_key {
+        for entry in package
+            .files
+            .iter()
+            .filter(|entry| entry.resource_type == TYPE_KEY)
+        {
+            selected.insert(key_string(entry));
+        }
+    }
+
     Ok(selected)
 }
 
@@ -3838,6 +4160,7 @@ fn merger_anchor_kind(resource_type: u32) -> Option<&'static str> {
         TYPE_FACE => Some("FACE"),
         TYPE_SKINTONE => Some("SkinTone"),
         TYPE_PATTERN => Some("Pattern"),
+        TYPE_CLIP => Some("CLIP"),
         _ => None,
     }
 }
@@ -4231,6 +4554,18 @@ pub fn merge_packages_with_manifest(
                 unknown2: entry.unknown2,
             });
         }
+    }
+
+    if let Some(key_data) = merged_clip_key_data(&sources)? {
+        append_uncompressed_resource(
+            &mut out_pkg,
+            &mut out_f,
+            TYPE_KEY,
+            0,
+            0,
+            &key_data,
+            0,
+        )?;
     }
 
     let manifest_bytes = manifest.to_xml_bytes();
@@ -4679,6 +5014,22 @@ fn selection_output_stem(
             .iter()
             .filter_map(|part| parse_key(part).ok())
             .collect();
+        for parts in &parsed {
+            if parts.resource_type != TYPE_XML {
+                continue;
+            }
+            if let Some(entry) = package.files.iter().find(|entry| {
+                entry.resource_type == parts.resource_type
+                    && entry.resource_group == parts.resource_group
+                    && entry.instance == parts.instance
+            }) {
+                if is_pose_list_xml(entry) {
+                    let text = String::from_utf8_lossy(entry.data());
+                    return sanitize_file_name(&pose_list_display_label(&text, entry.instance));
+                }
+            }
+        }
+
         if let Some(first) = parsed.first().copied() {
             if first.resource_type == TYPE_SKINTONE {
                 if let Some(entry) = package.files.iter().find(|entry| {
@@ -5271,7 +5622,12 @@ fn build_merge_manifest_items(
             .collect();
         kinds.sort();
         kinds.dedup();
-        let kind = if kinds.is_empty() {
+        let kind = if categories.iter().any(|category| category == "Pose")
+            && !kinds.is_empty()
+            && kinds.iter().all(|kind| kind == "CLIP")
+        {
+            "Pose".to_string()
+        } else if kinds.is_empty() {
             "Merged CC".to_string()
         } else {
             kinds.join(" + ")
@@ -5308,7 +5664,7 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
     let mode_raw = payload.resource_type.trim().to_lowercase();
     let resource_type = match mode_raw.as_str() {
         "" => "all".to_string(),
-        "all" | "casp" | "face" | "skintone" | "pattern" | "object" => mode_raw,
+        "all" | "casp" | "face" | "skintone" | "pattern" | "object" | "clip" => mode_raw,
         _ => "all".to_string(),
     };
 
@@ -5336,6 +5692,8 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
             build_face_group_items(&package, &query, &name_map)
         } else if resource_type == "casp" {
             build_casp_group_items(&package, &query, &name_map)
+        } else if resource_type == "clip" {
+            build_clip_group_items(&package, &query, &name_map)
         } else if resource_type == "all" {
             let mut items: Vec<ResourceItem> = package
                 .files
@@ -5345,6 +5703,7 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
                 .filter(|entry| entry.resource_type != TYPE_FACE)
                 .filter(|entry| entry.resource_type != TYPE_XML)
                 .filter(|entry| entry.resource_type != TYPE_CASP)
+                .filter(|entry| entry.resource_type != TYPE_CLIP)
                 .map(|entry| build_item(&package, entry, &name_map))
                 .filter(|item| item_matches_query(item, &query))
                 .collect();
@@ -5352,6 +5711,7 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
             items.extend(build_casp_group_items(&package, &query, &name_map));
             items.extend(build_skintone_group_items(&package, &query, &name_map));
             items.extend(build_face_group_items(&package, &query, &name_map));
+            items.extend(build_clip_group_items(&package, &query, &name_map));
             items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
             items
         } else {
@@ -6719,4 +7079,167 @@ mod merge_source_collection_tests {
 
         remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn clip_and_pose_hashes_match_real_greatdaysimmer_samples() {
+        assert_eq!(clip_name_hash("a_gds_salut"), 0x49D2_EBEE_3CB0_9B79);
+        assert_eq!(
+            clip_name_hash("a_GDS_Juniper_SelfiePose1"),
+            0x2BC3_29D9_4915_B6C2
+        );
+        assert_eq!(fnv64_name_hash("1"), 0xAF63_BD4C_8601_B7EE);
+        assert_eq!(
+            fnv64_name_hash("a_GDS_ROSELIPA_pose_1"),
+            0xCEC2_C5DF_F572_6C85
+        );
+    }
+
+    #[test]
+    fn scan_groups_pose_list_but_keeps_unidentified_clip_as_clip() {
+        let root = test_dir("pose-list-clip-detection");
+        let path = root.join("MixedPoseAndClip.package");
+
+        let pose_code = "a_GDS_Juniper_SelfiePose1";
+        let pose_instance = clip_name_hash(pose_code);
+        let extra_clip = clip_name_hash("a_gds_not_in_pose_list");
+        let icon_instance = fnv64_name_hash("1");
+        let pose_list_instance = 0x0102_0304_0506_0708u64;
+        let xml = format!(
+            "<PoseList><Pose><Key>{pose_code}</Key><Name>Selfie 1</Name><Creator>Greatdaysimmer</Creator><IconKey>1</IconKey><Description>Selfie Poses by Juniper</Description></Pose></PoseList>"
+        )
+        .into_bytes();
+
+        write_test_package(
+            &path,
+            &[
+                (TYPE_CLIP, 0, pose_instance, vec![1, 2, 3]),
+                (TYPE_XML, 0, pose_list_instance, xml),
+                (TYPE_S3SA, 0, pose_list_instance, vec![4, 5, 6]),
+                (TYPE_IMAG_PNG, 0, icon_instance, vec![7, 8, 9]),
+                (TYPE_CLIP, 0, extra_clip, vec![10, 11, 12]),
+            ],
+        );
+
+        let scan = scan_package_resources(ScanPayload {
+            package_path: path.display().to_string(),
+            resource_type: "all".to_string(),
+            search: None,
+        })
+        .unwrap();
+
+        assert_eq!(scan.items.len(), 2);
+        let pose = scan
+            .items
+            .iter()
+            .find(|item| item.content_categories == vec!["Pose".to_string()])
+            .expect("Pose List should be exposed as Pose");
+        assert!(pose.label.contains("Selfie Poses by Juniper"));
+        assert!(pose.key.contains(&format!("0x{TYPE_CLIP:08X}")));
+        assert!(pose.key.contains(&format!("0x{TYPE_S3SA:08X}")));
+        assert!(pose.key.contains(&format!("0x{TYPE_XML:08X}")));
+        assert!(pose.key.contains(&format!("0x{TYPE_IMAG_PNG:08X}")));
+
+        let clip = scan
+            .items
+            .iter()
+            .find(|item| item.content_categories == vec!["Clip".to_string()])
+            .expect("Unidentified CLIP should stay Clip");
+        assert_eq!(clip.kind, "CLIP");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reversible_clip_merger_writes_consolidated_key_and_restores_source_keys() {
+        let root = test_dir("reversible-clip-merge");
+        let source_a = root.join("PoseOrAnimationA.package");
+        let source_b = root.join("PoseOrAnimationB.package");
+        let merged_dir = root.join("merged");
+        let restore_dir = root.join("restored");
+        std::fs::create_dir_all(&merged_dir).unwrap();
+        std::fs::create_dir_all(&restore_dir).unwrap();
+
+        let clip_a = clip_name_hash("a_gds_af_happyhug");
+        let clip_b = clip_name_hash("a_gds_af_sadhug");
+
+        let mut names_a = BTreeMap::new();
+        names_a.insert(clip_a, "a_gds_af_happyhug".to_string());
+        let key_a = build_key_data_from_names(&names_a);
+
+        let mut names_b = BTreeMap::new();
+        names_b.insert(clip_b, "a_gds_af_sadhug".to_string());
+        let key_b = build_key_data_from_names(&names_b);
+
+        write_test_package(
+            &source_a,
+            &[
+                (TYPE_CLIP, 0, clip_a, vec![1, 2, 3]),
+                (TYPE_KEY, 0, 0, key_a.clone()),
+            ],
+        );
+        write_test_package(
+            &source_b,
+            &[
+                (TYPE_CLIP, 0, clip_b, vec![4, 5, 6]),
+                (TYPE_KEY, 0, 0, key_b.clone()),
+            ],
+        );
+
+        let result = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![
+                source_a.display().to_string(),
+                source_b.display().to_string(),
+            ],
+            destination_folder: merged_dir.display().to_string(),
+            output_name: "MergedClips.package".to_string(),
+        })
+        .unwrap();
+
+        let merged = WritablePackage::load(&result.output_path).unwrap();
+        let key_entries: Vec<&WritableEntry> = merged
+            .entries
+            .iter()
+            .filter(|entry| entry.type_id == TYPE_KEY)
+            .collect();
+        assert_eq!(key_entries.len(), 1);
+        assert_eq!(key_entries[0].instance, 0);
+        let merged_key_data = merged.get_uncompressed_data(key_entries[0]).unwrap();
+        let merged_names = parse_key_names_data(&merged_key_data);
+        assert_eq!(merged_names.get(&clip_a).map(String::as_str), Some("a_gds_af_happyhug"));
+        assert_eq!(merged_names.get(&clip_b).map(String::as_str), Some("a_gds_af_sadhug"));
+
+        let manifest = read_merge_manifest_from_writable(&merged).unwrap().unwrap();
+        assert_eq!(manifest.packages.len(), 2);
+        assert!(manifest
+            .packages
+            .iter()
+            .all(|package| package.anchors.iter().all(|anchor| anchor.kind == "CLIP")));
+        drop(merged);
+
+        let restored = restore_manifest_packages(RestoreManifestPayload {
+            package_path: result.output_path.clone(),
+            destination_folder: restore_dir.display().to_string(),
+        })
+        .unwrap();
+        assert_eq!(restored.package_count, 2);
+
+        let restored_a = WritablePackage::load(restore_dir.join("PoseOrAnimationA.package")).unwrap();
+        let restored_a_key = restored_a
+            .entries
+            .iter()
+            .find(|entry| entry.type_id == TYPE_KEY)
+            .unwrap();
+        assert_eq!(restored_a.get_uncompressed_data(restored_a_key).unwrap(), key_a);
+
+        let restored_b = WritablePackage::load(restore_dir.join("PoseOrAnimationB.package")).unwrap();
+        let restored_b_key = restored_b
+            .entries
+            .iter()
+            .find(|entry| entry.type_id == TYPE_KEY)
+            .unwrap();
+        assert_eq!(restored_b.get_uncompressed_data(restored_b_key).unwrap(), key_b);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
 }

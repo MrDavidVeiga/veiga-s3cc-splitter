@@ -19,6 +19,8 @@ export const CONTENT_FILTERS = [
   { value: "Other CASP", label: "Other CASP" },
   { value: "Sliders", label: "Sliders" },
   { value: "Skins", label: "Skins" },
+  { value: "Pose", label: "Pose" },
+  { value: "Clip", label: "Clip" },
   { value: "Comfort", label: "Comfort" },
   { value: "Surfaces", label: "Surfaces" },
   { value: "Storage", label: "Storage" },
@@ -82,7 +84,7 @@ const CASP_PRIORITY = [
   "Pet Accessories",
 ];
 
-const SPECIAL_PRIORITY = ["Sliders", "Skins"];
+const SPECIAL_PRIORITY = ["Sliders", "Skins", "Pose", "Clip"];
 
 const OBJECT_PRIORITY = [
   "Comfort",
@@ -131,6 +133,7 @@ const TECHNICAL_FALLBACK_CATEGORIES = {
   FACE: "Sliders",
   SkinTone: "Skins",
   OBJD: "Other Objects",
+  CLIP: "Clip",
 };
 
 function uniqueKnownCategories(item) {
