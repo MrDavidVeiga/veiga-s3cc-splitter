@@ -6936,150 +6936,6 @@ mod remove_selected_tests {
 
         let _ = std::fs::remove_dir_all(&root);
     }
-}
-
-#[cfg(test)]
-mod key_name_normalization_tests {
-    use super::normalized_key_resource_name;
-
-    #[test]
-    fn strips_numbered_bone_suffixes() {
-        assert_eq!(
-            normalized_key_resource_name("afHairLongWavyLayered_BONE0"),
-            "afHairLongWavyLayered"
-        );
-        assert_eq!(
-            normalized_key_resource_name("afHairLongWavyLayered_BONE72"),
-            "afHairLongWavyLayered"
-        );
-    }
-
-    #[test]
-    fn preserves_meaningful_underscores() {
-        assert_eq!(
-            normalized_key_resource_name("Creator_Name_afHairLongWavyLayered"),
-            "Creator_Name_afHairLongWavyLayered"
-        );
-        assert_eq!(
-            normalized_key_resource_name("Creator_Name_afHairLongWavyLayered_BONE12"),
-            "Creator_Name_afHairLongWavyLayered"
-        );
-    }
-
-    #[test]
-    fn strips_multiple_technical_suffixes() {
-        assert_eq!(
-            normalized_key_resource_name("afHairLongWavyLayered_BONE0_LOD1"),
-            "afHairLongWavyLayered"
-        );
-    }
-
-    #[test]
-    fn leaves_unknown_suffixes_unchanged() {
-        assert_eq!(
-            normalized_key_resource_name("afHairLongWavyLayered_CUSTOM12"),
-            "afHairLongWavyLayered_CUSTOM12"
-        );
-    }
-}
-
-#[cfg(test)]
-mod content_category_tests {
-    use super::{casp_content_category, object_content_category, CaspFolderInfo};
-
-    fn casp(main: &str, sub: Option<&str>) -> CaspFolderInfo {
-        CaspFolderInfo {
-            main_category: main.to_string(),
-            sub_category: sub.map(str::to_string),
-            age_folder: String::new(),
-            gender_folder: String::new(),
-            use_age_folder: false,
-            use_gender_folder: false,
-        }
-    }
-
-    #[test]
-    fn classifies_core_casp_categories_exclusively() {
-        assert_eq!(
-            casp_content_category(Some(casp("Hair", Some("Hair"))), ""),
-            "Hair"
-        );
-        assert_eq!(
-            casp_content_category(Some(casp("Hair", Some("Beard"))), ""),
-            "Facial Hair"
-        );
-        assert_eq!(
-            casp_content_category(Some(casp("Hair", Some("Eyebrows"))), ""),
-            "Eyebrows"
-        );
-        assert_eq!(
-            casp_content_category(Some(casp("Hair", Some("Body Hair"))), ""),
-            "Body Hair"
-        );
-        assert_eq!(
-            casp_content_category(Some(casp("Accessories", Some("Rings"))), ""),
-            "Accessories"
-        );
-        assert_eq!(
-            casp_content_category(Some(casp("Clothing", None)), ""),
-            "Clothes"
-        );
-        assert_eq!(casp_content_category(None, ""), "Other CASP");
-    }
-
-    #[test]
-    fn classifies_special_casp_name_fallbacks() {
-        assert_eq!(casp_content_category(None, "Creator_WinterBoot"), "Shoes");
-        assert_eq!(casp_content_category(None, "CustomEye"), "Eyes");
-        assert_eq!(casp_content_category(None, "PetCoatLong"), "Pet Coats");
-        assert_eq!(
-            casp_content_category(None, "PetAccessoryCollar"),
-            "Pet Accessories"
-        );
-    }
-
-    #[test]
-    fn classifies_object_and_build_names() {
-        assert_eq!(object_content_category("Modern Sofa"), "Comfort");
-        assert_eq!(object_content_category("Wall Lamp"), "Walls");
-        assert_eq!(object_content_category("Grand Window"), "Windows");
-        assert_eq!(object_content_category("Unknown Thing"), "Other Objects");
-    }
-}
-
-#[cfg(test)]
-mod merge_source_collection_tests {
-    use super::*;
-    use std::fs::{create_dir_all, remove_dir_all, write};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    #[test]
-    fn dropped_folder_collects_packages_recursively_and_ignores_other_files() {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("veiga-merger-drop-{nonce}"));
-        let nested = root.join("Nested");
-        create_dir_all(&nested).unwrap();
-
-        write(root.join("A.package"), b"DBPF").unwrap();
-        write(nested.join("B.DBC"), b"DBPF").unwrap();
-        write(nested.join("ignore.txt"), b"ignore").unwrap();
-
-        let result = collect_merge_package_files(CollectMergeSourcesPayload {
-            paths: vec![root.to_string_lossy().into_owned()],
-        })
-        .unwrap();
-
-        assert_eq!(result.len(), 2);
-        assert!(result.iter().any(|path| path.ends_with("A.package")));
-        assert!(result.iter().any(|path| path.ends_with("B.DBC")));
-        assert!(!result.iter().any(|path| path.ends_with("ignore.txt")));
-
-        remove_dir_all(root).unwrap();
-    }
-
     #[test]
     fn clip_and_pose_hashes_match_real_greatdaysimmer_samples() {
         assert_eq!(clip_name_hash("a_gds_salut"), 0x49D2_EBEE_3CB0_9B79);
@@ -7241,5 +7097,150 @@ mod merge_source_collection_tests {
 
         let _ = std::fs::remove_dir_all(&root);
     }
+
+}
+
+#[cfg(test)]
+mod key_name_normalization_tests {
+    use super::normalized_key_resource_name;
+
+    #[test]
+    fn strips_numbered_bone_suffixes() {
+        assert_eq!(
+            normalized_key_resource_name("afHairLongWavyLayered_BONE0"),
+            "afHairLongWavyLayered"
+        );
+        assert_eq!(
+            normalized_key_resource_name("afHairLongWavyLayered_BONE72"),
+            "afHairLongWavyLayered"
+        );
+    }
+
+    #[test]
+    fn preserves_meaningful_underscores() {
+        assert_eq!(
+            normalized_key_resource_name("Creator_Name_afHairLongWavyLayered"),
+            "Creator_Name_afHairLongWavyLayered"
+        );
+        assert_eq!(
+            normalized_key_resource_name("Creator_Name_afHairLongWavyLayered_BONE12"),
+            "Creator_Name_afHairLongWavyLayered"
+        );
+    }
+
+    #[test]
+    fn strips_multiple_technical_suffixes() {
+        assert_eq!(
+            normalized_key_resource_name("afHairLongWavyLayered_BONE0_LOD1"),
+            "afHairLongWavyLayered"
+        );
+    }
+
+    #[test]
+    fn leaves_unknown_suffixes_unchanged() {
+        assert_eq!(
+            normalized_key_resource_name("afHairLongWavyLayered_CUSTOM12"),
+            "afHairLongWavyLayered_CUSTOM12"
+        );
+    }
+}
+
+#[cfg(test)]
+mod content_category_tests {
+    use super::{casp_content_category, object_content_category, CaspFolderInfo};
+
+    fn casp(main: &str, sub: Option<&str>) -> CaspFolderInfo {
+        CaspFolderInfo {
+            main_category: main.to_string(),
+            sub_category: sub.map(str::to_string),
+            age_folder: String::new(),
+            gender_folder: String::new(),
+            use_age_folder: false,
+            use_gender_folder: false,
+        }
+    }
+
+    #[test]
+    fn classifies_core_casp_categories_exclusively() {
+        assert_eq!(
+            casp_content_category(Some(casp("Hair", Some("Hair"))), ""),
+            "Hair"
+        );
+        assert_eq!(
+            casp_content_category(Some(casp("Hair", Some("Beard"))), ""),
+            "Facial Hair"
+        );
+        assert_eq!(
+            casp_content_category(Some(casp("Hair", Some("Eyebrows"))), ""),
+            "Eyebrows"
+        );
+        assert_eq!(
+            casp_content_category(Some(casp("Hair", Some("Body Hair"))), ""),
+            "Body Hair"
+        );
+        assert_eq!(
+            casp_content_category(Some(casp("Accessories", Some("Rings"))), ""),
+            "Accessories"
+        );
+        assert_eq!(
+            casp_content_category(Some(casp("Clothing", None)), ""),
+            "Clothes"
+        );
+        assert_eq!(casp_content_category(None, ""), "Other CASP");
+    }
+
+    #[test]
+    fn classifies_special_casp_name_fallbacks() {
+        assert_eq!(casp_content_category(None, "Creator_WinterBoot"), "Shoes");
+        assert_eq!(casp_content_category(None, "CustomEye"), "Eyes");
+        assert_eq!(casp_content_category(None, "PetCoatLong"), "Pet Coats");
+        assert_eq!(
+            casp_content_category(None, "PetAccessoryCollar"),
+            "Pet Accessories"
+        );
+    }
+
+    #[test]
+    fn classifies_object_and_build_names() {
+        assert_eq!(object_content_category("Modern Sofa"), "Comfort");
+        assert_eq!(object_content_category("Wall Lamp"), "Walls");
+        assert_eq!(object_content_category("Grand Window"), "Windows");
+        assert_eq!(object_content_category("Unknown Thing"), "Other Objects");
+    }
+}
+
+#[cfg(test)]
+mod merge_source_collection_tests {
+    use super::*;
+    use std::fs::{create_dir_all, remove_dir_all, write};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn dropped_folder_collects_packages_recursively_and_ignores_other_files() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("veiga-merger-drop-{nonce}"));
+        let nested = root.join("Nested");
+        create_dir_all(&nested).unwrap();
+
+        write(root.join("A.package"), b"DBPF").unwrap();
+        write(nested.join("B.DBC"), b"DBPF").unwrap();
+        write(nested.join("ignore.txt"), b"ignore").unwrap();
+
+        let result = collect_merge_package_files(CollectMergeSourcesPayload {
+            paths: vec![root.to_string_lossy().into_owned()],
+        })
+        .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().any(|path| path.ends_with("A.package")));
+        assert!(result.iter().any(|path| path.ends_with("B.DBC")));
+        assert!(!result.iter().any(|path| path.ends_with("ignore.txt")));
+
+        remove_dir_all(root).unwrap();
+    }
+
 
 }
