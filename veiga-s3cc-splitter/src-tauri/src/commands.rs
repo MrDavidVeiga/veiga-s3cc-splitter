@@ -1241,6 +1241,22 @@ fn is_pose_list_text(text: &str) -> bool {
     text.to_ascii_lowercase().contains("<poselist")
 }
 
+fn writable_pose_list_count(source: &WritablePackage) -> Result<usize, String> {
+    let mut count = 0usize;
+    for entry in source.entries.iter().filter(|entry| entry.type_id == TYPE_XML) {
+        let data = source.get_uncompressed_data(entry).map_err(|e| {
+            format!(
+                "Não foi possível ler o XML {} durante a validação de Pose List: {e}",
+                key_string_from_writable(entry)
+            )
+        })?;
+        if is_pose_list_text(&String::from_utf8_lossy(&data)) {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
 fn is_pose_list_xml(entry: &DBPFEntry<'_>) -> bool {
     entry.resource_type == TYPE_XML && is_pose_list_text(&String::from_utf8_lossy(entry.data()))
 }
@@ -2617,6 +2633,22 @@ fn find_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> Option<Stri
     )
 }
 
+fn pose_list_preview_base64(package: &DBPF<'_>, text: &str) -> Option<String> {
+    let icon_hashes = pose_list_icon_hashes(text);
+    encode_best_preview(
+        package
+            .files
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.resource_type,
+                    TYPE_IMG | TYPE_IMAG_JPG | TYPE_IMAG_PNG | TYPE_IMAG_TGA
+                ) && icon_hashes.contains(&entry.instance)
+            })
+            .map(|entry| (entry.data().len(), entry.data().to_vec())),
+    )
+}
+
 fn selected_entry_indices(package: &DBPF<'_>, keys: &HashSet<String>) -> Vec<usize> {
     let expanded = expand_compound_keys(keys);
     package
@@ -2706,6 +2738,8 @@ fn known_clone_type(resource_type: u32) -> bool {
             | TYPE_LITE
             | TYPE_RIG
             | TYPE_ICON
+            | TYPE_CLIP
+            | TYPE_S3SA
     )
 }
 
@@ -4464,6 +4498,16 @@ pub fn merge_packages_with_manifest(
         source_paths.push(path);
     }
 
+    let pose_list_count = sources.iter().try_fold(0usize, |total, source| {
+        writable_pose_list_count(source).map(|count| total + count)
+    })?;
+    if pose_list_count > 1 {
+        return Err(
+            "Foram detectados dois ou mais Pose Lists. O merge foi bloqueado porque packages com múltiplos Pose Lists podem fazer o Pose Player reconhecer apenas uma das listas. Separe os Pose Packs ou mescle somente CLIPs que não dependam de múltiplos Pose Lists."
+                .to_string(),
+        );
+    }
+
     let mut first_owner: HashMap<String, (usize, usize)> = HashMap::new();
     let mut shared_keys = HashSet::new();
     for (source_index, source) in sources.iter().enumerate() {
@@ -5896,6 +5940,45 @@ pub fn get_resource_preview(payload: PreviewPayload) -> Result<PreviewResult, St
     validate_package_extension(&payload.package_path)?;
     let mmap = open_package(&payload.package_path)?;
     let package = parse_package(&mmap)?;
+
+    for part in payload.resource_key.split("||") {
+        let Ok(parts) = parse_key(part.trim()) else {
+            continue;
+        };
+        if parts.resource_type != TYPE_XML {
+            continue;
+        }
+        let Some(xml) = package.files.iter().find(|entry| {
+            entry.resource_type == parts.resource_type
+                && entry.resource_group == parts.resource_group
+                && entry.instance == parts.instance
+        }) else {
+            continue;
+        };
+        if !is_pose_list_xml(xml) {
+            continue;
+        }
+
+        let text = String::from_utf8_lossy(xml.data());
+        let declared = xml_tag_values(&text, "Key").len();
+        let matched = pose_list_clip_hashes(&text)
+            .into_iter()
+            .filter(|instance| {
+                package
+                    .files
+                    .iter()
+                    .any(|entry| entry.resource_type == TYPE_CLIP && entry.instance == *instance)
+            })
+            .count();
+        return Ok(PreviewResult {
+            label: pose_list_display_label(&text, xml.instance),
+            key: payload.resource_key.clone(),
+            kind: "Pose".to_string(),
+            details: format!("Pose List • {matched}/{declared} pose(s) vinculada(s)"),
+            thumb_base64: pose_list_preview_base64(&package, &text),
+        });
+    }
+
     let key = parse_key(first_compound_key(&payload.resource_key))?;
     let entry = package
         .files
@@ -7094,6 +7177,61 @@ mod remove_selected_tests {
             .find(|entry| entry.type_id == TYPE_KEY)
             .unwrap();
         assert_eq!(restored_b.get_uncompressed_data(restored_b_key).unwrap(), key_b);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+
+    #[test]
+    fn merger_blocks_multiple_pose_lists_until_pose_player_compatibility_is_known() {
+        let root = test_dir("multiple-pose-list-guard");
+        let source_a = root.join("PoseListA.package");
+        let source_b = root.join("PoseListB.package");
+        let destination = root.join("out");
+        std::fs::create_dir_all(&destination).unwrap();
+
+        let clip_a = clip_name_hash("a_gds_pose_guard_a");
+        let clip_b = clip_name_hash("a_gds_pose_guard_b");
+
+        write_test_package(
+            &source_a,
+            &[
+                (TYPE_CLIP, 0, clip_a, vec![1, 2, 3]),
+                (
+                    TYPE_XML,
+                    0,
+                    0x1111_0000_0000_0001,
+                    b"<PoseList><Pose><Key>a_gds_pose_guard_a</Key></Pose></PoseList>".to_vec(),
+                ),
+                (TYPE_S3SA, 0, 0x1111_0000_0000_0001, vec![4, 5, 6]),
+            ],
+        );
+        write_test_package(
+            &source_b,
+            &[
+                (TYPE_CLIP, 0, clip_b, vec![7, 8, 9]),
+                (
+                    TYPE_XML,
+                    0,
+                    0x2222_0000_0000_0002,
+                    b"<PoseList><Pose><Key>a_gds_pose_guard_b</Key></Pose></PoseList>".to_vec(),
+                ),
+                (TYPE_S3SA, 0, 0x2222_0000_0000_0002, vec![10, 11, 12]),
+            ],
+        );
+
+        let error = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![
+                source_a.display().to_string(),
+                source_b.display().to_string(),
+            ],
+            destination_folder: destination.display().to_string(),
+            output_name: "ShouldNotMerge.package".to_string(),
+        })
+        .unwrap_err();
+
+        assert!(error.contains("dois ou mais Pose Lists"));
+        assert!(!destination.join("ShouldNotMerge.package").exists());
 
         let _ = std::fs::remove_dir_all(&root);
     }
