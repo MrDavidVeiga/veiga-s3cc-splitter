@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use sims3_core::dbpf::filetypes::{resource_is_png, ResourceType};
 use sims3_core::dbpf::{DBPFEntry, DBPF};
 use sims3_pack::dbpf::{Package as WritablePackage, ResourceEntry as WritableEntry};
+use tauri::{AppHandle, Manager};
 use zip::write::FileOptions;
 
 use crate::merge_manifest::{
@@ -160,7 +161,9 @@ pub struct RestoreManifestPayload {
 pub struct RestoreManifestResult {
     pub destination_folder: String,
     pub package_count: usize,
+    pub duplicate_count: usize,
     pub output_paths: Vec<String>,
+    pub duplicate_paths: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -1241,20 +1244,213 @@ fn is_pose_list_text(text: &str) -> bool {
     text.to_ascii_lowercase().contains("<poselist")
 }
 
-fn writable_pose_list_count(source: &WritablePackage) -> Result<usize, String> {
-    let mut count = 0usize;
-    for entry in source.entries.iter().filter(|entry| entry.type_id == TYPE_XML) {
-        let data = source.get_uncompressed_data(entry).map_err(|e| {
-            format!(
-                "Não foi possível ler o XML {} durante a validação de Pose List: {e}",
-                key_string_from_writable(entry)
-            )
-        })?;
-        if is_pose_list_text(&String::from_utf8_lossy(&data)) {
-            count += 1;
+#[derive(Debug, Clone)]
+struct PoseListXmlResource {
+    source_index: usize,
+    entry_index: usize,
+    data: Vec<u8>,
+    text: String,
+    registrar_entry_index: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+struct PoseListMergePlan {
+    entries_to_skip: HashSet<(usize, usize)>,
+    output_keys: HashSet<String>,
+    primary_xml: (usize, usize),
+    primary_registrar: (usize, usize),
+    combined_xml: Vec<u8>,
+    preserved_resources: Vec<(usize, ManifestPreservedResource)>,
+}
+
+fn pose_entry_key(block: &str) -> String {
+    xml_tag_values(block, "Key")
+        .into_iter()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn combine_pose_list_xmls(
+    primary_text: &str,
+    additional_texts: &[&str],
+) -> Result<Vec<u8>, String> {
+    let pose_re = Regex::new(r"(?is)<Pose\b[^>]*/>|<Pose\b[^>]*>.*?</Pose\s*>")
+        .map_err(|e| format!("Regex de entradas Pose inválida: {e}"))?;
+    let closing_re = Regex::new(r"(?is)</PoseList\s*>")
+        .map_err(|e| format!("Regex de fechamento PoseList inválida: {e}"))?;
+
+    let mut seen_keys = HashSet::new();
+    for block in pose_re.find_iter(primary_text) {
+        let key = pose_entry_key(block.as_str());
+        if !key.is_empty() {
+            seen_keys.insert(key.to_ascii_lowercase());
         }
     }
-    Ok(count)
+
+    let mut appended_blocks = Vec::new();
+    for text in additional_texts {
+        if !is_pose_list_text(text) {
+            return Err("Uma das fontes selecionadas não contém um XML PoseList válido.".to_string());
+        }
+        for block in pose_re.find_iter(text) {
+            let key = pose_entry_key(block.as_str());
+            // PoseList packages commonly include one empty template entry. Keep the
+            // primary template once and do not copy empty templates from later lists.
+            if key.is_empty() || !seen_keys.insert(key.to_ascii_lowercase()) {
+                continue;
+            }
+            appended_blocks.push(block.as_str().to_string());
+        }
+    }
+
+    let closing = closing_re
+        .find_iter(primary_text)
+        .last()
+        .ok_or_else(|| "O XML PoseList principal não possui fechamento </PoseList>.".to_string())?;
+
+    let mut combined = String::with_capacity(
+        primary_text.len() + appended_blocks.iter().map(String::len).sum::<usize>() + 16,
+    );
+    combined.push_str(&primary_text[..closing.start()]);
+    if !appended_blocks.is_empty() {
+        if !combined.ends_with('\n') {
+            combined.push('\n');
+        }
+        for block in appended_blocks {
+            combined.push_str(&block);
+            combined.push('\n');
+        }
+    }
+    combined.push_str(&primary_text[closing.start()..]);
+    Ok(combined.into_bytes())
+}
+
+fn pose_list_merge_plan(
+    sources: &[WritablePackage],
+) -> Result<Option<PoseListMergePlan>, String> {
+    let mut pose_lists = Vec::<PoseListXmlResource>::new();
+
+    for (source_index, source) in sources.iter().enumerate() {
+        for (entry_index, entry) in source
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.type_id == TYPE_XML)
+        {
+            let data = source.get_uncompressed_data(entry).map_err(|e| {
+                format!(
+                    "Não foi possível ler o XML {} durante a preparação do merge PoseList: {e}",
+                    key_string_from_writable(entry)
+                )
+            })?;
+            let text = String::from_utf8_lossy(&data).into_owned();
+            if !is_pose_list_text(&text) {
+                continue;
+            }
+
+            let registrar_entry_index = source.entries.iter().enumerate().find_map(
+                |(candidate_index, candidate)| {
+                    (candidate.type_id == TYPE_S3SA
+                        && candidate.group == entry.group
+                        && candidate.instance == entry.instance)
+                        .then_some(candidate_index)
+                },
+            );
+
+            pose_lists.push(PoseListXmlResource {
+                source_index,
+                entry_index,
+                data,
+                text,
+                registrar_entry_index,
+            });
+        }
+    }
+
+    if pose_lists.len() < 2 {
+        return Ok(None);
+    }
+
+    let primary_list_index = pose_lists
+        .iter()
+        .position(|list| list.registrar_entry_index.is_some())
+        .ok_or_else(|| {
+            "Foram encontrados múltiplos Pose Lists, mas nenhum possui um registrar S3SA com TGI correspondente. O merge foi cancelado para evitar um Pose Pack que não apareça no jogo.".to_string()
+        })?;
+    let primary_list = &pose_lists[primary_list_index];
+    let primary_xml = (primary_list.source_index, primary_list.entry_index);
+    let primary_registrar = (
+        primary_list.source_index,
+        primary_list.registrar_entry_index.unwrap(),
+    );
+
+    let additional_texts: Vec<&str> = pose_lists
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != primary_list_index)
+        .map(|(_, list)| list.text.as_str())
+        .collect();
+    let combined_xml = combine_pose_list_xmls(&primary_list.text, &additional_texts)?;
+
+    let mut entries_to_skip = HashSet::new();
+    let mut output_keys = HashSet::new();
+    let mut preserved_resources = Vec::new();
+    let mut preserved_entries = HashSet::new();
+
+    for list in &pose_lists {
+        let xml_entry = &sources[list.source_index].entries[list.entry_index];
+        let xml_key = key_string_from_writable(xml_entry);
+        entries_to_skip.insert((list.source_index, list.entry_index));
+        output_keys.insert(xml_key.clone());
+
+        if preserved_entries.insert((list.source_index, list.entry_index)) {
+            preserved_resources.push((
+                list.source_index,
+                ManifestPreservedResource {
+                    key: xml_key,
+                    data_base64: STANDARD.encode(&list.data),
+                    unknown2: xml_entry.unknown2,
+                },
+            ));
+        }
+
+        if let Some(registrar_index) = list.registrar_entry_index {
+            let registrar = &sources[list.source_index].entries[registrar_index];
+            let registrar_key = key_string_from_writable(registrar);
+            entries_to_skip.insert((list.source_index, registrar_index));
+            output_keys.insert(registrar_key.clone());
+
+            if preserved_entries.insert((list.source_index, registrar_index)) {
+                let registrar_data = sources[list.source_index]
+                    .get_uncompressed_data(registrar)
+                    .map_err(|e| {
+                        format!(
+                            "Não foi possível preservar o registrar S3SA {}: {e}",
+                            registrar_key
+                        )
+                    })?;
+                preserved_resources.push((
+                    list.source_index,
+                    ManifestPreservedResource {
+                        key: registrar_key,
+                        data_base64: STANDARD.encode(&registrar_data),
+                        unknown2: registrar.unknown2,
+                    },
+                ));
+            }
+        }
+    }
+
+    Ok(Some(PoseListMergePlan {
+        entries_to_skip,
+        output_keys,
+        primary_xml,
+        primary_registrar,
+        combined_xml,
+        preserved_resources,
+    }))
 }
 
 fn is_pose_list_xml(entry: &DBPFEntry<'_>) -> bool {
@@ -2633,6 +2829,62 @@ fn find_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> Option<Stri
     )
 }
 
+fn sims3_thumbnails_dir(app: &AppHandle) -> Option<PathBuf> {
+    let documents = app.path().document_dir().ok()?;
+    let path = documents
+        .join("Electronic Arts")
+        .join("The Sims 3")
+        .join("Thumbnails");
+    path.is_dir().then_some(path)
+}
+
+fn thumbnail_cache_file_order(resource_type: u32) -> [&'static str; 3] {
+    const CAS: &str = "CASThumbnails.package";
+    const OBJECTS: &str = "ObjectThumbnails.package";
+    const DOWNLOADS: &str = "DownloadsThumbnails.package";
+
+    match resource_type {
+        TYPE_CASP | TYPE_FACE | TYPE_SKINTONE => [CAS, OBJECTS, DOWNLOADS],
+        TYPE_OBJD | TYPE_OBJK | TYPE_VPXY | TYPE_MODL | TYPE_MLOD | TYPE_RSLT | TYPE_FTPT
+        | TYPE_LITE | TYPE_RIG => [OBJECTS, CAS, DOWNLOADS],
+        _ => [CAS, OBJECTS, DOWNLOADS],
+    }
+}
+
+fn thumbnail_from_cache_package(path: &Path, instance: u64) -> Option<String> {
+    if !path.is_file() {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    let package = DBPF::new(&bytes).ok()?;
+    encode_best_preview(
+        package
+            .files
+            .iter()
+            .filter(|entry| entry.instance == instance)
+            .map(|entry| (entry.data().len(), entry.data().to_vec())),
+    )
+}
+
+fn external_thumbnail_base64_from_dir(
+    thumbnails_dir: &Path,
+    key: ResourceKeyParts,
+) -> Option<String> {
+    for file_name in thumbnail_cache_file_order(key.resource_type) {
+        if let Some(preview) =
+            thumbnail_from_cache_package(&thumbnails_dir.join(file_name), key.instance)
+        {
+            return Some(preview);
+        }
+    }
+    None
+}
+
+fn external_thumbnail_base64(app: &AppHandle, key: ResourceKeyParts) -> Option<String> {
+    let thumbnails_dir = sims3_thumbnails_dir(app)?;
+    external_thumbnail_base64_from_dir(&thumbnails_dir, key)
+}
+
 fn pose_list_preview_base64(package: &DBPF<'_>, text: &str) -> Option<String> {
     let icon_hashes = pose_list_icon_hashes(text);
     encode_best_preview(
@@ -4008,6 +4260,16 @@ fn manifest_removal_plan_sets(
         }
     }
 
+    // A consolidated PoseList XML/S3SA pair is a derived output and is
+    // intentionally not owned by any original source package in the manifest.
+    // If the user explicitly selects such a resource, remove it unless a
+    // remaining source package still owns/requires that same TGI.
+    for key in &selected_atomic {
+        if available.contains(key) && !remaining_resources.contains(key) {
+            selected_resources.insert(key.clone());
+        }
+    }
+
     let shared_preserved: HashSet<String> = selected_resources
         .intersection(&remaining_resources)
         .cloned()
@@ -4187,6 +4449,116 @@ fn files_are_identical(left: &Path, right: &Path) -> Result<bool, String> {
     }
 }
 
+
+fn package_tgi_payload_signature(
+    path: &Path,
+) -> Result<Vec<(u32, u32, u64, Vec<u8>)>, String> {
+    let package = WritablePackage::load(path)
+        .map_err(|e| format!("Não foi possível analisar {} para detectar duplicados: {e}", path.display()))?;
+    let mut signature = Vec::new();
+
+    for entry in &package.entries {
+        let parts = ResourceKeyParts {
+            resource_type: entry.type_id,
+            resource_group: entry.group,
+            instance: entry.instance,
+        };
+        if relation_ignored_resource(parts) {
+            continue;
+        }
+
+        let data = package.get_uncompressed_data(entry).map_err(|e| {
+            format!(
+                "Não foi possível ler o recurso {} de {} durante a detecção de duplicados: {e}",
+                key_string_from_writable(entry),
+                path.display()
+            )
+        })?;
+        signature.push((entry.type_id, entry.group, entry.instance, data));
+    }
+
+    signature.sort();
+    Ok(signature)
+}
+
+fn packages_have_same_tgi_payloads(left: &Path, right: &Path) -> Result<bool, String> {
+    let left_signature = package_tgi_payload_signature(left)?;
+    if left_signature.is_empty() {
+        return Ok(false);
+    }
+
+    let right_signature = package_tgi_payload_signature(right)?;
+    if right_signature.is_empty() {
+        return Ok(false);
+    }
+
+    Ok(left_signature == right_signature)
+}
+
+fn existing_package_paths(destination: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut paths = std::fs::read_dir(destination)
+        .map_err(|e| format!("Não foi possível ler a pasta de destino {}: {e}", destination.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_file())
+        .filter(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("package"))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+
+    paths.sort_by_key(|path| path.to_string_lossy().to_ascii_lowercase());
+    Ok(paths)
+}
+
+fn unique_restored_output_path(preferred: &Path) -> PathBuf {
+    if !preferred.exists() {
+        return preferred.to_path_buf();
+    }
+
+    let parent = preferred.parent().map(Path::to_path_buf).unwrap_or_default();
+    let stem = preferred
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Package".to_string());
+    let extension = preferred
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_string())
+        .unwrap_or_else(|| "package".to_string());
+
+    for suffix in 2usize.. {
+        let candidate = parent.join(format!("{stem} ({suffix}).{extension}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    unreachable!()
+}
+
+fn unique_restore_temp_path(destination: &Path, package_id: u32) -> PathBuf {
+    let base = destination.join(format!(
+        ".veiga-unmerge-{}-{package_id}.package",
+        std::process::id()
+    ));
+    if !base.exists() {
+        return base;
+    }
+
+    for suffix in 2usize.. {
+        let candidate = destination.join(format!(
+            ".veiga-unmerge-{}-{package_id}-{suffix}.package",
+            std::process::id()
+        ));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    unreachable!()
+}
+
 fn merger_anchor_kind(resource_type: u32) -> Option<&'static str> {
     match resource_type {
         TYPE_CASP => Some("CASP"),
@@ -4271,7 +4643,8 @@ fn source_manifest_entries(
     source_path: &Path,
     next_id: &mut u32,
 ) -> Result<Vec<ManifestPackage>, String> {
-    let available: HashSet<String> = source
+    let existing = read_merge_manifest_from_writable(source)?;
+    let mut available: HashSet<String> = source
         .entries
         .iter()
         .filter(|entry| !is_per_source_metadata_type(entry.type_id))
@@ -4279,7 +4652,20 @@ fn source_manifest_entries(
         .map(key_string_from_writable)
         .collect();
 
-    if let Some(existing) = read_merge_manifest_from_writable(source)? {
+    // A merged PoseList output reuses the primary XML/S3SA TGI, while the
+    // manifest stores the original resources as preserved data. Do not claim
+    // that derived output entry as a new source resource when merging again.
+    if let Some(manifest) = &existing {
+        let preserved_keys: HashSet<String> = manifest
+            .packages
+            .iter()
+            .flat_map(|package| package.preserved_resources.iter())
+            .map(|resource| resource.key.clone())
+            .collect();
+        available.retain(|key| !preserved_keys.contains(key));
+    }
+
+    if let Some(existing) = existing {
         let mut nested = Vec::new();
         let mut claimed = HashSet::new();
         for package in existing.packages {
@@ -4291,7 +4677,7 @@ fn source_manifest_entries(
                     claimed.insert(resource.key.clone());
                 })
                 .collect();
-            if resources.is_empty() {
+            if resources.is_empty() && package.preserved_resources.is_empty() {
                 continue;
             }
             let anchors = package
@@ -4498,15 +4884,7 @@ pub fn merge_packages_with_manifest(
         source_paths.push(path);
     }
 
-    let pose_list_count = sources.iter().try_fold(0usize, |total, source| {
-        writable_pose_list_count(source).map(|count| total + count)
-    })?;
-    if pose_list_count > 1 {
-        return Err(
-            "Foram detectados dois ou mais Pose Lists. O merge foi bloqueado porque packages com múltiplos Pose Lists podem fazer o Pose Player reconhecer apenas uma das listas. Separe os Pose Packs ou mescle somente CLIPs que não dependam de múltiplos Pose Lists."
-                .to_string(),
-        );
-    }
+    let pose_list_plan = pose_list_merge_plan(&sources)?;
 
     let mut first_owner: HashMap<String, (usize, usize)> = HashMap::new();
     let mut shared_keys = HashSet::new();
@@ -4527,6 +4905,21 @@ pub fn merge_packages_with_manifest(
                     .get_uncompressed_data(entry)
                     .map_err(|e| e.to_string())?;
                 if previous_data != current_data {
+                    let previous_is_pose_resource = pose_list_plan
+                        .as_ref()
+                        .map(|plan| plan.entries_to_skip.contains(&(previous_source, previous_entry)))
+                        .unwrap_or(false);
+                    let current_is_pose_resource = pose_list_plan
+                        .as_ref()
+                        .map(|plan| plan.entries_to_skip.contains(&(source_index, entry_index)))
+                        .unwrap_or(false);
+                    if previous_is_pose_resource && current_is_pose_resource {
+                        // PoseList XMLs and their S3SA registrars are deliberately
+                        // consolidated into one output pair; retain originals in the manifest.
+                        shared_keys.insert(key);
+                        continue;
+                    }
+
                     let left = source_paths[previous_source]
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -4547,10 +4940,57 @@ pub fn merge_packages_with_manifest(
     }
 
     let mut manifest_packages = Vec::new();
+    let mut source_manifest_ranges = Vec::new();
     let mut next_id = 1u32;
     for (source, source_path) in sources.iter().zip(source_paths.iter()) {
+        let start = manifest_packages.len();
         manifest_packages.extend(source_manifest_entries(source, source_path, &mut next_id)?);
+        source_manifest_ranges.push((start, manifest_packages.len()));
     }
+
+    if let Some(plan) = &pose_list_plan {
+        for (source_index, preserved) in &plan.preserved_resources {
+            let (start, end) = source_manifest_ranges[*source_index];
+            let already_preserved = manifest_packages[start..end].iter().any(|package| {
+                package
+                    .preserved_resources
+                    .iter()
+                    .any(|resource| resource.key == preserved.key)
+            });
+
+            if already_preserved {
+                // This is the derived PoseList output of an earlier reversible merge.
+                // Keep the earlier original data, not the already-combined XML/S3SA bytes.
+                for package in &mut manifest_packages[start..end] {
+                    package.resources.retain(|resource| resource.key != preserved.key);
+                    package.anchors.retain(|anchor| anchor.key != preserved.key);
+                }
+                continue;
+            }
+
+            let owners: Vec<usize> = (start..end)
+                .filter(|index| {
+                    manifest_packages[*index]
+                        .resources
+                        .iter()
+                        .any(|resource| resource.key == preserved.key)
+                })
+                .collect();
+            if owners.is_empty() {
+                return Err(format!(
+                    "Não foi possível associar o recurso PoseList original {} ao Merge Manifest. O merge foi cancelado para preservar o Unmerge.",
+                    preserved.key
+                ));
+            }
+            for index in owners {
+                let package = &mut manifest_packages[index];
+                package.resources.retain(|resource| resource.key != preserved.key);
+                package.anchors.retain(|anchor| anchor.key != preserved.key);
+                package.preserved_resources.push(preserved.clone());
+            }
+        }
+    }
+
     let manifest = MergeManifest {
         version: 2,
         packages: manifest_packages,
@@ -4575,6 +5015,16 @@ pub fn merge_packages_with_manifest(
                 continue;
             }
             let key = key_string_from_writable(entry);
+            if pose_list_plan
+                .as_ref()
+                .map(|plan| {
+                    plan.entries_to_skip.contains(&(source_index, entry_index))
+                        || plan.output_keys.contains(&key)
+                })
+                .unwrap_or(false)
+            {
+                continue;
+            }
             if !written.insert(key.clone()) {
                 continue;
             }
@@ -4598,6 +5048,43 @@ pub fn merge_packages_with_manifest(
                 unknown2: entry.unknown2,
             });
         }
+    }
+
+    if let Some(plan) = &pose_list_plan {
+        let (xml_source_index, xml_entry_index) = plan.primary_xml;
+        let xml_entry = &sources[xml_source_index].entries[xml_entry_index];
+        append_uncompressed_resource(
+            &mut out_pkg,
+            &mut out_f,
+            TYPE_XML,
+            xml_entry.group,
+            xml_entry.instance,
+            &plan.combined_xml,
+            xml_entry.unknown2,
+        )?;
+        written.insert(key_string_from_writable(xml_entry));
+
+        let (registrar_source_index, registrar_entry_index) = plan.primary_registrar;
+        let registrar_source = &sources[registrar_source_index];
+        let registrar = &registrar_source.entries[registrar_entry_index];
+        let raw = registrar_source
+            .get_raw_data(registrar)
+            .map_err(|e| format!("Não foi possível copiar o registrar S3SA principal: {e}"))?;
+        let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+        out_f.write_all(&raw).map_err(|e| e.to_string())?;
+        out_pkg.entries.push(WritableEntry {
+            type_id: registrar.type_id,
+            group: registrar.group,
+            id1: registrar.id1,
+            id2: registrar.id2,
+            instance: registrar.instance,
+            chunk_offset,
+            file_size: registrar.file_size,
+            mem_size: registrar.mem_size,
+            compressed: registrar.compressed,
+            unknown2: registrar.unknown2,
+        });
+        written.insert(key_string_from_writable(registrar));
     }
 
     if let Some(key_data) = merged_clip_key_data(&sources)? {
@@ -4694,13 +5181,7 @@ pub fn restore_manifest_packages(
                 "O manifesto contém nomes de arquivo duplicados que não podem ser restaurados na mesma pasta: {file_name}"
             ));
         }
-        let output_path = destination.join(&file_name);
-        if output_path.exists() {
-            return Err(format!(
-                "A restauração foi cancelada porque já existe: {}",
-                output_path.display()
-            ));
-        }
+
         for resource in &package_info.resources {
             if !index.contains_key(&resource.key) {
                 return Err(format!(
@@ -4725,7 +5206,10 @@ pub fn restore_manifest_packages(
         }
     }
 
+    let mut existing_packages = existing_package_paths(&destination)?;
     let mut output_paths = Vec::new();
+    let mut duplicate_paths = Vec::new();
+
     for package_info in &manifest.packages {
         let mut file_name = sanitize_file_name(&package_info.name);
         if file_name.trim().is_empty() {
@@ -4734,15 +5218,9 @@ pub fn restore_manifest_packages(
         if !file_name.to_ascii_lowercase().ends_with(".package") {
             file_name.push_str(".package");
         }
-        let output_path = destination.join(&file_name);
-        if output_path.exists() {
-            return Err(format!(
-                "A restauração foi cancelada porque já existe: {}",
-                output_path.display()
-            ));
-        }
 
-        let mut out_pkg = WritablePackage::new(&output_path, false).map_err(|e| e.to_string())?;
+        let temp_path = unique_restore_temp_path(&destination, package_info.id);
+        let mut out_pkg = WritablePackage::new(&temp_path, false).map_err(|e| e.to_string())?;
         let mut out_f = OpenOptions::new()
             .read(true)
             .write(true)
@@ -4811,15 +5289,58 @@ pub fn restore_manifest_packages(
             .map_err(|e| e.to_string())?;
         drop(out_f);
         drop(out_pkg);
-        WritablePackage::load(&output_path)
-            .map_err(|e| format!("Package restaurado inválido ({}): {e}", file_name))?;
+
+        if let Err(error) = WritablePackage::load(&temp_path) {
+            let _ = remove_file(&temp_path);
+            return Err(format!("Package restaurado inválido ({}): {error}", file_name));
+        }
+
+        let mut duplicate_path = None;
+        for existing_path in &existing_packages {
+            match packages_have_same_tgi_payloads(&temp_path, existing_path) {
+                Ok(true) => {
+                    duplicate_path = Some(existing_path.clone());
+                    break;
+                }
+                Ok(false) => {}
+                Err(_) => {
+                    // An unrelated invalid/inaccessible package must not block Unmerge.
+                    // It simply cannot participate in duplicate detection.
+                }
+            }
+        }
+
+        if let Some(existing_path) = duplicate_path {
+            remove_file(&temp_path).map_err(|e| {
+                format!(
+                    "Foi detectado um package duplicado, mas não foi possível remover o temporário {}: {e}",
+                    temp_path.display()
+                )
+            })?;
+            duplicate_paths.push(existing_path.display().to_string());
+            continue;
+        }
+
+        let preferred_output_path = destination.join(&file_name);
+        let output_path = unique_restored_output_path(&preferred_output_path);
+        rename(&temp_path, &output_path).map_err(|e| {
+            let _ = remove_file(&temp_path);
+            format!(
+                "O package restaurado foi validado, mas não foi possível finalizar {}: {e}",
+                output_path.display()
+            )
+        })?;
+
+        existing_packages.push(output_path.clone());
         output_paths.push(output_path.display().to_string());
     }
 
     Ok(RestoreManifestResult {
         destination_folder: destination.display().to_string(),
         package_count: output_paths.len(),
+        duplicate_count: duplicate_paths.len(),
         output_paths,
+        duplicate_paths,
     })
 }
 
@@ -5936,7 +6457,7 @@ pub fn remove_selected_from_merged(
 }
 
 #[tauri::command]
-pub fn get_resource_preview(payload: PreviewPayload) -> Result<PreviewResult, String> {
+pub fn get_resource_preview(app: AppHandle, payload: PreviewPayload) -> Result<PreviewResult, String> {
     validate_package_extension(&payload.package_path)?;
     let mmap = open_package(&payload.package_path)?;
     let package = parse_package(&mmap)?;
@@ -6000,7 +6521,8 @@ pub fn get_resource_preview(payload: PreviewPayload) -> Result<PreviewResult, St
             "Type 0x{:08X} • Group 0x{:08X}",
             entry.resource_type, entry.resource_group
         ),
-        thumb_base64: find_preview_base64(&package, key),
+        thumb_base64: find_preview_base64(&package, key)
+            .or_else(|| external_thumbnail_base64(&app, key)),
     })
 }
 
@@ -6205,6 +6727,54 @@ mod remove_selected_tests {
 
     fn test_resource_key(resource_type: u32, group: u32, instance: u64) -> String {
         format!("0x{resource_type:08X}-0x{group:08X}-0x{instance:016X}")
+    }
+
+    #[test]
+    fn external_thumbnail_cache_matches_instance_and_prefers_expected_cache() {
+        let root = test_dir("external-thumbnail-cache");
+        let thumbnails = root.join("Thumbnails");
+        std::fs::create_dir_all(&thumbnails).unwrap();
+
+        let instance = 0x1234_5678_9ABC_DEF0u64;
+        let mut cas_png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        cas_png.extend_from_slice(&[1; 32]);
+        let mut object_png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        object_png.extend_from_slice(&[2; 64]);
+
+        write_test_package(
+            &thumbnails.join("CASThumbnails.package"),
+            &[(TYPE_THUM_LARGE, 1, instance, cas_png.clone())],
+        );
+        write_test_package(
+            &thumbnails.join("ObjectThumbnails.package"),
+            &[(0xAD366F96, 1, instance, object_png.clone())],
+        );
+
+        let cas_key = ResourceKeyParts {
+            resource_type: TYPE_CASP,
+            resource_group: 0,
+            instance,
+        };
+        let object_key = ResourceKeyParts {
+            resource_type: TYPE_OBJD,
+            resource_group: 0,
+            instance,
+        };
+
+        let cas_found = external_thumbnail_base64_from_dir(&thumbnails, cas_key).unwrap();
+        let object_found = external_thumbnail_base64_from_dir(&thumbnails, object_key).unwrap();
+
+        assert_eq!(STANDARD.decode(cas_found).unwrap(), cas_png);
+        assert_eq!(STANDARD.decode(object_found).unwrap(), object_png);
+
+        let missing = ResourceKeyParts {
+            resource_type: TYPE_CASP,
+            resource_group: 0,
+            instance: instance + 1,
+        };
+        assert!(external_thumbnail_base64_from_dir(&thumbnails, missing).is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -7183,55 +7753,245 @@ mod remove_selected_tests {
 
 
     #[test]
-    fn merger_blocks_multiple_pose_lists_until_pose_player_compatibility_is_known() {
-        let root = test_dir("multiple-pose-list-guard");
+    fn merger_combines_multiple_pose_lists_and_unmerge_restores_original_resources() {
+        let root = test_dir("multiple-pose-list-combine");
         let source_a = root.join("PoseListA.package");
         let source_b = root.join("PoseListB.package");
-        let destination = root.join("out");
-        std::fs::create_dir_all(&destination).unwrap();
+        let merged_dir = root.join("merged");
+        let restore_dir = root.join("restored");
+        std::fs::create_dir_all(&merged_dir).unwrap();
+        std::fs::create_dir_all(&restore_dir).unwrap();
 
         let clip_a = clip_name_hash("a_gds_pose_guard_a");
         let clip_b = clip_name_hash("a_gds_pose_guard_b");
+        let xml_instance_a = 0x1111_0000_0000_0001u64;
+        let xml_instance_b = 0x2222_0000_0000_0002u64;
+        let xml_a = b"<?xml version=\"1.0\" encoding=\"utf-8\"?><PoseList><Pose><Key></Key><Name></Name><Creator></Creator><IconKey></IconKey><Description></Description></Pose><Pose><Key>a_gds_pose_guard_a</Key><Name>Pose A</Name><Creator>Test</Creator><IconKey>1</IconKey><Description>First set</Description></Pose></PoseList>".to_vec();
+        let xml_b = b"<?xml version=\"1.0\" encoding=\"utf-8\"?><PoseList><Pose><Key></Key><Name></Name><Creator></Creator><IconKey></IconKey><Description></Description></Pose><Pose><Key>a_gds_pose_guard_b</Key><Name>Pose B</Name><Creator>Test</Creator><IconKey>2</IconKey><Description>Second set</Description></Pose></PoseList>".to_vec();
+        let registrar_a = vec![4, 5, 6];
+        let registrar_b = vec![10, 11, 12];
 
         write_test_package(
             &source_a,
             &[
                 (TYPE_CLIP, 0, clip_a, vec![1, 2, 3]),
-                (
-                    TYPE_XML,
-                    0,
-                    0x1111_0000_0000_0001,
-                    b"<PoseList><Pose><Key>a_gds_pose_guard_a</Key></Pose></PoseList>".to_vec(),
-                ),
-                (TYPE_S3SA, 0, 0x1111_0000_0000_0001, vec![4, 5, 6]),
+                (TYPE_XML, 0, xml_instance_a, xml_a.clone()),
+                (TYPE_S3SA, 0, xml_instance_a, registrar_a.clone()),
             ],
         );
         write_test_package(
             &source_b,
             &[
                 (TYPE_CLIP, 0, clip_b, vec![7, 8, 9]),
-                (
-                    TYPE_XML,
-                    0,
-                    0x2222_0000_0000_0002,
-                    b"<PoseList><Pose><Key>a_gds_pose_guard_b</Key></Pose></PoseList>".to_vec(),
-                ),
-                (TYPE_S3SA, 0, 0x2222_0000_0000_0002, vec![10, 11, 12]),
+                (TYPE_XML, 0, xml_instance_b, xml_b.clone()),
+                (TYPE_S3SA, 0, xml_instance_b, registrar_b.clone()),
             ],
         );
 
-        let error = merge_packages_with_manifest(MergePackagesPayload {
+        let result = merge_packages_with_manifest(MergePackagesPayload {
             package_paths: vec![
                 source_a.display().to_string(),
                 source_b.display().to_string(),
             ],
-            destination_folder: destination.display().to_string(),
-            output_name: "ShouldNotMerge.package".to_string(),
+            destination_folder: merged_dir.display().to_string(),
+            output_name: "CombinedPoseLists.package".to_string(),
         })
-        .unwrap_err();
+        .unwrap();
 
-        assert!(error.contains("dois ou mais Pose Lists"));
-        assert!(!destination.join("ShouldNotMerge.package").exists());
+        let merged = WritablePackage::load(&result.output_path).unwrap();
+        let pose_xmls: Vec<&WritableEntry> = merged
+            .entries
+            .iter()
+            .filter(|entry| {
+                if entry.type_id != TYPE_XML {
+                    return false;
+                }
+                merged
+                    .get_uncompressed_data(entry)
+                    .map(|data| is_pose_list_text(&String::from_utf8_lossy(&data)))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert_eq!(pose_xmls.len(), 1);
+        let combined_xml = String::from_utf8(
+            merged.get_uncompressed_data(pose_xmls[0]).unwrap(),
+        )
+        .unwrap();
+        assert!(combined_xml.contains("a_gds_pose_guard_a"));
+        assert!(combined_xml.contains("a_gds_pose_guard_b"));
+        assert_eq!(combined_xml.matches("<Pose>").count(), 3);
+
+        let registrars: Vec<&WritableEntry> = merged
+            .entries
+            .iter()
+            .filter(|entry| entry.type_id == TYPE_S3SA)
+            .collect();
+        assert_eq!(registrars.len(), 1);
+        assert_eq!(registrars[0].instance, xml_instance_a);
+
+        let manifest = read_merge_manifest_from_writable(&merged).unwrap().unwrap();
+        assert_eq!(manifest.packages.len(), 2);
+        assert!(manifest.packages.iter().all(|package| {
+            let instance = if package.name == "PoseListA.package" {
+                xml_instance_a
+            } else {
+                xml_instance_b
+            };
+            package.preserved_resources.iter().any(|resource| {
+                resource.key == test_resource_key(TYPE_XML, 0, instance)
+            }) && package.preserved_resources.iter().any(|resource| {
+                resource.key == test_resource_key(TYPE_S3SA, 0, instance)
+            })
+        }));
+
+        let mmap = open_package(&result.output_path).unwrap();
+        let dbpf = parse_package(&mmap).unwrap();
+        let pose_selection = [
+            test_resource_key(TYPE_CLIP, 0, clip_a),
+            test_resource_key(TYPE_CLIP, 0, clip_b),
+            test_resource_key(TYPE_XML, 0, xml_instance_a),
+            test_resource_key(TYPE_S3SA, 0, xml_instance_a),
+        ]
+        .join("||");
+        let (_, _, removal_keys) =
+            removal_plan_sets(&dbpf, &[pose_selection], &BTreeMap::new()).unwrap();
+        assert!(removal_keys.contains(&test_resource_key(TYPE_XML, 0, xml_instance_a)));
+        assert!(removal_keys.contains(&test_resource_key(TYPE_S3SA, 0, xml_instance_a)));
+        drop(dbpf);
+        drop(mmap);
+        drop(registrars);
+        drop(pose_xmls);
+        drop(manifest);
+        drop(merged);
+
+        let restored = restore_manifest_packages(RestoreManifestPayload {
+            package_path: result.output_path.clone(),
+            destination_folder: restore_dir.display().to_string(),
+        })
+        .unwrap();
+        assert_eq!(restored.package_count, 2);
+
+        let restored_a = WritablePackage::load(restore_dir.join("PoseListA.package")).unwrap();
+        let restored_b = WritablePackage::load(restore_dir.join("PoseListB.package")).unwrap();
+        let restored_xml_a = restored_a
+            .entries
+            .iter()
+            .find(|entry| entry.type_id == TYPE_XML && entry.instance == xml_instance_a)
+            .unwrap();
+        let restored_xml_b = restored_b
+            .entries
+            .iter()
+            .find(|entry| entry.type_id == TYPE_XML && entry.instance == xml_instance_b)
+            .unwrap();
+        let restored_registrar_a = restored_a
+            .entries
+            .iter()
+            .find(|entry| entry.type_id == TYPE_S3SA && entry.instance == xml_instance_a)
+            .unwrap();
+        let restored_registrar_b = restored_b
+            .entries
+            .iter()
+            .find(|entry| entry.type_id == TYPE_S3SA && entry.instance == xml_instance_b)
+            .unwrap();
+
+        assert_eq!(restored_a.get_uncompressed_data(restored_xml_a).unwrap(), xml_a);
+        assert_eq!(restored_b.get_uncompressed_data(restored_xml_b).unwrap(), xml_b);
+        assert_eq!(
+            restored_a.get_uncompressed_data(restored_registrar_a).unwrap(),
+            registrar_a
+        );
+        assert_eq!(
+            restored_b.get_uncompressed_data(restored_registrar_b).unwrap(),
+            registrar_b
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unmerge_skips_cross_merge_duplicates_and_renames_name_collisions() {
+        let root = test_dir("unmerge-cross-merge-dedup");
+        let shared = root.join("SharedCC.package");
+        let first_only = root.join("FirstOnly.package");
+        let second_only = root.join("SecondOnly.package");
+        let merged_a_dir = root.join("merged-a");
+        let merged_b_dir = root.join("merged-b");
+        let restore_dir = root.join("restored");
+        std::fs::create_dir_all(&merged_a_dir).unwrap();
+        std::fs::create_dir_all(&merged_b_dir).unwrap();
+        std::fs::create_dir_all(&restore_dir).unwrap();
+
+        write_test_package(
+            &shared,
+            &[(TYPE_CASP, 0, 0x1111_0000_0000_0001, vec![1, 2, 3, 4])],
+        );
+        write_test_package(
+            &first_only,
+            &[(TYPE_CASP, 0, 0x2222_0000_0000_0002, vec![5, 6, 7, 8])],
+        );
+        write_test_package(
+            &second_only,
+            &[(TYPE_CASP, 0, 0x3333_0000_0000_0003, vec![9, 10, 11, 12])],
+        );
+
+        let merged_a = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![
+                shared.display().to_string(),
+                first_only.display().to_string(),
+            ],
+            destination_folder: merged_a_dir.display().to_string(),
+            output_name: "MergedA.package".to_string(),
+        })
+        .unwrap();
+
+        let merged_b = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![
+                shared.display().to_string(),
+                second_only.display().to_string(),
+            ],
+            destination_folder: merged_b_dir.display().to_string(),
+            output_name: "MergedB.package".to_string(),
+        })
+        .unwrap();
+
+        let first_restore = restore_manifest_packages(RestoreManifestPayload {
+            package_path: merged_a.output_path,
+            destination_folder: restore_dir.display().to_string(),
+        })
+        .unwrap();
+        assert_eq!(first_restore.package_count, 2);
+        assert_eq!(first_restore.duplicate_count, 0);
+        assert!(restore_dir.join("SharedCC.package").exists());
+        assert!(restore_dir.join("FirstOnly.package").exists());
+
+        // Same filename, intentionally different content: this must not be
+        // mistaken for a duplicate and must not be overwritten.
+        write_test_package(
+            &restore_dir.join("SecondOnly.package"),
+            &[(TYPE_CASP, 0, 0x4444_0000_0000_0004, vec![90, 91, 92])],
+        );
+
+        let second_restore = restore_manifest_packages(RestoreManifestPayload {
+            package_path: merged_b.output_path,
+            destination_folder: restore_dir.display().to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(second_restore.package_count, 1);
+        assert_eq!(second_restore.duplicate_count, 1);
+        assert_eq!(second_restore.duplicate_paths.len(), 1);
+        assert_eq!(
+            PathBuf::from(&second_restore.duplicate_paths[0]),
+            restore_dir.join("SharedCC.package")
+        );
+        assert_eq!(second_restore.output_paths.len(), 1);
+        assert_eq!(
+            PathBuf::from(&second_restore.output_paths[0]),
+            restore_dir.join("SecondOnly (2).package")
+        );
+        assert!(restore_dir.join("SecondOnly.package").exists());
+        assert!(restore_dir.join("SecondOnly (2).package").exists());
+        assert!(!restore_dir.join("SharedCC (2).package").exists());
 
         let _ = std::fs::remove_dir_all(&root);
     }

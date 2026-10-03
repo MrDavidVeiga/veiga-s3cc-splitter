@@ -23,6 +23,25 @@ What's new in v2.4.0
   - quietlyshout reported excessive RAM usage during large exports, duplicate-name export issues, and suggested improvements for a more compact/resizable interface and clearer duplicate handling.
 - The portable build workflow covers Windows x64, Windows x86, Windows ARM64, Linux x64, Linux x86, Linux ARM64, macOS Intel, and macOS Apple Silicon.
 
+Current main-branch additions (not yet assigned a new release version)
+
+CLIP and Pose List support
+
+- Ordinary CLIP resources appear in the Clip category by default.
+- A CLIP is categorized as Pose only when a PoseList XML explicitly references its CLIP key and the matching CLIP resource is present. Unreferenced CLIPs in a mixed package remain Clip.
+- A detected PoseList is presented as a logical Pose item, with its referenced CLIP resources, matching S3SA registrar, and associated icon image resources included when found.
+- Package filenames and naming conventions are not used to infer that a resource is a Pose.
+- When a merge contains multiple PoseList XMLs, Merger combines their unique `<Pose>` entries into one XML and retains one matching S3SA registrar. Empty template entries from additional lists are skipped, and repeated CLIP keys are deduplicated.
+- The original PoseList XML and matching S3SA resources are stored as preserved resources in the Veiga Merge Manifest, allowing Unmerge to reconstruct the original source packages rather than restoring the combined XML into one of them.
+- Remove from Merged also removes the consolidated XML and registrar when the combined Pose item is selected, while retaining shared resources still required by remaining content.
+- The combined XML/registrar strategy was confirmed in-game with both experimental test packages: the Juniper-registrar variant (TEST_A) and the ROSELIPA-registrar variant (TEST_B). Both displayed all 18 poses and the poses worked in-game. The source includes a regression test for multi-PoseList merge and reversible Unmerge.
+
+External thumbnail-cache fallback
+
+- If an ordinary resource has no usable preview inside its package, Splitter checks the game caches under the actual Documents directory at `Electronic Arts/The Sims 3/Thumbnails`.
+- It checks `CASThumbnails.package`, `ObjectThumbnails.package`, and `DownloadsThumbnails.package`, prioritizing the likely cache for the resource type and matching by Instance ID.
+- A preview embedded in the loaded package takes priority. If no matching cache entry exists, the preview can remain unavailable.
+
 What this tool does
 
 Splitter mode

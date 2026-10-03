@@ -44,7 +44,13 @@ const translations = {
     restoreOriginals: "Unmerge",
     restoreBusyTitle: "Unmerging...",
     restoreBusyMessage: "Rebuilding the original packages from the embedded Merge Manifest.",
-    restoreSuccess: (count) => `Unmerge completed successfully. ${count} ${countForm(count, "original package", "original packages")} rebuilt.`,
+    restoreSuccess: (result) => {
+      const rebuilt = Number(result?.packageCount || 0);
+      const duplicates = Number(result?.duplicateCount || 0);
+      const message = `Unmerge completed successfully. ${rebuilt} ${countForm(rebuilt, "original package", "original packages")} rebuilt.`;
+      if (!duplicates) return message;
+      return `${message}\n${duplicates} ${countForm(duplicates, "duplicate package already existed in the destination and was not recreated", "duplicate packages already existed in the destination and were not recreated")}.`;
+    },
     restoreError: "Failed to unmerge:",
     manifestFound: (count) => `Merge Manifest: ${count} ${countForm(count, "original package", "original packages")}`,
     contentFilter: "Filter",
@@ -177,7 +183,13 @@ const translations = {
     restoreOriginals: "Desmesclar",
     restoreBusyTitle: "Desmesclando...",
     restoreBusyMessage: "Reconstruindo os packages a partir do Merge Manifest interno.",
-    restoreSuccess: (count) => `Desmesclagem concluída com sucesso. ${count} ${countForm(count, "package original reconstruído", "packages originais reconstruídos")}.`,
+    restoreSuccess: (result) => {
+      const rebuilt = Number(result?.packageCount || 0);
+      const duplicates = Number(result?.duplicateCount || 0);
+      const message = `Desmesclagem concluída com sucesso. ${rebuilt} ${countForm(rebuilt, "package original reconstruído", "packages originais reconstruídos")}.`;
+      if (!duplicates) return message;
+      return `${message}\n${duplicates} ${countForm(duplicates, "package duplicado já existia no destino e não foi recriado", "packages duplicados já existiam no destino e não foram recriados")}.`;
+    },
     restoreError: "Falha ao desmesclar:",
     manifestFound: (count) => `Merge Manifest: ${count} ${countForm(count, "package original", "packages originais")}`,
     contentFilter: "Filtro",
@@ -310,7 +322,13 @@ const translations = {
     restoreOriginals: "Desfusionar",
     restoreBusyTitle: "Desfusionando...",
     restoreBusyMessage: "Reconstruyendo los packages desde el Merge Manifest interno.",
-    restoreSuccess: (count) => `Desfusión completada correctamente. ${count} ${countForm(count, "package original reconstruido", "packages originales reconstruidos")}.`,
+    restoreSuccess: (result) => {
+      const rebuilt = Number(result?.packageCount || 0);
+      const duplicates = Number(result?.duplicateCount || 0);
+      const message = `Desfusión completada correctamente. ${rebuilt} ${countForm(rebuilt, "package original reconstruido", "packages originales reconstruidos")}.`;
+      if (!duplicates) return message;
+      return `${message}\n${duplicates} ${countForm(duplicates, "package duplicado ya existía en el destino y no se volvió a crear", "packages duplicados ya existían en el destino y no se volvieron a crear")}.`;
+    },
     restoreError: "Error al desfusionar:",
     manifestFound: (count) => `Merge Manifest: ${count} ${countForm(count, "package original", "packages originales")}`,
     contentFilter: "Filtro",
@@ -1226,11 +1244,12 @@ async function restoreManifestPackages() {
     });
     await appModal.showSuccess({
       titleText: t("modalSuccessTitle"),
-      messageText: t("restoreSuccess", result.packageCount),
+      messageText: t("restoreSuccess", result),
       primaryLabel: t("modalOk"),
     });
-    if (result.outputPaths?.[0]) {
-      await revealItemInDir(result.outputPaths[0]);
+    const revealPath = result.outputPaths?.[0] || result.duplicatePaths?.[0];
+    if (revealPath) {
+      await revealItemInDir(revealPath);
     }
   } catch (error) {
     console.error(error);
