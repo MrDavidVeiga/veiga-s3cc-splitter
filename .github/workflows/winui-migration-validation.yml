@@ -10,6 +10,9 @@ on:
       - 'veiga-s3cc-splitter/**'
       - '.github/workflows/winui-migration-validation.yml'
   workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   frontend:
     runs-on: ubuntu-22.04
