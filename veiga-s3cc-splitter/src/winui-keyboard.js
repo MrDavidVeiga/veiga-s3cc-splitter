@@ -114,3 +114,23 @@ for(const list of document.querySelectorAll(".package-list,.resource-list")) {
     });
   },true);
 }
+
+/* Keep the original progress value authoritative; expose it as a real
+ * accessible ProgressBar rather than a purely decorative width animation. */
+for (const track of document.querySelectorAll(".progress-track")) {
+  const fill=track.querySelector(".progress-fill");
+  if(!fill) continue;
+  track.setAttribute("role","progressbar");
+  track.setAttribute("aria-valuemin","0");
+  track.setAttribute("aria-valuemax","100");
+  const title=track.closest("#progress-state")?.querySelector("#progress-title")
+    ||track.closest("#busy-state")?.querySelector("#busy-title");
+  if(title?.id)track.setAttribute("aria-labelledby",title.id);
+  const sync=()=>{
+    const raw=Number.parseFloat(fill.style.width);
+    const value=Number.isFinite(raw)?Math.max(0,Math.min(100,raw)):0;
+    track.setAttribute("aria-valuenow",String(value));
+  };
+  new MutationObserver(sync).observe(fill,{attributes:true,attributeFilter:["style"]});
+  sync();
+}
