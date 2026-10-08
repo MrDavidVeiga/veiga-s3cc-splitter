@@ -16,10 +16,21 @@ function moveIndex(items,index,key,step=1) {
 for(const [triggerId,menuId,selector] of [
   ["lang-toggle-btn","lang-menu","button"],
   ["content-filter-toggle-btn","content-filter-menu","button"],
+  ["theme-button","theme-flyout",'button[role="menuitemradio"]'],
   ["pick-sims3pack-btn","sims3pack-menu",'input[type="checkbox"]']
 ]) {
   const trigger=document.getElementById(triggerId),menu=document.getElementById(menuId);
   if (!trigger || !menu) continue;
+  trigger.setAttribute("aria-controls",menuId);
+  if (menuId === "content-filter-menu") {
+    const syncOptions=()=>menu.querySelectorAll("button").forEach(button=>{
+      const active=button.classList.contains("active");
+      button.setAttribute("role","option");
+      button.setAttribute("aria-selected",String(active));
+    });
+    new MutationObserver(syncOptions).observe(menu,{childList:true});
+    syncOptions();
+  }
   const options=()=>Array.from(menu.querySelectorAll(selector)).filter(visible);
   const focusOption=(key,source)=>{
     const items=options();
@@ -37,6 +48,10 @@ for(const [triggerId,menuId,selector] of [
     queueMicrotask(()=>focusOption(event.key==="ArrowUp"?"End":event.key==="ArrowDown"?"Home":event.key, null));
   });
   menu.addEventListener("keydown",event=>{
+    if(event.key==="Tab") {
+      if(trigger.getAttribute("aria-expanded")==="true")trigger.click();
+      return;
+    }
     if (event.key==="Escape") {
       event.preventDefault(); event.stopPropagation();
       if(trigger.getAttribute("aria-expanded")==="true")trigger.click();
