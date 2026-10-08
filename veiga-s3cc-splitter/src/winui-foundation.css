@@ -300,3 +300,162 @@ html[data-theme-choice] .topbar .language-switcher { margin-left: 0; }
 @media (prefers-reduced-motion: reduce) {
   html[data-theme-choice] :is(.mode-btn, .primary-btn, .secondary-btn, .resource-row, .package-row) { transition: none; }
 }
+
+
+/* Manager fidelity — WinUI 3 chrome, navigation and unbranded sidebar.
+ * Uses the real geometry of Manager's src/winui.css, not a second layout.
+ */
+body.release-v1 { overflow: hidden; font-family: "Segoe UI Variable Text","Segoe UI Variable","Segoe UI",sans-serif; }
+.release-v1 .app-shell {
+  --sidebar-width: clamp(220px,19vw,276px);
+  width: 100%; max-width: none; height: 100vh; height: 100dvh; min-height: 0;
+  margin: 0; padding: 0; display: grid;
+  grid-template-rows: var(--winui-titlebar-height,32px) var(--winui-nav-height,48px) minmax(0,1fr);
+  overflow: hidden;
+  background: radial-gradient(900px 520px at 10% -8%, var(--accent-low), transparent 64%),var(--winui-mica-base);
+}
+.release-v1 .winui-titlebar {
+  height: var(--winui-titlebar-height,32px); min-height: 0; display: flex; align-items: stretch;
+  justify-content: space-between; padding-left: 12px; user-select: none;
+  background: transparent; color: var(--winui-text-primary);
+}
+.release-v1 .winui-titlebar-identity { min-width:0; display:flex; align-items:center; gap:8px; font-size:12px; line-height:16px; }
+.release-v1 .winui-window-title { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.release-v1 .winui-caption-buttons { align-self:stretch; display:flex; flex:0 0 auto; }
+.release-v1 .winui-caption-buttons button {
+  width:46px; height:100%; min-height:0; padding:0; border:0; border-radius:0;
+  display:grid; place-items:center; background:transparent; color:var(--winui-text-primary);
+  font:400 12px "Segoe UI Symbol","Segoe UI",sans-serif; cursor:default;
+}
+.release-v1 .winui-caption-icon { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:1; stroke-linecap:square; }
+.release-v1 .winui-caption-buttons button:hover { background:var(--winui-control-fill-hover); }
+.release-v1 .winui-caption-buttons button:active { background:var(--winui-control-fill-pressed); }
+.release-v1 .winui-caption-buttons .winui-caption-close:hover { background:#c42b1c; color:white; }
+.release-v1 .winui-caption-buttons .winui-caption-close:active { background:#a82418; color:white; }
+.release-v1 .winui-caption-buttons [hidden] { display: none !important; }
+
+.release-v1 .topbar.winui-navview {
+  width:100%; min-height:var(--winui-nav-height,48px); height:var(--winui-nav-height,48px);
+  margin:0; padding:6px 10px 8px; display:flex; flex-wrap:nowrap;
+  align-items:center; gap:12px; background:rgba(255,255,255,.015);
+  border-bottom:1px solid var(--winui-divider);
+}
+.release-v1 .topbar-mode-switcher { width:auto; min-width:0; flex:1 1 auto; }
+.release-v1 :is(.input-mode-switch,.mode-switcher).tabs { display:flex; align-items:center; gap:2px; }
+.release-v1 .topbar .mode-btn {
+  position:relative; width:auto; flex:0 1 auto; min-width:0; min-height:34px;
+  padding:0 12px; border:0; border-radius:var(--winui-control-radius,4px);
+  background:transparent; color:var(--winui-text-secondary);
+  font:400 14px/20px "Segoe UI Variable Text","Segoe UI",sans-serif;
+  transition:none; box-shadow:none;
+}
+.release-v1 .topbar .mode-btn:hover { border:0; background:var(--winui-control-fill); color:var(--winui-text-primary); }
+.release-v1 .topbar .mode-btn:active { background:var(--winui-control-fill-pressed); }
+.release-v1 .topbar .mode-btn.active {
+  border:0; background:var(--winui-control-fill-hover); color:var(--winui-text-primary);
+}
+.release-v1 .topbar .mode-btn.active::after {
+  content:""; position:absolute; left:50%; bottom:2px; width:16px; height:3px;
+  transform:translateX(-50%); border-radius:2px; background:var(--accent);
+}
+.release-v1 .language-switcher { display:flex; flex:0 0 auto; gap:8px; margin-left:auto; color:var(--winui-text-secondary); font-size:12px; }
+.release-v1 .lang-toggle-btn {
+  min-width:0; height:32px; padding:0 10px; border:1px solid var(--winui-control-stroke);
+  border-bottom-color:var(--winui-control-stroke-strong); border-radius:var(--winui-control-radius,4px);
+  background:var(--winui-control-fill); color:var(--winui-text-primary); font-weight:600;
+}
+.release-v1 .lang-toggle-btn:hover { background:var(--winui-control-fill-hover); }
+.release-v1 .lang-menu { border:1px solid var(--winui-control-stroke); border-radius:var(--winui-overlay-radius,8px); background:var(--winui-popup); color:var(--winui-text-primary); box-shadow:0 12px 30px var(--winui-shadow); }
+.release-v1 .lang-menu-item { border-radius:var(--winui-control-radius,4px); color:var(--winui-text-primary); }
+.release-v1 .lang-menu-item:hover { background:var(--winui-control-fill-hover); }
+
+.release-v1 .theme-control { position:relative; display:flex; align-items:center; flex:0 0 auto; }
+.release-v1 .theme-button {
+  width:32px; height:32px; padding:0; border:1px solid var(--winui-control-stroke);
+  border-bottom-color:var(--winui-control-stroke-strong); border-radius:var(--winui-control-radius,4px);
+  display:grid; place-items:center; background:var(--winui-control-fill);
+  color:var(--winui-text-primary); cursor:pointer;
+}
+.release-v1 .theme-button svg { width:16px; height:16px; fill:currentColor; }
+.release-v1 .theme-button:hover,.release-v1 .theme-button[aria-expanded="true"] { background:var(--winui-control-fill-hover); }
+.release-v1 .theme-flyout {
+  position:absolute; right:0; top:calc(100% + 7px); z-index:120;
+  width:250px; padding:6px; border:1px solid var(--winui-control-stroke);
+  border-radius:var(--winui-overlay-radius,8px); background:var(--winui-popup);
+  color:var(--winui-text-primary); box-shadow:0 12px 30px var(--winui-shadow);
+}
+.release-v1 .theme-flyout.hidden { display:none !important; }
+.release-v1 .theme-flyout-title { padding:7px 9px 8px; font-size:13px; font-weight:600; }
+.release-v1 .theme-option {
+  width:100%; min-height:36px; padding:5px 8px; border:0;
+  border-radius:var(--winui-control-radius,4px); display:grid;
+  grid-template-columns:16px minmax(0,1fr) 14px; gap:8px; align-items:center;
+  background:transparent; color:var(--winui-text-primary); text-align:left;
+  font-weight:400;
+}
+.release-v1 .theme-option:hover { background:var(--winui-control-fill-hover); }
+.release-v1 .theme-option:active { background:var(--winui-control-fill-pressed); }
+.release-v1 .theme-check { visibility:hidden; color:var(--accent); font-size:13px; font-weight:700; }
+.release-v1 .theme-option[aria-checked="true"] .theme-check { visibility:visible; }
+.release-v1 .theme-option-copy { min-width:0; }
+.release-v1 .theme-option-copy strong { font-size:13px; line-height:18px; font-weight:600; }
+.release-v1 .theme-swatch {
+  width:12px; height:12px; border-radius:50%; background:var(--accent);
+  box-shadow:0 0 0 1px var(--winui-control-stroke-strong);
+}
+.release-v1 .veiga-swatch { background:#7fad2d; }
+.release-v1 .mean-girls-swatch { background:linear-gradient(90deg,#5f1b3f 0 48%,#f92f60 48% 100%); }
+.release-v1 .ea-app-swatch { background:linear-gradient(90deg,#181b2a 0 58%,#276afc 58% 100%); }
+.release-v1 .theme-flyout-divider { height:1px; margin:5px 7px; background:var(--winui-divider); }
+.release-v1 .theme-flyout-footnote { padding:7px 9px 5px; color:var(--winui-text-tertiary); font-size:11px; line-height:15px; }
+
+.release-v1 .layout {
+  grid-template-columns:var(--sidebar-width) minmax(0,1fr);
+  width:100%; min-width:0; min-height:0; height:100%; gap:0; overflow:hidden;
+}
+.release-v1 .card { box-shadow:none; }
+.release-v1 .left-panel {
+  padding:20px 12px 14px; min-height:0; border:0; border-radius:0;
+  display:flex; flex-direction:column; background:transparent; backdrop-filter:none;
+}
+.release-v1 .right-panel {
+  min-width:0; min-height:0; padding:clamp(18px,1.5vw,26px);
+  border:1px solid var(--winui-control-stroke); border-right:0; border-bottom:0;
+  border-radius:var(--winui-overlay-radius,8px) 0 0 0;
+  background:var(--winui-layer-fill); backdrop-filter:none;
+}
+.release-v1 .app-title { display:none !important; } /* No sidebar branding, exactly like Manager */
+.release-v1 .drag-zone {
+  border-color:var(--winui-control-stroke); border-radius:var(--winui-control-radius,4px);
+  background:var(--winui-card-fill);
+}
+.release-v1 .path-label { color:var(--winui-text-secondary); }
+.release-v1 .winui-social-footer {
+  width:100%; flex:0 0 auto; margin-top:auto; padding:10px 4px 0;
+  border-top:1px solid var(--winui-divider); justify-content:space-between;
+}
+.release-v1 .winui-social-footer .social-icons-list {
+  width:100%; margin:0; padding:0; display:flex; align-items:center;
+  justify-content:space-between; gap:0; list-style:none;
+}
+.release-v1 .winui-social-footer .social-icons-list li { flex:0 0 auto; min-width:0; margin:0; padding:0; }
+.release-v1 .winui-social-footer .social-icons-list a {
+  width:30px; height:30px; max-width:none; aspect-ratio:auto;
+  display:grid; place-items:center; border:0; border-radius:var(--winui-control-radius,4px);
+  color:var(--winui-text-secondary); background:transparent; transform:none;
+}
+.release-v1 .winui-social-footer .social-icons-list a:hover { border:0; color:var(--winui-text-primary); background:var(--winui-control-fill-hover); transform:none; }
+.release-v1 .winui-social-footer .social-icons-list a:active { background:var(--winui-control-fill-pressed); }
+.release-v1 .winui-social-footer .social-icons-list svg { width:17px; height:17px; fill:currentColor; }
+html[data-theme-choice="mean-girls"] .release-v1 .app-shell { background:#ffbddb; }
+html[data-theme-choice="ea-app"] .release-v1 .app-shell { background:#181b2a; }
+@media (max-width:900px) {
+  .release-v1 .app-shell { --sidebar-width:clamp(190px,26vw,240px); }
+  .release-v1 .topbar.winui-navview { gap:6px; }
+  .release-v1 .topbar .mode-btn { padding-inline:8px; }
+  .release-v1 .topbar #lang-label { display:none; }
+}
+@media (max-height:640px) {
+  .release-v1 .left-panel { overflow-y:auto; }
+  .release-v1 .winui-social-footer { margin-top:8px; }
+}
