@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const THEME_KEY = "s3cc-splitter-theme";
 const VALID_THEMES = new Set(["system","veiga-light","veiga-dark","mean-girls","ea-app","winui-light","winui-dark"]);
@@ -116,45 +117,102 @@ async function refreshNativeAppearance() {
   }
   applyTheme(document.documentElement.dataset.themeChoice || currentChoice(), { persist: false });
 }
-const labels = {
-  en: {label:"Theme", options:["System","Veiga Light","Veiga Dark","WinUI Light","WinUI Dark","Mean Girls","EA App"]},
-  pt: {label:"Tema", options:["Sistema","Veiga Claro","Veiga Escuro","WinUI Claro","WinUI Escuro","Mean Girls","EA App"]},
-  es: {label:"Tema", options:["Sistema","Veiga Claro","Veiga Oscuro","WinUI Claro","WinUI Oscuro","Mean Girls","EA App"]}
+
+/* Exact Manager theme flyout interaction, independent persistence per tool. */
+const themeButton = document.getElementById("theme-button");
+const themeFlyout = document.getElementById("theme-flyout");
+function closeThemeFlyout() {
+  themeFlyout?.classList.add("hidden");
+  themeButton?.setAttribute("aria-expanded", "false");
+}
+themeButton?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  if (!themeFlyout) return;
+  const opening = themeFlyout.classList.contains("hidden");
+  themeFlyout.classList.toggle("hidden", !opening);
+  themeButton.setAttribute("aria-expanded", String(opening));
+});
+themeFlyout?.addEventListener("click", (event) => event.stopPropagation());
+document.querySelectorAll(".theme-option").forEach((option) => {
+  option.addEventListener("click", () => {
+    applyTheme(option.dataset.theme || "system");
+    closeThemeFlyout();
+    themeButton?.focus();
+  });
+});
+document.addEventListener("click", closeThemeFlyout);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeThemeFlyout();
+});
+
+const localizedNames = {
+  en: ["System","Veiga Light","Veiga Dark","Mean Girls","EA App","WinUI Light","WinUI Dark"],
+  pt: ["Sistema","Veiga Claro","Veiga Escuro","Mean Girls","EA App","WinUI Claro","WinUI Escuro"],
+  es: ["Sistema","Veiga Claro","Veiga Oscuro","Mean Girls","EA App","WinUI Claro","WinUI Oscuro"]
 };
-const choices = ["system","veiga-light","veiga-dark","winui-light","winui-dark","mean-girls","ea-app"];
-const group = document.createElement("div");
-group.className = "winui-theme-picker";
-const label = document.createElement("label");
-label.htmlFor = "winui-theme-select";
-const select = document.createElement("select");
-select.id = "winui-theme-select";
-select.setAttribute("aria-label", "Theme");
-for (const choice of choices) {
-  const option = document.createElement("option");
-  option.value = choice;
-  select.appendChild(option);
+function syncThemeLanguage() {
+  const code = document.getElementById("lang-current-code")?.textContent?.trim()?.toLowerCase() || "en";
+  const lang = code.startsWith("pt") ? "pt" : code.startsWith("es") ? "es" : "en";
+  const label = lang === "pt" ? "Tema" : lang === "es" ? "Tema" : "Theme";
+  const footnote = {
+    en: "System theme and accent are read from the operating system when supported.",
+    pt: "O tema e a cor de destaque do sistema são utilizados quando disponíveis.",
+    es: "Se utilizan el tema y el color de acento del sistema cuando están disponibles."
+  };
+  themeButton?.setAttribute("aria-label", label);
+  themeButton?.setAttribute("title", label);
+  themeFlyout?.setAttribute("aria-label", label);
+  const title = themeFlyout?.querySelector(".theme-flyout-title");
+  if (title) title.textContent = label;
+  themeFlyout?.querySelectorAll(".theme-option strong").forEach((element, i) => {
+    element.textContent = localizedNames[lang][i];
+  });
+  const footer = themeFlyout?.querySelector(".theme-flyout-footnote");
+  if (footer) footer.textContent = footnote[lang];
 }
-group.append(label, select);
-const topbar = document.querySelector(".topbar");
-topbar?.insertBefore(group, topbar.querySelector(".language-switcher"));
-function syncLabels() {
-  const langCode = document.getElementById("lang-current-code")?.textContent?.trim().toLowerCase();
-  const lang = langCode?.startsWith("pt") ? "pt" : langCode?.startsWith("es") ? "es" : "en";
-  label.textContent = labels[lang].label;
-  select.setAttribute("aria-label", labels[lang].label);
-  [...select.options].forEach((option,i) => { option.textContent = labels[lang].options[i]; });
+syncThemeLanguage();
+const langIndicator = document.getElementById("lang-current-code");
+if (langIndicator) {
+  new MutationObserver(syncThemeLanguage).observe(langIndicator, {
+    childList:true, characterData:true, subtree:true
+  });
 }
-select.addEventListener("change", () => applyTheme(select.value));
-const saved = currentChoice();
-select.value = saved;
-applyTheme(saved, { persist: false });
-syncLabels();
-const languageIndicator = document.getElementById("lang-current-code");
-if (languageIndicator) new MutationObserver(syncLabels).observe(languageIndicator, { childList: true, characterData: true, subtree: true });
+
 osDark.addEventListener?.("change", () => {
-  if (document.documentElement.dataset.themeChoice === "system") applyTheme("system", { persist: false });
+  if (document.documentElement.dataset.themeChoice === "system") applyTheme("system", {persist:false});
 });
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && ["system","winui-light","winui-dark"].includes(document.documentElement.dataset.themeChoice)) void refreshNativeAppearance();
+function updateSystemTheme() {
+  if (["system","winui-light","winui-dark"].includes(document.documentElement.dataset.themeChoice)) void refreshNativeAppearance();
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) updateSystemTheme(); });
+
+const appWindow = getCurrentWindow();
+const maximizeButton = document.getElementById("titlebar-maximize");
+async function updateCaptionMaximize() {
+  if (!maximizeButton) return;
+  try {
+    const maximized = await appWindow.isMaximized();
+    maximizeButton.querySelector(".winui-maximize-glyph")?.toggleAttribute("hidden",maximized);
+    maximizeButton.querySelector(".winui-restore-glyph")?.toggleAttribute("hidden",!maximized);
+    const text = maximized ? "Restore Down" : "Maximize";
+    maximizeButton.setAttribute("aria-label",text);
+    maximizeButton.title = text;
+  } catch { /* Browser preview: static glyph remains available. */ }
+}
+document.getElementById("titlebar-minimize")?.addEventListener("click", async () => {
+  try { await appWindow.minimize(); } catch (error) { console.error("Minimize failed:", error); }
 });
+maximizeButton?.addEventListener("click", async () => {
+  try { await appWindow.toggleMaximize(); await updateCaptionMaximize(); }
+  catch (error) { console.error("Maximize failed:", error); }
+});
+document.getElementById("titlebar-close")?.addEventListener("click", async () => {
+  try { await appWindow.close(); } catch (error) { console.error("Close failed:", error); }
+});
+appWindow.onResized(() => { void updateCaptionMaximize(); }).catch(() => {});
+appWindow.onFocusChanged(({payload}) => {
+  if (payload) { updateSystemTheme(); void updateCaptionMaximize(); }
+}).catch(() => {});
+void updateCaptionMaximize();
+applyTheme(currentChoice(), {persist:false});
 void refreshNativeAppearance();
