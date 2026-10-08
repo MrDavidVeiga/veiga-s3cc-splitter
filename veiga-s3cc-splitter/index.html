@@ -7,10 +7,38 @@
     <link rel="stylesheet" href="./src/style.css" />
     <link rel="stylesheet" href="./src/winui-foundation.css" />
   </head>
-  <body>
+  <body class="release-v1">
     <div class="app-shell">
-      <header class="topbar">
-        <div class="mode-switcher topbar-mode-switcher" role="tablist" aria-label="Tool mode">
+      <header class="winui-titlebar" data-tauri-drag-region>
+        <div class="winui-titlebar-identity" data-tauri-drag-region>
+          <span class="winui-window-title" data-tauri-drag-region>Veiga's S3CC Splitter | v2.4.0</span>
+        </div>
+        <div class="winui-caption-buttons" aria-label="Window controls">
+          <button id="titlebar-minimize" type="button" aria-label="Minimize" title="Minimize"><svg class="winui-caption-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 9.5H9.5"/></svg></button>
+          <button id="titlebar-maximize" type="button" aria-label="Maximize" title="Maximize">
+            <svg class="winui-caption-icon winui-maximize-glyph" viewBox="0 0 12 12" aria-hidden="true"><rect x="2.5" y="2.5" width="7" height="7"/></svg>
+            <svg class="winui-caption-icon winui-restore-glyph" viewBox="0 0 12 12" aria-hidden="true" hidden><path d="M4.5 2H10V8M2 4H8V10H2V4Z"/></svg>
+          </button>
+          <button id="titlebar-close" class="winui-caption-close" type="button" aria-label="Close" title="Close"><svg class="winui-caption-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5 9.5 9.5M9.5 2.5 2.5 9.5"/></svg></button>
+        </div>
+      <div class="theme-control">
+          <button id="theme-button" class="theme-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Theme" title="Theme"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.25a6.75 6.75 0 1 0 0 13.5V1.25Zm0 1.1v11.3a5.65 5.65 0 0 1 0-11.3Z"/></svg></button>
+          <div id="theme-flyout" class="theme-flyout hidden" role="menu" aria-label="Theme">
+            <div class="theme-flyout-title">Theme</div>
+            <button class="theme-option" data-theme="system" type="button" role="menuitemradio" aria-checked="false"><span class="theme-check">✓</span><span class="theme-option-copy"><strong>System</strong></span><span class="theme-swatch system-swatch"></span></button>
+            <button class="theme-option" data-theme="veiga-light" type="button" role="menuitemradio" aria-checked="false"><span class="theme-check">✓</span><span class="theme-option-copy"><strong>Veiga Light</strong></span><span class="theme-swatch veiga-swatch"></span></button>
+            <button class="theme-option" data-theme="veiga-dark" type="button" role="menuitemradio" aria-checked="false"><span class="theme-check">✓</span><span class="theme-option-copy"><strong>Veiga Dark</strong></span><span class="theme-swatch veiga-swatch"></span></button>
+            <button class="theme-option" data-theme="mean-girls" type="button" role="menuitemradio" aria-checked="false"><span class="theme-check">✓</span><span class="theme-option-copy"><strong>Mean Girls</strong></span><span class="theme-swatch mean-girls-swatch"></span></button>
+            <button class="theme-option" data-theme="ea-app" type="button" role="menuitemradio" aria-checked="false"><span class="theme-check">✓</span><span class="theme-option-copy"><strong>EA App</strong></span><span class="theme-swatch ea-app-swatch"></span></button>
+            <div class="theme-flyout-divider"></div>
+            <button class="theme-option" data-theme="winui-light" type="button" role="menuitemradio" aria-checked="false"><span class="theme-check">✓</span><span class="theme-option-copy"><strong>WinUI Light</strong></span><span class="theme-swatch system-swatch"></span></button>
+            <button class="theme-option" data-theme="winui-dark" type="button" role="menuitemradio" aria-checked="false"><span class="theme-check">✓</span><span class="theme-option-copy"><strong>WinUI Dark</strong></span><span class="theme-swatch system-swatch"></span></button>
+            <div class="theme-flyout-footnote">System theme and accent are read from the operating system when supported.</div>
+          </div>
+        </div>
+      </header>
+      <header class="topbar winui-navview">
+        <div class="tabs input-mode-switch mode-switcher topbar-mode-switcher" role="tablist" aria-label="Tool mode">
           <button id="mode-splitter-btn" class="mode-btn active" type="button" role="tab" aria-selected="true">Splitter</button>
           <button id="mode-merger-btn" class="mode-btn" type="button" role="tab" aria-selected="false">Merger</button>
         </div>
@@ -31,7 +59,7 @@
       </header>
       <main class="layout">
         <aside class="left-panel card">
-          <h1 class="app-title">Veiga's S3CC Splitter</h1>
+          
           <div id="splitter-controls" class="mode-controls">
             <section class="control-block drag-zone" id="package-drop-zone">
               <button id="pick-package-btn" class="primary-btn">Open Package</button>
@@ -55,6 +83,35 @@
             </section>
             <div id="merger-source-count" class="path-label"></div>
           </div>
+        <footer class="social-footer winui-social-footer">
+      <ul class="social-icons-list">
+        <li>
+          <a href="https://mypage.thesims3.com/mypage/David_Mtv" target="_blank" rel="noopener noreferrer" aria-label="The Sims">
+            <svg viewBox="0 0 40 40" aria-hidden="true"><use href="#vg-icon-sims"/></svg>
+          </a>
+        </li>
+        <li>
+          <a href="https://veigasims.tumblr.com/" target="_blank" rel="noopener noreferrer" aria-label="Tumblr">
+            <svg viewBox="0 0 40 40" aria-hidden="true"><use href="#vg-icon-tumblr"/></svg>
+          </a>
+        </li>
+        <li>
+          <a href="https://tiktok.com/@mrdavidveiga" target="_blank" rel="noopener noreferrer" aria-label="TikTok">
+            <svg viewBox="0 0 40 40" aria-hidden="true"><use href="#vg-icon-tiktok"/></svg>
+          </a>
+        </li>
+        <li>
+          <a href="https://instagram.com/veigasims" target="_blank" rel="noopener noreferrer" aria-label="Instagram">
+            <svg viewBox="0 0 40 40" aria-hidden="true"><use href="#vg-icon-instagram"/></svg>
+          </a>
+        </li>
+        <li>
+          <a href="https://twitter.com/mrdavidveiga" target="_blank" rel="noopener noreferrer" aria-label="X (Twitter)">
+            <svg viewBox="0 0 40 40" aria-hidden="true"><use href="#vg-icon-x"/></svg>
+          </a>
+        </li>
+      </ul>
+    </footer>
         </aside>
         <section class="right-panel card">
           <div id="splitter-workspace" class="mode-workspace">
@@ -185,35 +242,7 @@
       </symbol>
     </svg>
 
-    <footer class="social-footer">
-      <ul class="social-icons-list">
-        <li>
-          <a href="https://mypage.thesims3.com/mypage/David_Mtv" target="_blank" rel="noopener noreferrer" aria-label="The Sims">
-            <svg viewBox="0 0 40 40" aria-hidden="true"><use href="#vg-icon-sims"/></svg>
-          </a>
-        </li>
-        <li>
-          <a href="https://veigasims.tumblr.com/" target="_blank" rel="noopener noreferrer" aria-label="Tumblr">
-            <svg viewBox="0 0 40 40" aria-hidden="true"><use href="#vg-icon-tumblr"/></svg>
-          </a>
-        </li>
-        <li>
-          <a href="https://tiktok.com/@mrdavidveiga" target="_blank" rel="noopener noreferrer" aria-label="TikTok">
-            <svg viewBox="0 0 40 40" aria-hidden="true"><use href="#vg-icon-tiktok"/></svg>
-          </a>
-        </li>
-        <li>
-          <a href="https://instagram.com/veigasims" target="_blank" rel="noopener noreferrer" aria-label="Instagram">
-            <svg viewBox="0 0 40 40" aria-hidden="true"><use href="#vg-icon-instagram"/></svg>
-          </a>
-        </li>
-        <li>
-          <a href="https://twitter.com/mrdavidveiga" target="_blank" rel="noopener noreferrer" aria-label="X (Twitter)">
-            <svg viewBox="0 0 40 40" aria-hidden="true"><use href="#vg-icon-x"/></svg>
-          </a>
-        </li>
-      </ul>
-    </footer>
+    
   </div>
 
     <script type="module" src="./src/app.js"></script>
