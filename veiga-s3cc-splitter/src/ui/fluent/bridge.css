@@ -1,0 +1,135 @@
+/* Fluent adapters for Packer/Splitter-specific controls; Manager src/ui/fluent is the design reference. */
+body.release-v1 :is(.progress-track) {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  min-height: 4px;
+  padding: 0;
+  overflow: hidden;
+  border: none;
+  border-radius: 999px;
+  background: var(--fluent-control-pressed);
+}
+body.release-v1 .progress-track > .progress-fill {
+  display: block;
+  height: 100%;
+  min-height: 4px;
+  border-radius: inherit;
+  background: var(--fluent-accent-fill);
+  transition: width 150ms ease-out;
+}
+body.release-v1 .progress-value { color:var(--fluent-text-primary); font-variant-numeric:tabular-nums; }
+body.release-v1 :is(.panel-state, .progress-card) .state-subtitle {
+  color: var(--fluent-text-secondary); font-family:var(--fluent-body-font);
+}
+body.release-v1 :is(.content-filter-menu-item, .lang-menu-item, .sims3pack-option, .theme-option):focus-visible {
+  outline: 2px solid var(--fluent-focus-outer);
+  outline-offset: -2px;
+}
+body.release-v1 :is(.content-filter-menu-item, .lang-menu-item)[aria-selected="true"] {
+  background: var(--fluent-control-hover);
+  color: var(--fluent-text-primary);
+}
+body.release-v1 :is(.lang-menu-item, .content-filter-menu-item):disabled {
+  opacity: .8;
+  color: var(--fluent-text-primary);
+  background: var(--fluent-control-hover);
+}
+body.release-v1 .sims3pack-menu label.sims3pack-option {
+  border-radius:var(--fluent-radius-control);
+  padding:6px 8px;
+  background:transparent;
+  color:var(--fluent-text-primary);
+}
+body.release-v1 .sims3pack-menu label.sims3pack-option:hover {
+  background:var(--fluent-control-hover);
+}
+body.release-v1 :is(.app-modal, .app-modal-panel, .analysis-results-modal, .modal-panel) {
+  border: 1px solid var(--fluent-control-stroke);
+  border-radius: var(--fluent-radius-overlay);
+  background:var(--winui-popup);
+  color:var(--fluent-text-primary);
+  box-shadow:0 22px 56px var(--winui-shadow);
+}
+body.release-v1 :is(.modal-overlay, .analysis-results-overlay) {
+  background:rgba(0,0,0,.48);
+  backdrop-filter:blur(1.5px);
+}
+html[data-resolved-mode="light"] body.release-v1 :is(.modal-overlay, .analysis-results-overlay) {
+  background:rgba(0,0,0,.28);
+}
+body.release-v1 :is(.modal-header, .app-modal-header, .analysis-results-modal-header) {
+  color:var(--fluent-text-primary);
+  border-bottom-color:var(--fluent-control-stroke);
+}
+body.release-v1 :is(.modal-message, .app-modal-message) {
+  color:var(--fluent-text-secondary);
+}
+body.release-v1 :is(.library-card,.save-card,.cc-links-card,.aux-results) {
+  background:var(--winui-layer-fill);
+  color:var(--fluent-text-primary);
+  border:1px solid var(--winui-control-stroke);
+  border-radius:var(--fluent-radius-overlay);
+  box-shadow:none;
+}
+body.release-v1 :is(.library-thumb-card,.cc-links-master-row,.library-preview,.aux-preview-card) {
+  color:var(--fluent-text-primary);
+  background:var(--winui-card-fill-alt);
+  border-color:var(--fluent-control-stroke);
+  border-radius:var(--fluent-radius-control);
+}
+body.release-v1 :is(.library-thumb-card,.cc-links-master-row):not(.active):hover {
+  background:var(--fluent-control-hover);
+  border-color:var(--fluent-control-stroke-strong);
+}
+body.release-v1 :is(.library-thumb-card,.cc-links-master-row).active {
+  background:var(--winui-control-fill-hover);
+  border-color:var(--accent-outline);
+  box-shadow:inset 3px 0 0 var(--accent);
+}
+body.release-v1 .library-tab.active {
+  background:var(--winui-control-fill-hover);
+  color:var(--fluent-text-primary);
+  border-color:var(--accent-outline);
+  box-shadow:inset 0 -3px var(--accent);
+}
+body.release-v1 :is(.library-preview-name,.cc-links-list-header,.save-toolbar-title) {color:var(--fluent-text-primary);}
+body.release-v1 :is(.library-preview-file,.library-meta,.library-thumb-card small,.cc-links-master-row small) {color:var(--fluent-text-secondary);}
+body.release-v1 .resource-row.active {box-shadow:inset 3px 0 0 var(--accent);}
+body.release-v1 :is(.resource-row,.package-row) :is(.resource-button,.package-main) {
+  color:var(--fluent-text-primary); outline-offset:-2px;
+}
+body.release-v1 :is(.resource-row,.package-row):focus-within {
+  border-color:var(--accent-outline);
+}
+body.release-v1 :is(.resource-row,.package-row) :is(.resource-button,.package-main):focus-visible {
+  outline:2px solid var(--fluent-focus-outer);
+}
+body.release-v1 :is(.preview-card,.list-card,.library-preview,.aux-preview-card) {
+  border-color:var(--winui-control-stroke);
+}
+body.release-v1 .progress-track[role="progressbar"]:focus-visible {outline:2px solid var(--fluent-focus-outer);}
+body.release-v1 #package-list::-webkit-scrollbar {width:12px;height:12px;}
+body.release-v1 #package-list::-webkit-scrollbar-thumb {
+  min-height:28px; border:4px solid transparent;
+  border-radius:99px; background:var(--fluent-scrollbar-thumb);
+  background-clip:padding-box;
+}
+body.release-v1 #package-list:hover::-webkit-scrollbar-thumb,
+body.release-v1 #package-list::-webkit-scrollbar-thumb:hover {
+  border-width:2px; background:var(--fluent-scrollbar-thumb-hover);
+  background-clip:padding-box;
+}
+body.release-v1 #package-list::-webkit-scrollbar-thumb:active {
+  border-width:1px; background:var(--fluent-scrollbar-thumb-pressed);
+  background-clip:padding-box;
+}
+@media (forced-colors:active) {
+  body.release-v1 :is(.progress-track,.app-modal,.app-modal-panel,.analysis-results-modal,.library-thumb-card) {
+    background:Canvas; color:CanvasText; border-color:ButtonText;
+  }
+  body.release-v1 .progress-fill {background:Highlight;}
+}
+@media (prefers-reduced-motion:reduce) {
+  body.release-v1 .progress-fill {transition:none;}
+}
