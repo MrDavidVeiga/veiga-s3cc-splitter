@@ -265,7 +265,7 @@ html[data-theme-choice] :is(.progress-track, progress) {
   border-radius: 999px;
   border-color: var(--winui-control-stroke);
 }
-html[data-theme-choice] :is(.progress-fill, progress::-webkit-progress-value) {
+html[data-theme-choice] .progress-fill {
   background: var(--accent);
   border-radius: 999px;
 }
