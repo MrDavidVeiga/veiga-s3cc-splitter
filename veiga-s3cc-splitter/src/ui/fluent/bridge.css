@@ -133,3 +133,104 @@ body.release-v1 #package-list::-webkit-scrollbar-thumb:active {
 @media (prefers-reduced-motion:reduce) {
   body.release-v1 .progress-fill {transition:none;}
 }
+
+/* Finish theme mapping for destination-exclusive views.
+ * The legacy stylesheet predates light themes and contains fixed dark fills.
+ * Preserve status semantics, but use Manager's live Fluent palette.
+ */
+html[data-theme-choice] { --border:var(--winui-control-stroke); }
+body.release-v1 .drop-hint,
+body.release-v1 .missing-keys-details,
+body.release-v1 :is(.cc-links-master-block,.cc-links-export-bar,.cc-links-stat,
+ .cc-links-results,.cc-links-empty,.cc-links-autosave-control,.cc-links-export-help,
+ .save-list-panel,.save-detail,.save-game-row) {
+  color:var(--winui-text-primary);
+  background:var(--winui-card-fill-alt);
+  border-color:var(--winui-control-stroke);
+  border-radius:var(--fluent-radius-control);
+}
+body.release-v1 :is(.drop-hint,.missing-keys-details,.cc-links-empty) {
+  color:var(--winui-text-secondary);
+}
+body.release-v1 :is(.preview-thumb-wrap,.library-preview-thumb-wrap,.cc-link-inline-preview img,
+ .library-thumb-card img,.save-game-row img) {
+  background:var(--winui-control-fill-pressed);
+  border-color:var(--winui-control-stroke);
+  border-radius:var(--fluent-radius-control);
+}
+body.release-v1 :is(.preview-meta,.preview-kind,.type-pill) {
+  color:var(--accent);
+}
+body.release-v1 :is(.package-usage,.package-row .package-usage,.preview-path,.preview-meta,.cc-links-list-header,
+ .cc-links-export-help,.cc-link-url-warning,.drop-hint,.merger-source-path,.library-thumb-card small) {
+  color:var(--winui-text-secondary);
+}
+body.release-v1 :is(.cc-links-stat,.cc-link-row,.save-game-row):not(.active):hover {
+  background:var(--fluent-control-hover);
+  border-color:var(--winui-control-stroke-strong);
+}
+body.release-v1 :is(.cc-links-stat,.save-game-row).active {
+  background:var(--accent-low);
+  border-color:var(--accent-outline);
+}
+body.release-v1 :is(.cc-link-row,.save-game-row) {
+  border-bottom-color:var(--winui-divider);
+  color:var(--winui-text-primary);
+}
+body.release-v1 :is(.cc-link-input,.cc-link-select) {
+  background:var(--fluent-control-fill);
+  color:var(--winui-text-primary);
+  border:1px solid var(--winui-control-stroke-strong);
+  border-radius:var(--fluent-radius-control);
+}
+body.release-v1 :is(.cc-link-input,.cc-link-select):focus {
+  border-bottom:2px solid var(--accent);
+  outline-offset:2px;
+}
+body.release-v1 .mini-btn,
+body.release-v1 :is(.modal-close,.app-modal-close) {
+  color:var(--winui-text-primary);
+  border:1px solid var(--winui-control-stroke);
+  background:var(--fluent-control-fill);
+  border-radius:var(--fluent-radius-control);
+}
+body.release-v1 .mini-btn:hover,
+body.release-v1 :is(.modal-close,.app-modal-close):hover {
+  background:var(--fluent-control-hover);
+  border-color:var(--winui-control-stroke-strong);
+}
+body.release-v1 :is(.cc-links-list,.library-grid,.save-list,.analysis-results-list) {
+  scrollbar-color:auto;
+}
+body.release-v1 .merger-source-row {
+  background:var(--winui-card-fill-alt);
+  color:var(--winui-text-primary);
+  border-color:var(--winui-control-stroke);
+  border-radius:var(--fluent-radius-control);
+}
+body.release-v1 .merger-remove-btn {
+  color:var(--fluent-danger);
+  border:1px solid var(--winui-control-stroke);
+  border-radius:var(--fluent-radius-control);
+  background:var(--fluent-control-fill);
+}
+body.release-v1 .merger-remove-btn:hover { color:var(--fluent-danger); border-color:var(--fluent-danger); background:var(--fluent-danger-hover); }
+body.release-v1 .merger-result {
+  background:var(--accent-low);
+  color:var(--winui-text-primary);
+  border-color:var(--accent-outline);
+  border-radius:var(--fluent-radius-control);
+}
+body.release-v1 :is(.resource-row,.package-row) { color:var(--winui-text-primary); }
+body.release-v1 .resource-row.same-name { background:var(--winui-card-fill-alt); }
+body.release-v1 .resource-row.duplicate { background:var(--accent-low); }
+body.release-v1 .resource-row.tgi-conflict { background:rgba(196,72,72,.08); }
+html[data-resolved-mode="light"] body.release-v1 * {
+  scrollbar-color:auto;
+}
+html[data-resolved-mode="light"] body.release-v1 .cc-link-url-warning {color:#986100;}
+@media (forced-colors:active) {
+  body.release-v1 :is(.cc-links-stat,.save-game-row,.cc-links-results,.merger-source-row,.cc-link-input) {
+    background:Canvas;color:CanvasText;border-color:ButtonText;
+  }
+}
