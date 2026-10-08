@@ -6778,6 +6778,7 @@ dependencies = [
  "tauri-plugin-opener",
  "thiserror 2.0.18",
  "walkdir",
+ "windows 0.61.3",
  "zip",
 ]
 
