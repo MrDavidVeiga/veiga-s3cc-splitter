@@ -1,0 +1,46 @@
+name: WinUI Manager migration validation
+on:
+  push:
+    branches:
+      - feature/winui3-manager-migration
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'veiga-s3cc-splitter/**'
+      - '.github/workflows/winui-migration-validation.yml'
+  workflow_dispatch:
+jobs:
+  frontend:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: veiga-s3cc-splitter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: 'veiga-s3cc-splitter/package-lock.json'
+      - name: Install
+        run: npm ci
+      - name: Check migrated JS modules
+        run: |
+          node --check src/winui-theme.js
+          node --check src/winui-keyboard.js
+      - name: Test frontend interaction logic
+        run: node --test
+      - name: Compile Vite frontend
+        run: npm run build
+  rust-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+      - name: Validate Windows Rust commands and Cargo.lock
+        run: cargo check --locked -p veiga-s3cc-splitter
