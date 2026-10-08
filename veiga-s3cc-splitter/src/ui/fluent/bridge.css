@@ -234,3 +234,27 @@ html[data-resolved-mode="light"] body.release-v1 .cc-link-url-warning {color:#98
     background:Canvas;color:CanvasText;border-color:ButtonText;
   }
 }
+
+/* Fluent RadioButton styling for Packer-specific radio groups. */
+body.release-v1 input[type="radio"] {
+  -webkit-appearance:none; appearance:none; box-sizing:border-box;
+  position:relative; display:inline-grid; place-items:center;
+  flex:0 0 20px; width:20px; height:20px; min-width:20px;
+  margin:0; vertical-align:middle; border:1px solid var(--fluent-control-stroke-strong);
+  border-radius:50%; color:var(--fluent-text-primary); background:var(--fluent-control-fill);
+  cursor:pointer;
+}
+body.release-v1 input[type="radio"]:not(:disabled):hover {background:var(--fluent-control-hover);}
+body.release-v1 input[type="radio"]:not(:disabled):active {background:var(--fluent-control-pressed);}
+body.release-v1 input[type="radio"]:checked {
+  background:var(--fluent-accent-fill);
+  border-color:var(--fluent-accent-pressed);
+}
+body.release-v1 input[type="radio"]:checked::after {
+  content:""; position:absolute; inset:6px;
+  border-radius:50%; background:var(--fluent-accent-foreground);
+}
+body.release-v1 input[type="radio"]:disabled {opacity:.45;cursor:default;}
+body.release-v1 input[type="radio"]:focus-visible {
+  outline:2px solid var(--fluent-focus-outer);outline-offset:2px;
+}
