@@ -1,6 +1,6 @@
 [package]
 name = "veiga-s3cc-splitter"
-version = "2.4.0"
+version = "2.2.0"
 edition = "2021"
 
 [lib]
