@@ -150,8 +150,8 @@ document.addEventListener("keydown", (event) => {
 
 const localizedNames = {
   en: ["System","Veiga Light","Veiga Dark","Mean Girls","EA App","WinUI Light","WinUI Dark"],
-  pt: ["Sistema","Veiga Claro","Veiga Escuro","Mean Girls","EA App","WinUI Claro","WinUI Escuro"],
-  es: ["Sistema","Veiga Claro","Veiga Oscuro","Mean Girls","EA App","WinUI Claro","WinUI Oscuro"]
+  pt: ["Sistema","Veiga Claro","Veiga Escuro","Meninas Malvadas","EA App","WinUI Claro","WinUI Escuro"],
+  es: ["Sistema","Veiga Claro","Veiga Oscuro","Chicas Malasis","EA App","WinUI Claro","WinUI Oscuro"]
 };
 const captionLabels = {
   en: {minimize:"Minimize", maximize:"Maximize", restore:"Restore down", close:"Close", windowControls:"Window controls", inputMode:"Input mode"},
