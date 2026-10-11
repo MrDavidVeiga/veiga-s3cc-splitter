@@ -7,7 +7,6 @@ import noPreviewImage from "./assets/no-preview.png";
 import exportIcon from "./assets/icons/export.png";
 import zipIcon from "./assets/icons/zip.png";
 import clearIcon from "./assets/icons/clear.png";
-import unmergeIcon from "./assets/icons/unmerge.png";
 import { canUseReversibleMergeActions, formatRemoveConfirm } from "./remove-confirm.js";
 import { createModalController, runConfirmedAction } from "./modal.js";
 import {
@@ -611,7 +610,7 @@ function applyStaticTranslations() {
   if (el.mergerClearBtn) el.mergerClearBtn.innerHTML = `<img src="${clearIcon}" alt="" class="btn-icon" /><span>${t("mergerClear")}</span>`;
   if (el.mergerTitle) el.mergerTitle.textContent = t("mergerTitle");
   if (el.restoreManifestBtn) {
-    el.restoreManifestBtn.innerHTML = `<img src="${unmergeIcon}" alt="" class="btn-icon" /><span>${t("restoreOriginals")}</span>`;
+    el.restoreManifestBtn.innerHTML = `<i class="fa-solid fa-reply" aria-hidden="true"></i><span>${t("restoreOriginals")}</span>`;
     el.restoreManifestBtn.title = t("restoreOriginals");
     el.restoreManifestBtn.setAttribute("aria-label", t("restoreOriginals"));
   }
