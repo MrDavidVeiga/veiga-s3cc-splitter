@@ -26,6 +26,7 @@ const translations = {
     appTitle: "Veiga's S3CC Splitter",
     langLabel: "Language:",
     pickPackage: "Open Package",
+    pickPackageTip: "Select a .package or .dbc file to open in the Splitter.",
     dropHint: "Select or drag a .package or .dbc here",
     scanList: "Load List",
     modeSplitter: "Splitter",
@@ -166,6 +167,7 @@ const translations = {
     appTitle: "Veiga's S3CC Splitter",
     langLabel: "Idioma:",
     pickPackage: "Abrir Package",
+    pickPackageTip: "Selecione um arquivo .package ou .dbc para abrir no Separador.",
     dropHint: "Selecione ou arraste um .package ou .dbc aqui",
     scanList: "Carregar Lista",
     modeSplitter: "Separador",
@@ -306,6 +308,7 @@ const translations = {
     appTitle: "Veiga's S3CC Splitter",
     langLabel: "Idioma:",
     pickPackage: "Abrir Package",
+    pickPackageTip: "Selecciona un archivo .package o .dbc para abrirlo en el Separador.",
     dropHint: "Selecciona o arrastra un .package o .dbc aquí",
     scanList: "Cargar Lista",
     modeSplitter: "Separador",
@@ -602,13 +605,17 @@ function setLanguage(language) {
 function applyStaticTranslations() {
   if (el.appTitle) el.appTitle.textContent = t("appTitle");
   if (el.langLabel) el.langLabel.textContent = t("langLabel");
-  if (el.pickPackageBtn) el.pickPackageBtn.textContent = t("pickPackage");
-  if (el.dropHint) el.dropHint.textContent = t("dropHint");
+  if (el.pickPackageBtn) {
+    el.pickPackageBtn.textContent = t("pickPackage");
+    el.pickPackageBtn.title = t("pickPackageTip");
+  }
+  // Update only the text, preserving the drag target icon and .package/.dbc list.
+  if (el.dropHint) el.dropHint.querySelector(".drop-hint-title")?.replaceChildren(t("dropHint"));
   if (el.scanBtn) el.scanBtn.textContent = t("scanList");
   if (el.modeSplitterBtn) el.modeSplitterBtn.textContent = t("modeSplitter");
   if (el.modeMergerBtn) el.modeMergerBtn.textContent = t("modeMerger");
   if (el.mergerAddPackagesBtn) el.mergerAddPackagesBtn.textContent = t("mergerAddPackages");
-  if (el.mergerAddHint) el.mergerAddHint.textContent = t("mergerAddHint");
+  if (el.mergerAddHint) el.mergerAddHint.querySelector(".drop-hint-title")?.replaceChildren(t("mergerAddHint"));
   if (el.mergerRunBtn) el.mergerRunBtn.innerHTML = `<img src="${zipIcon}" alt="" class="btn-icon" /><span>${state.mergerBusy ? t("mergerBusy") : t("mergerRun")}</span>`;
   if (el.mergerClearBtn) el.mergerClearBtn.innerHTML = `<img src="${clearIcon}" alt="" class="btn-icon" /><span>${t("mergerClear")}</span>`;
   if (el.mergerTitle) el.mergerTitle.textContent = t("mergerTitle");
