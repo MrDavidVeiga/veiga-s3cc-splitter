@@ -863,6 +863,8 @@ function render() {
   el.splitterWorkspace?.classList.toggle("hidden", !splitterMode);
   el.mergerWorkspace?.classList.toggle("hidden", splitterMode);
 
+  // Carregar Lista is available only after a valid source package is chosen.
+  if (el.scanBtn) el.scanBtn.disabled = state.isBusy || !isScannablePackagePath(state.packagePath);
   updatePathLabel(el.packagePath, state.packagePath);
 
   const visibleResources = getVisibleResources();
@@ -1044,9 +1046,13 @@ function handleSelectionClick(key, event) {
   render();
 }
 
+function isScannablePackagePath(path) {
+  return /\.(?:package|dbc)$/i.test(String(path || "").trim());
+}
+
 async function pickPackage() {
   const result = await open({ multiple: false, filters: [{ name: "Package", extensions: ["package", "dbc"] }] });
-  if (typeof result === "string") {
+  if (typeof result === "string" && isScannablePackagePath(result)) {
     state.packagePath = result;
     state.resources = [];
     state.selectedKeys = [];
@@ -1073,7 +1079,7 @@ function parentFolderOfPath(path) {
 }
 
 async function scanPackage() {
-  if (!state.packagePath) return;
+  if (state.isBusy || !isScannablePackagePath(state.packagePath)) return;
 
   setBusy(t("busyReadTitle"), t("busyReadMessage"));
 
