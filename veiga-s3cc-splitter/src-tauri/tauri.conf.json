@@ -1,7 +1,7 @@
 {
   "$schema": "../src-tauri/gen/schemas/desktop-schema.json",
   "productName": "Veiga´s S3CC Splitter",
-  "version": "2.4.0",
+  "version": "2.1.0",
   "identifier": "com.veiga.s3ccsplitter",
   "build": {
     "beforeDevCommand": "npm run dev",
