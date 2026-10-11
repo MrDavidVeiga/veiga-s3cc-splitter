@@ -308,3 +308,16 @@ body.release-v1 #restore-manifest-btn > .fa-reply {
   background:Highlight;color:HighlightText;border-color:Highlight;
  }
 }
+
+/* Non-selectable instructions for both native drag-and-drop targets. */
+body.release-v1 :is(#package-drop-zone,#merger-drop-zone,.drag-zone,.drop-hint,
+.drop-hint-title,.drop-hint-formats,.drop-hint-icon) {
+  user-select:none;-webkit-user-select:none;-webkit-user-drag:none;
+}
+body.release-v1 #preview-thumb[role="button"] {cursor:pointer;}
+body.release-v1 #preview-thumb[role="button"]:focus-visible {
+  outline:2px solid var(--accent);outline-offset:2px;
+}
+body.release-v1 #restore-manifest-btn > .fa-rotate-left {
+  display:inline-block;flex:0 0 auto;font-size:16px;line-height:1;color:inherit;
+}
