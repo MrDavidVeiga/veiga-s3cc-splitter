@@ -23,11 +23,11 @@ test("English Portuguese and Spanish contain identical translation keys",()=>{
 });
 test("All three languages translate interaction terms naturally",()=>{
  assert.equal(locale.pt.modeMerger,"Mesclador");
- assert.equal(locale.es.modeMerger,"Combinador");
+ assert.equal(locale.es.modeMerger,"Fusionador");
  assert.equal(locale.es.selectNone,"Deseleccionar todo");
  assert.equal(locale.pt.previewTitle,"Pré-visualização");
  assert.equal(locale.pt.clear,"Limpar Lista");
- assert.equal(locale.es.restoreOriginals,"Deshacer combinación");
+ assert.equal(locale.es.restoreOriginals,"Desfusionar");
  for(const language of ["en","pt","es"]){
    assert.ok(locale[language].dropHint && locale[language].mergerAddHint);
  }
