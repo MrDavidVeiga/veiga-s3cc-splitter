@@ -74,3 +74,11 @@ test("Open Package tooltip matches accepted file types in all languages",()=>{
  assert.match(source,/el\.mergerAddHint\.querySelector\("\.drop-hint-title"\)\?\.replaceChildren\(t\("mergerAddHint"\)\)/);
  assert.doesNotMatch(source,/el\.(?:dropHint|mergerAddHint)\.textContent\s*=/);
 });
+
+test("Portuguese and Spanish preview labels and title-case actions",()=>{
+ assert.equal(locale.pt.instanceLabel,"Instância");
+ assert.equal(locale.es.instanceLabel,"Instancia");
+ assert.equal(locale.es.removeSelectedFiles,"Eliminar Archivos Seleccionados");
+ assert.equal(locale.pt.removeSelectedFiles,"Remover Arquivos Selecionados");
+ assert.equal(locale.pt.scanList,"Carregar Lista");
+});
