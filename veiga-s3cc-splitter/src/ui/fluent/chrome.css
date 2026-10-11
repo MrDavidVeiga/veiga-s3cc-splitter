@@ -1,0 +1,58 @@
+/* Combined batch 6: normalize caption glyphs and align TabView NavigationView.
+ * Preserves all native window event handlers and seven theme palettes. */
+.winui-caption-buttons button { position:relative; }
+.winui-caption-buttons .winui-caption-icon {
+  width: 12px;
+  height: 12px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.15;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  vector-effect: non-scaling-stroke;
+}
+.winui-caption-buttons .winui-caption-icon[hidden] { display:none; }
+.winui-caption-buttons button:focus-visible {
+  outline:2px solid var(--fluent-focus-outer);
+  outline-offset:-3px;
+}
+
+/* TabView indicator: preserve dimensions; add Fluent smooth state changes. */
+body.release-v1 .topbar.winui-navview {
+  min-width:0;
+}
+body.release-v1 .topbar-mode-switcher .mode-btn {
+  flex: 0 0 auto;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+body.release-v1 .topbar-mode-switcher .mode-btn.active::after {
+  transition: width 150ms ease, background-color 150ms ease;
+}
+body.release-v1 .topbar-mode-switcher .mode-btn:focus-visible {
+  outline: 2px solid var(--fluent-focus-outer);
+  outline-offset: -2px;
+}
+body.release-v1 .topbar-mode-switcher .mode-btn[aria-selected="true"] {
+  font-weight: 600;
+}
+/* Shared motion pacing for overlays; no heavy shadows or scale transforms. */
+body.release-v1 :is(.lang-menu, .theme-flyout, .fluent-combobox-flyout):not(.hidden) {
+  animation: fluent-reveal-down 110ms ease-out both;
+}
+@keyframes fluent-reveal-down {
+  from { opacity:.3; transform:translateY(-3px); }
+  to { opacity:1; transform:translateY(0); }
+}
+@media (prefers-reduced-motion:reduce) {
+  body.release-v1 .topbar-mode-switcher .mode-btn,
+  body.release-v1 .topbar-mode-switcher .mode-btn.active::after { transition:none; }
+  body.release-v1 :is(.lang-menu,.theme-flyout,.fluent-combobox-flyout):not(.hidden) { animation:none; }
+}
+@media (forced-colors:active) {
+  body.release-v1 .topbar-mode-switcher .mode-btn[aria-selected="true"] {
+    outline:1px solid Highlight;
+    outline-offset:-2px;
+  }
+  .winui-caption-buttons .winui-caption-icon { stroke:ButtonText; }
+}

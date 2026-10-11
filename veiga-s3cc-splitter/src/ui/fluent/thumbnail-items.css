@@ -1,0 +1,74 @@
+/* ItemsView/GridView fidelity — visual states in the Tauri/WebView UI.
+ * Do not treat informational thumbnails as selectable controls. */
+html[data-theme-choice] body.release-v1 .winui-thumb-item {
+  box-sizing:border-box;position:relative;isolation:isolate;min-width:0;
+  background:var(--winui-card-fill-alt);color:var(--winui-text-primary);
+  border:1px solid var(--winui-control-stroke);
+  border-radius:var(--fluent-radius-control);
+  box-shadow:none;
+  transition:background-color 110ms ease,border-color 110ms ease;
+}
+html[data-theme-choice] body.release-v1 .winui-thumb-item:not(:disabled):hover {
+  background:var(--winui-control-fill-hover);border-color:var(--winui-control-stroke-strong);
+}
+html[data-theme-choice] body.release-v1 .winui-thumb-item:not(:disabled):active {
+  background:var(--winui-control-fill-pressed);
+}
+html[data-theme-choice] body.release-v1 .winui-thumb-item[aria-selected="true"] {
+  background:var(--winui-control-fill-hover);
+  border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent-outline);
+}
+/* A selected card has a corner check. Unselected and preview-only images do not. */
+html[data-theme-choice] body.release-v1 .winui-thumb-item[aria-selected="true"]::before {
+  content:"";position:absolute;z-index:2;top:10px;right:10px;
+  width:20px;height:20px;box-sizing:border-box;
+  border:1px solid var(--accent);border-radius:50%;
+  background:var(--accent);box-shadow:0 0 0 2px var(--winui-card-fill);
+  pointer-events:none;
+}
+html[data-theme-choice] body.release-v1 .winui-thumb-item[aria-selected="true"]::after {
+  content:"";position:absolute;z-index:3;top:13px;right:17px;
+  width:5px;height:9px;box-sizing:border-box;
+  border-right:2px solid var(--fluent-accent-foreground);
+  border-bottom:2px solid var(--fluent-accent-foreground);
+  transform:rotate(45deg);pointer-events:none;
+}
+html[data-theme-choice] body.release-v1 .winui-thumb-item:focus-visible {
+  outline:2px solid var(--fluent-focus-outer);outline-offset:2px;
+}
+html[data-theme-choice] body.release-v1 .winui-thumb-item:disabled{opacity:.45;}
+/* Contain preserves full TS3 custom thumbnails instead of cropping them. */
+html[data-theme-choice] body.release-v1 :is(.winui-thumb-item img,.preview-thumb,.library-preview-thumb,.duplicate-member-thumb,.conflict-member-thumb) {
+  object-fit:contain;background:var(--winui-control-fill-pressed);
+}
+html[data-theme-choice] body.release-v1 .winui-thumb-item img {
+  width:100%;aspect-ratio:1/1;display:block;
+  object-fit:contain;border:1px solid var(--winui-control-stroke);
+  border-radius:var(--fluent-radius-control);
+}
+html[data-theme-choice] body.release-v1 :is(.preview-thumb-wrap,.library-preview-thumb-wrap,.winui-thumbnail-visual) {
+  position:relative;aspect-ratio:1/1;overflow:hidden;
+  border-radius:var(--fluent-radius-control);
+  border:1px solid var(--winui-control-stroke);
+  background:var(--winui-control-fill-pressed);
+}
+html[data-theme-choice] body.release-v1 :is(.preview-card,.library-preview,.aux-preview-card) {
+  background:var(--winui-card-fill-alt);color:var(--winui-text-primary);
+  border-color:var(--winui-control-stroke);
+  border-radius:var(--fluent-radius-control);
+}
+@media(prefers-reduced-motion:reduce){body.release-v1 .winui-thumb-item{transition:none;}}
+@media(forced-colors:active){
+  html[data-theme-choice] body.release-v1 :is(.winui-thumb-item,.winui-thumbnail-visual){
+    forced-color-adjust:auto;background:Canvas;color:CanvasText;border-color:ButtonText;
+  }
+  html[data-theme-choice] body.release-v1 .winui-thumb-item[aria-selected="true"] {
+    border-color:Highlight;outline:1px solid Highlight;
+  }
+  html[data-theme-choice] body.release-v1 .winui-thumb-item[aria-selected="true"]::before{
+    background:Highlight;border-color:Highlight;box-shadow:none;
+  }
+  html[data-theme-choice] body.release-v1 .winui-thumb-item[aria-selected="true"]::after{
+    border-color:HighlightText;
+  }
+}

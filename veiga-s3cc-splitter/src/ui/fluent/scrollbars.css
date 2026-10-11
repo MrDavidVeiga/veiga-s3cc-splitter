@@ -1,0 +1,152 @@
+/*
+ * Fluent overlay-style native ScrollBars.
+ * Keep Windows/WebView2 native scrolling, wheel, touch and virtualization.
+ * Reserve a FIXED 12px control channel; alter thumb's visible width through
+ * transparent borders, avoiding list-width jitter on hover.
+ */
+body.release-v1 {
+  --fluent-scrollbar-track: transparent;
+  --fluent-scrollbar-thumb: rgba(140, 147, 155, .72);
+  --fluent-scrollbar-thumb-hover: rgba(165, 172, 181, .88);
+  --fluent-scrollbar-thumb-pressed: rgba(188, 196, 204, .95);
+}
+html[data-resolved-mode="light"] body.release-v1 {
+  --fluent-scrollbar-thumb: rgba(73, 81, 91, .48);
+  --fluent-scrollbar-thumb-hover: rgba(73, 81, 91, .70);
+  --fluent-scrollbar-thumb-pressed: rgba(73, 81, 91, .86);
+}
+
+body.release-v1 :is(
+  .package-list, .duplicates-list, .conflicts-list,
+  .preview-card, .planner-scroll-list, .plan-items, .planner-side,
+  .technical-resource-list, .restore-history-list,
+  .structure-list, .structure-preview, .tools-panel, .tools-list,
+  .catalog-path-list, .catalog-table-shell, .catalog-preview,
+  .catalog-queue-list, .sims3pack-converter-results,
+  .collision-review-list, .duplicate-details-content,
+  .conflict-details-content, .content-filter-menu,
+  .resource-list, .merger-source-list, .cc-links-list, .library-grid, .content-filter-menu
+) {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+  overscroll-behavior: contain;
+}
+body.release-v1 :is(
+  .package-list, .duplicates-list, .conflicts-list,
+  .preview-card, .planner-scroll-list, .plan-items, .planner-side,
+  .technical-resource-list, .restore-history-list,
+  .structure-list, .structure-preview, .tools-panel, .tools-list,
+  .catalog-path-list, .catalog-table-shell, .catalog-preview,
+  .catalog-queue-list, .sims3pack-converter-results,
+  .collision-review-list, .duplicate-details-content,
+  .conflict-details-content, .content-filter-menu,
+  .resource-list, .merger-source-list, .cc-links-list, .library-grid, .content-filter-menu
+)::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+body.release-v1 :is(
+  .package-list, .duplicates-list, .conflicts-list,
+  .preview-card, .planner-scroll-list, .plan-items, .planner-side,
+  .technical-resource-list, .restore-history-list,
+  .structure-list, .structure-preview, .tools-panel, .tools-list,
+  .catalog-path-list, .catalog-table-shell, .catalog-preview,
+  .catalog-queue-list, .sims3pack-converter-results,
+  .collision-review-list, .duplicate-details-content,
+  .conflict-details-content, .content-filter-menu,
+  .resource-list, .merger-source-list, .cc-links-list, .library-grid, .content-filter-menu
+)::-webkit-scrollbar-track {
+  background: var(--fluent-scrollbar-track);
+}
+body.release-v1 :is(
+  .package-list, .duplicates-list, .conflicts-list,
+  .preview-card, .planner-scroll-list, .plan-items, .planner-side,
+  .technical-resource-list, .restore-history-list,
+  .structure-list, .structure-preview, .tools-panel, .tools-list,
+  .catalog-path-list, .catalog-table-shell, .catalog-preview,
+  .catalog-queue-list, .sims3pack-converter-results,
+  .collision-review-list, .duplicate-details-content,
+  .conflict-details-content, .content-filter-menu,
+  .resource-list, .merger-source-list, .cc-links-list, .library-grid, .content-filter-menu
+)::-webkit-scrollbar-thumb {
+  min-height: 28px;
+  min-width: 28px;
+  border-radius: 99px;
+  border: 4px solid transparent;
+  background: var(--fluent-scrollbar-thumb);
+  background-clip: padding-box;
+}
+body.release-v1 :is(
+  .package-list, .duplicates-list, .conflicts-list,
+  .preview-card, .planner-scroll-list, .plan-items, .planner-side,
+  .technical-resource-list, .restore-history-list,
+  .structure-list, .structure-preview, .tools-panel, .tools-list,
+  .catalog-path-list, .catalog-table-shell, .catalog-preview,
+  .catalog-queue-list, .sims3pack-converter-results,
+  .collision-review-list, .duplicate-details-content,
+  .conflict-details-content, .content-filter-menu,
+  .resource-list, .merger-source-list, .cc-links-list, .library-grid, .content-filter-menu
+):hover::-webkit-scrollbar-thumb,
+body.release-v1 :is(
+  .package-list, .duplicates-list, .conflicts-list,
+  .preview-card, .planner-scroll-list, .plan-items, .planner-side,
+  .technical-resource-list, .restore-history-list,
+  .structure-list, .structure-preview, .tools-panel, .tools-list,
+  .catalog-path-list, .catalog-table-shell, .catalog-preview,
+  .catalog-queue-list, .sims3pack-converter-results,
+  .collision-review-list, .duplicate-details-content,
+  .conflict-details-content, .content-filter-menu,
+  .resource-list, .merger-source-list, .cc-links-list, .library-grid, .content-filter-menu
+)::-webkit-scrollbar-thumb:hover {
+  border-width: 2px;
+  background: var(--fluent-scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+body.release-v1 :is(
+  .package-list, .duplicates-list, .conflicts-list,
+  .preview-card, .planner-scroll-list, .plan-items, .planner-side,
+  .technical-resource-list, .restore-history-list,
+  .structure-list, .structure-preview, .tools-panel, .tools-list,
+  .catalog-path-list, .catalog-table-shell, .catalog-preview,
+  .catalog-queue-list, .sims3pack-converter-results,
+  .collision-review-list, .duplicate-details-content,
+  .conflict-details-content, .content-filter-menu,
+  .resource-list, .merger-source-list, .cc-links-list, .library-grid, .content-filter-menu
+)::-webkit-scrollbar-thumb:active {
+  border-width: 1px;
+  background: var(--fluent-scrollbar-thumb-pressed);
+  background-clip: padding-box;
+}
+
+/* The old Manager-specific scrollbar rules are more specific: override
+ * only the painted thumb, never the layout, list sizes or row strides. */
+body.release-v1 #page-organizer .manager-list-card .package-list {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+body.release-v1 #page-organizer .manager-list-card .package-list::-webkit-scrollbar {
+  width: 12px;
+}
+body.release-v1 #page-organizer .manager-list-card .package-list::-webkit-scrollbar-thumb {
+  border: 4px solid transparent;
+  background: var(--fluent-scrollbar-thumb);
+  background-clip: padding-box;
+}
+body.release-v1 #page-organizer .manager-list-card .package-list:hover::-webkit-scrollbar-thumb {
+  border-width: 2px;
+  background: var(--fluent-scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+body.release-v1 #page-organizer .manager-list-card .package-list::-webkit-scrollbar-thumb:active {
+  border-width: 1px;
+  background: var(--fluent-scrollbar-thumb-pressed);
+  background-clip: padding-box;
+}
+@media (forced-colors: active) {
+  body.release-v1 { --fluent-scrollbar-thumb: ButtonText; --fluent-scrollbar-thumb-hover: Highlight; }
+}
+@media (pointer: coarse) {
+  body.release-v1 :is(.package-list,.duplicates-list,.conflicts-list,.preview-card) {
+    scrollbar-width: thin;
+  }
+}
