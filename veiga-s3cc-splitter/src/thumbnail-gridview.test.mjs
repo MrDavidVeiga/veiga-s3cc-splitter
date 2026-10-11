@@ -37,3 +37,11 @@ test("The only clickable preview surface is the image, with one Explorer handler
   assert.match(theme,/outline-color:var\(--accent\)/);
   assert.match(html,/id="theme-button-label">Theme<\/span>/);
 });
+
+test("Load List stays disabled until a .package or .dbc is chosen, including after Clear List",()=>{
+  assert.match(html,/<button[^>]*id="scan-btn"[^>]*disabled>/);
+  assert.match(app,/function isScannablePackagePath\(path\)/);
+  assert.match(app,/el\.scanBtn\.disabled = state\.isBusy \|\| !isScannablePackagePath\(state\.packagePath\)/);
+  assert.match(app,/if \(state\.isBusy \|\| !isScannablePackagePath\(state\.packagePath\)\) return/);
+  assert.match(app,/function clearAll\(\) \{[\s\S]*?state\.packagePath = ""/);
+});
