@@ -401,3 +401,35 @@ html[data-theme-choice] body.release-v1 .topbar #theme-button-label {
   html[data-theme-choice] body.release-v1 .topbar #theme-button-label {display:none;}
   html[data-theme-choice] body.release-v1 .topbar .theme-button {width:32px;padding:0;}
 }
+
+/* Mean Girls parity: use Packer's black primary action, not the pink generic
+   Fluent accent action. Pink remains for selected states and progress. */
+html[data-theme-choice="mean-girls"] body.release-v1 .primary-btn {
+  background:#101010;
+  color:#FFFFFF;
+  border-color:#101010;
+  border-bottom-color:#000000;
+}
+html[data-theme-choice="mean-girls"] body.release-v1 .primary-btn:not(:disabled):hover {
+  background:#292929;
+  color:#FFFFFF;
+  border-color:#292929;
+}
+html[data-theme-choice="mean-girls"] body.release-v1 .primary-btn:not(:disabled):active {
+  background:#050505;
+  color:#FFFFFF;
+}
+/* Match the Manager's burgundy title strip and white window controls. */
+html[data-theme-choice="mean-girls"] body.release-v1 .winui-titlebar {
+  background:#5F1B3F;
+  color:#FFFFFF;
+}
+html[data-theme-choice="mean-girls"] body.release-v1 .winui-caption-buttons button {
+  color:#FFFFFF;
+}
+html[data-theme-choice="mean-girls"] body.release-v1 .winui-caption-buttons button:hover {
+  background:rgba(255,255,255,.10);
+}
+html[data-theme-choice="mean-girls"] body.release-v1 .winui-caption-buttons button:active {
+  background:rgba(255,255,255,.06);
+}
