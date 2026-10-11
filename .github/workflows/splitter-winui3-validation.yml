@@ -62,7 +62,9 @@ jobs:
 
   portable-windows-x64:
     runs-on: windows-2022
-    needs: [frontend,winui-browser,rust-windows]
+    # Build the test portable after frontend and theme checks; Rust regression
+    # suite runs independently and remains required for final acceptance.
+    needs: [frontend,winui-browser]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
