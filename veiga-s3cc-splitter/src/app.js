@@ -610,7 +610,7 @@ function applyStaticTranslations() {
   if (el.mergerClearBtn) el.mergerClearBtn.innerHTML = `<img src="${clearIcon}" alt="" class="btn-icon" /><span>${t("mergerClear")}</span>`;
   if (el.mergerTitle) el.mergerTitle.textContent = t("mergerTitle");
   if (el.restoreManifestBtn) {
-    el.restoreManifestBtn.innerHTML = `<i class="fa-solid fa-reply" aria-hidden="true"></i><span>${t("restoreOriginals")}</span>`;
+    el.restoreManifestBtn.innerHTML = `<i class="fa-solid fa-rotate-left" aria-hidden="true"></i><span>${t("restoreOriginals")}</span>`;
     el.restoreManifestBtn.title = t("restoreOriginals");
     el.restoreManifestBtn.setAttribute("aria-label", t("restoreOriginals"));
   }
