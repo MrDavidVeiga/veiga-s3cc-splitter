@@ -26,3 +26,14 @@ test("The Splitter thumbnail is a read-only preview, not a selectable card",()=>
   assert.match(app,/scan_package_resources/);
   assert.match(app,/merge_packages_with_manifest/);
 });
+
+test("The only clickable preview surface is the image, with one Explorer handler",()=>{
+  const theme=readFileSync(new URL("./winui-splitter.css",base),"utf8");
+  assert.equal((app.match(/el\.previewThumb\.addEventListener\("click"/g)||[]).length,1);
+  assert.doesNotMatch(app,/previewCard\.addEventListener/);
+  assert.match(app,/async function revealPreviewSource\(\)/);
+  assert.match(app,/await revealItemInDir\(state\.packagePath\)/);
+  assert.match(theme,/#preview-thumb\.reveal-source:hover/);
+  assert.match(theme,/outline-color:var\(--accent\)/);
+  assert.match(html,/id="theme-button-label">Theme<\/span>/);
+});
