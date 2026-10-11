@@ -321,3 +321,24 @@ body.release-v1 #preview-thumb[role="button"]:focus-visible {
 body.release-v1 #restore-manifest-btn > .fa-rotate-left {
   display:inline-block;flex:0 0 auto;font-size:16px;line-height:1;color:inherit;
 }
+
+/* Drop hints are not selectable; preview thumbnail reveals the source package. */
+body.release-v1 :is(#package-drop-zone,#merger-drop-zone) > .drop-hint,
+body.release-v1 :is(#package-drop-zone,#merger-drop-zone) > .drop-hint * {
+  user-select: none;
+  -webkit-user-select: none;
+}
+body.release-v1 :is(#package-drop-zone,#merger-drop-zone) > .drop-hint svg,
+body.release-v1 :is(#package-drop-zone,#merger-drop-zone) > .drop-hint svg * {
+  -webkit-user-drag: none;
+}
+body.release-v1 #preview-thumb.reveal-source {
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+}
+body.release-v1 #preview-thumb.reveal-source:focus-visible {
+  outline: 2px solid var(--fluent-focus-outer);
+  outline-offset: 2px;
+}
