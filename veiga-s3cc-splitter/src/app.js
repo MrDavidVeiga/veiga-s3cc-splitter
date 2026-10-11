@@ -146,6 +146,7 @@ const translations = {
     emptyTitle: "Open a package to begin.",
     emptySubtitle: "The list, preview and actions will appear here.",
     previewTitle: "Preview",
+    revealSourcePackage: "Reveal source package in folder",
     previewEmpty: "Select a resource to see the preview.",
     exportSelection: "Export Selection",
     removeFromMerged: "Remove from Merged",
@@ -285,6 +286,7 @@ const translations = {
     emptyTitle: "Abra um package para começar.",
     emptySubtitle: "A lista, preview e ações aparecem aqui.",
     previewTitle: "Pré-visualização",
+    revealSourcePackage: "Mostrar package de origem na pasta",
     previewEmpty: "Selecione um recurso para ver o preview.",
     exportSelection: "Exportar Seleção",
     removeFromMerged: "Remover do Mesclado",
@@ -424,6 +426,7 @@ const translations = {
     emptyTitle: "Abre un package para empezar.",
     emptySubtitle: "La lista, la vista previa y las acciones aparecerán aquí.",
     previewTitle: "Vista previa",
+    revealSourcePackage: "Mostrar package de origen en la carpeta",
     previewEmpty: "Selecciona un recurso para ver la vista previa.",
     exportSelection: "Exportar Selección",
     removeFromMerged: "Eliminar del Fusionado",
@@ -976,6 +979,13 @@ async function revealSelectedPreviewPackage() {
 }
 
 function renderPreview() {
+  const canRevealSource = Boolean(state.preview && state.packagePath);
+  el.previewThumb.classList.toggle("reveal-source", canRevealSource);
+  el.previewThumb.draggable = false;
+  el.previewThumb.tabIndex = canRevealSource ? 0 : -1;
+  el.previewThumb.setAttribute("role", canRevealSource ? "button" : "presentation");
+  el.previewThumb.setAttribute("aria-label", canRevealSource ? t("revealSourcePackage") : "");
+  el.previewThumb.title = canRevealSource ? state.packagePath : "";
   el.previewThumb.tabIndex = state.preview && state.packagePath ? 0 : -1;
   el.previewThumb.setAttribute("role", state.preview && state.packagePath ? "button" : "presentation");
   el.previewThumb.title = state.preview && state.packagePath ? state.packagePath : "";
@@ -1116,6 +1126,16 @@ async function scanPackage() {
     });
   } finally {
     clearBusy();
+  }
+}
+
+async function revealPreviewSource() {
+  if (!state.preview || !state.packagePath) return;
+  try {
+    // A resource is embedded; reveal its physical source package, selected in Explorer.
+    await revealItemInDir(state.packagePath);
+  } catch (error) {
+    console.error(error);
   }
 }
 
@@ -1494,6 +1514,13 @@ function setupEvents() {
   el.mergerRunBtn?.addEventListener("click", runMerger);
   el.mergerClearBtn?.addEventListener("click", clearMerger);
   el.restoreManifestBtn?.addEventListener("click", restoreManifestPackages);
+  el.previewThumb.addEventListener("click", () => void revealPreviewSource());
+  el.previewThumb.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (!state.preview || !state.packagePath) return;
+    event.preventDefault();
+    void revealPreviewSource();
+  });
   el.previewThumb?.addEventListener("click", () => void revealSelectedPreviewPackage());
   el.previewThumb?.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;
