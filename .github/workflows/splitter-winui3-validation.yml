@@ -1,0 +1,97 @@
+name: Splitter WinUI3 v2.4 PosePack/Poselist validation
+on:
+  push:
+    branches:
+      - feature/winui3-posepack-poselist-v2.4.0
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: veiga-s3cc-splitter/package-lock.json
+      - run: npm ci
+        working-directory: veiga-s3cc-splitter
+      - name: Static JavaScript syntax
+        working-directory: veiga-s3cc-splitter
+        run: |
+          node --check src/app.js
+          node --check src/winui-theme.js
+      - name: Regressions, modal and filters
+        working-directory: veiga-s3cc-splitter
+        run: node --test
+      - run: npm run build
+        working-directory: veiga-s3cc-splitter
+
+  winui-browser:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Chromium
+        run: |
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Check all themes, geometry, preview and drag zones
+        run: python veiga-s3cc-splitter/tests/winui_visual_smoke.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Splitter-WinUI3-Preview-Audit
+          path: veiga-s3cc-splitter/winui-smoke-previews/
+          retention-days: 14
+
+  rust-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --workspace
+      - run: cargo test --locked --workspace
+
+  portable-windows-x64:
+    runs-on: windows-2022
+    needs: [frontend,winui-browser,rust-windows]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: veiga-s3cc-splitter/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+        working-directory: veiga-s3cc-splitter
+      - name: Build portable executable without publishing
+        run: npm run tauri build -- --no-bundle
+        working-directory: veiga-s3cc-splitter
+      - name: Collect build with provenance
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path 'target' -Filter 'veiga-s3cc-splitter.exe' -Recurse -File |
+            Where-Object { $_.FullName -match '\\release\\' } |
+            Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+          if (-not $exe) { throw 'Portable Splitter exe was not generated' }
+          New-Item -ItemType Directory -Path 'portable' -Force | Out-Null
+          Copy-Item -LiteralPath $exe.FullName -Destination 'portable/Veigas_S3CC_Splitter_WinUI3_Windows_x64.exe'
+          $sha = (Get-FileHash -Algorithm SHA256 'portable/Veigas_S3CC_Splitter_WinUI3_Windows_x64.exe').Hash
+          "Commit: ${{ github.sha }}" | Set-Content -Path 'portable/BUILD_INFO.txt'
+          "Version: 2.4.0 WinUI 3 migration beta" | Add-Content -Path 'portable/BUILD_INFO.txt'
+          "$sha  Veigas_S3CC_Splitter_WinUI3_Windows_x64.exe" | Set-Content -Path 'portable/SHA256SUMS.txt'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Veigas_S3CC_Splitter_v2.4.0_WinUI3_Windows_x64
+          path: portable/
+          retention-days: 14
