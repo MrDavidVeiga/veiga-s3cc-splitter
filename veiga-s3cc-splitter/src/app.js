@@ -967,17 +967,6 @@ function renderList() {
   }
 }
 
-async function revealSelectedPreviewPackage() {
-  // A resource lives inside the currently opened DBPF; reveal the real source
-  // package, never a synthetic resource filename.
-  if (!state.preview || !state.packagePath) return;
-  try {
-    await revealItemInDir(state.packagePath);
-  } catch (error) {
-    console.error(error);
-  }
-}
-
 function renderPreview() {
   const canRevealSource = Boolean(state.preview && state.packagePath);
   el.previewThumb.classList.toggle("reveal-source", canRevealSource);
@@ -986,9 +975,6 @@ function renderPreview() {
   el.previewThumb.setAttribute("role", canRevealSource ? "button" : "presentation");
   el.previewThumb.setAttribute("aria-label", canRevealSource ? t("revealSourcePackage") : "");
   el.previewThumb.title = canRevealSource ? state.packagePath : "";
-  el.previewThumb.tabIndex = state.preview && state.packagePath ? 0 : -1;
-  el.previewThumb.setAttribute("role", state.preview && state.packagePath ? "button" : "presentation");
-  el.previewThumb.title = state.preview && state.packagePath ? state.packagePath : "";
   if (!state.preview) {
     el.previewThumb.src = noPreviewImage;
     el.previewThumb.classList.remove("hidden");
@@ -1520,13 +1506,6 @@ function setupEvents() {
     if (!state.preview || !state.packagePath) return;
     event.preventDefault();
     void revealPreviewSource();
-  });
-  el.previewThumb?.addEventListener("click", () => void revealSelectedPreviewPackage());
-  el.previewThumb?.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    if (!state.preview || !state.packagePath) return;
-    event.preventDefault();
-    void revealSelectedPreviewPackage();
   });
 
   el.pickPackageBtn.addEventListener("click", pickPackage);
