@@ -127,6 +127,7 @@ jobs:
           node src/label-relations.test.mjs
           node src/remove-confirm.test.mjs
           node src/modal.test.mjs
+          node --test src/window-controls.test.mjs
 
       - name: Check Rust workspace
         if: matrix.target != 'i686-unknown-linux-gnu'
