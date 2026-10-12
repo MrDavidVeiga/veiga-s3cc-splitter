@@ -76,6 +76,10 @@ jobs:
         working-directory: veiga-s3cc-splitter
         run: npm ci
 
+      - name: Check Tauri window permissions and native caption controls
+        working-directory: veiga-s3cc-splitter
+        run: node --test src/window-controls.test.mjs
+
       - name: Build portable binary
         working-directory: veiga-s3cc-splitter
         run: npm run tauri build -- ${{ matrix.build_args }}
