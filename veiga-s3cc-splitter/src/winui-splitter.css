@@ -427,3 +427,11 @@ html[data-theme-choice="mean-girls"] body.release-v1 .winui-caption-buttons butt
 html[data-theme-choice="mean-girls"] body.release-v1 .winui-caption-buttons button:active {
   background:rgba(255,255,255,.06);
 }
+
+/* Language selector parity across Packer, Splitter and Manager. */
+body .topbar #lang-dropdown { box-sizing:border-box; width:64px; min-width:64px; max-width:64px; flex:0 0 64px; }
+body .topbar #lang-dropdown > .lang-toggle-btn { box-sizing:border-box; width:100%; min-width:0; height:32px; padding:0 8px; gap:6px; justify-content:space-between; font:600 12px/18px "Segoe UI Variable Text","Segoe UI",sans-serif; }
+body .topbar #lang-dropdown #lang-current-code { font-size:12px; line-height:18px; font-weight:700; letter-spacing:normal; }
+body .topbar #lang-dropdown #lang-menu { box-sizing:border-box; left:0; right:auto; width:100%; min-width:100%; max-width:100%; }
+body .topbar #lang-dropdown #lang-menu > .lang-menu-item { box-sizing:border-box; width:100%; padding:7px 8px; font:400 12px/18px "Segoe UI Variable Text","Segoe UI",sans-serif; white-space:nowrap; }
+body .topbar #lang-dropdown #lang-menu > .lang-menu-item.hidden { display:none !important; }
