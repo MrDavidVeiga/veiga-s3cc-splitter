@@ -28,3 +28,6 @@ sims3-core = { path = "../../sims3-core" }
 
 
 sims3-pack = { path = "../../sims3-pack" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "=0.61.3", features = ["UI", "UI_ViewManagement"] }
