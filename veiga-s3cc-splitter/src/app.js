@@ -906,6 +906,9 @@ function renderList() {
   content.style.width = "100%";
   content.style.height = `${visibleResources.length * rowHeight}px`;
   el.resourceList.classList.add("resource-virtualized");
+  // The historical styles use a flex column; a virtual spacer needs a block scrollport.
+  el.resourceList.style.display = "block";
+  el.resourceList.style.gap = "0";
   el.resourceList.replaceChildren(content);
   if (el.resourceList.scrollTop !== scrollTop) el.resourceList.scrollTop = scrollTop;
 
