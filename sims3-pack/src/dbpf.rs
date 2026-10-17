@@ -10,6 +10,7 @@ const MAGIC_DBPF: u32 = 0x4650_4244; // "DBPF" little-endian read => bytes 'D''B
 const MAJOR: u32 = 2;
 const MINOR: u32 = 0;
 const INDEX_VERSION: u32 = 3;
+const DBPF_HEADER_SIZE: u64 = 96;
 
 #[derive(Debug, Clone)]
 pub struct ResourceEntry {
@@ -47,7 +48,7 @@ impl Package {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let meta = fs::metadata(path).with_context(|| format!("stat {}", path.display()))?;
-        if meta.len() < 96 {
+        if meta.len() < DBPF_HEADER_SIZE {
             bail!("Corrupted: File header size is smaller than 96 bytes");
         }
 
@@ -88,6 +89,21 @@ impl Package {
             bail!("File does not have index position");
         }
 
+        let index_end = (index_position as u64)
+            .checked_add(index_length as u64)
+            .ok_or_else(|| anyhow::anyhow!("Corrupted: index range overflows u64"))?;
+        if (index_position as u64) < DBPF_HEADER_SIZE || index_end > meta.len() {
+            bail!(
+                "Corrupted: index range {}..{} is outside the file ({} bytes)",
+                index_position,
+                index_end,
+                meta.len()
+            );
+        }
+        if index_length < 4 {
+            bail!("Corrupted: index is smaller than its bit flag");
+        }
+
         f.seek(SeekFrom::Start(index_position as u64))?;
         let bit_flag = f.read_u32::<LittleEndian>()?;
 
@@ -98,8 +114,13 @@ impl Package {
             }
         }
 
-        let expected =
-            (4 + common_count * 4) as u64 + (32 - common_count * 4) as u64 * index_count as u64;
+        let entry_size = 32u64
+            .checked_sub((common_count * 4) as u64)
+            .ok_or_else(|| anyhow::anyhow!("Corrupted: invalid common-field mask"))?;
+        let expected = (4u64)
+            .checked_add((common_count * 4) as u64)
+            .and_then(|size| size.checked_add(entry_size.checked_mul(index_count as u64)?))
+            .ok_or_else(|| anyhow::anyhow!("Corrupted: index length overflows u64"))?;
         if index_length as u64 != expected {
             bail!(
                 "Corrupted: index length {} does not match expected {}",
@@ -141,6 +162,18 @@ impl Package {
             let file_size = file_size_raw & 0x7FFF_FFFF;
             let instance = ((id1 as u64) << 32) | id2 as u64;
 
+            let data_end = (chunk_offset as u64)
+                .checked_add(file_size as u64)
+                .ok_or_else(|| anyhow::anyhow!("Corrupted: resource range overflows u64"))?;
+            if data_end > meta.len() {
+                bail!(
+                    "Corrupted: resource {} range {}..{} is outside the file",
+                    instance,
+                    chunk_offset,
+                    data_end
+                );
+            }
+
             entries.push(ResourceEntry {
                 type_id,
                 group,
@@ -165,9 +198,11 @@ impl Package {
     }
 
     pub fn get_raw_data(&self, re: &ResourceEntry) -> Result<Vec<u8>> {
+        let file_size = usize::try_from(re.file_size)
+            .map_err(|_| anyhow::anyhow!("Resource size does not fit in usize"))?;
         let mut f = File::open(&self.path)?;
         f.seek(SeekFrom::Start(re.chunk_offset as u64))?;
-        let mut buf = vec![0u8; re.file_size as usize];
+        let mut buf = vec![0u8; file_size];
         f.read_exact(&mut buf)?;
         Ok(buf)
     }
@@ -175,7 +210,13 @@ impl Package {
     pub fn get_uncompressed_data(&self, re: &ResourceEntry) -> Result<Vec<u8>> {
         let raw = self.get_raw_data(re)?;
         if re.file_size != re.mem_size {
-            compression::uncompress_stream(&raw, re.file_size as usize, re.mem_size as usize)
+            compression::uncompress_stream(
+                &raw,
+                usize::try_from(re.file_size)
+                    .map_err(|_| anyhow::anyhow!("Compressed size does not fit in usize"))?,
+                usize::try_from(re.mem_size)
+                    .map_err(|_| anyhow::anyhow!("Uncompressed size does not fit in usize"))?,
+            )
         } else {
             Ok(raw)
         }
@@ -333,6 +374,61 @@ impl Package {
         created.push(out_pkg.path.clone());
 
         Ok(created)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Package;
+    use std::fs;
+    use std::io::Write;
+
+    fn fixture(index_position: u32, index_length: u32, index_count: u32) -> Vec<u8> {
+        let mut bytes = vec![0u8; 96 + 4 + 36];
+        bytes[0..4].copy_from_slice(b"DBPF");
+        bytes[4..8].copy_from_slice(&2u32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&0u32.to_le_bytes());
+        bytes[36..40].copy_from_slice(&index_count.to_le_bytes());
+        bytes[44..48].copy_from_slice(&index_length.to_le_bytes());
+        bytes[60..64].copy_from_slice(&3u32.to_le_bytes());
+        bytes[64..68].copy_from_slice(&index_position.to_le_bytes());
+        bytes[96..100].copy_from_slice(b"DATA");
+        let index = index_position as usize;
+        if index + 36 <= bytes.len() {
+            bytes[index..index + 4].copy_from_slice(&0u32.to_le_bytes());
+            let mut cursor = index + 4;
+            for value in [0x1234u32, 0x5678u32, 0x9ABCu32, 0xDEF0u32, 96, 4, 4] {
+                bytes[cursor..cursor + 4].copy_from_slice(&value.to_le_bytes());
+                cursor += 4;
+            }
+        }
+        bytes
+    }
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("s3cc-dbpf-test-{}-{}", std::process::id(), name))
+    }
+
+    #[test]
+    fn validates_index_and_resource_bounds() {
+        let path = temp_path("valid.package");
+        let mut file = fs::File::create(&path).unwrap();
+        file.write_all(&fixture(100, 36, 1)).unwrap();
+        drop(file);
+        let package = Package::load(&path).expect("valid fixture");
+        assert_eq!(package.entries.len(), 1);
+        assert_eq!(package.get_raw_data(&package.entries[0]).unwrap(), b"DATA");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn rejects_index_outside_file() {
+        let path = temp_path("invalid.package");
+        let mut file = fs::File::create(&path).unwrap();
+        file.write_all(&fixture(200, 36, 1)).unwrap();
+        drop(file);
+        assert!(Package::load(&path).is_err());
+        let _ = fs::remove_file(path);
     }
 }
 
