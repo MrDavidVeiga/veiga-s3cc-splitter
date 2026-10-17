@@ -1,0 +1,72 @@
+/*
+ * WinUI 3 / Fluent foundation — design tokens, not another standalone theme.
+ * Source of truth for app appearance remains src/theme.js + src/winui.css.
+ * These aliases update live as System/WinUI/Veiga/Mean Girls/EA App changes.
+ * See https://learn.microsoft.com/windows/apps/design/signature-experiences/geometry
+ */
+:root {
+  --fluent-radius-control: var(--winui-control-radius, 4px);
+  --fluent-radius-overlay: var(--winui-overlay-radius, 8px);
+  --fluent-control-height: 32px;
+  --fluent-check-size: 20px;
+  --fluent-body-font: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", sans-serif;
+  --fluent-control-font-size: 14px;
+  --fluent-caption-font-size: 12px;
+
+  --fluent-text-primary: var(--winui-text-primary, var(--text));
+  --fluent-text-secondary: var(--winui-text-secondary, var(--muted));
+  --fluent-text-disabled: var(--winui-text-tertiary, var(--muted));
+
+  --fluent-control-fill: var(--winui-control-fill, transparent);
+  --fluent-control-hover: var(--winui-control-fill-hover, var(--fluent-control-fill));
+  --fluent-control-pressed: var(--winui-control-fill-pressed, var(--fluent-control-fill));
+  --fluent-control-stroke: var(--winui-control-stroke, rgba(0,0,0,.10));
+  --fluent-control-stroke-strong: var(--winui-control-stroke-strong, rgba(0,0,0,.20));
+
+  --fluent-accent-fill: var(--accent, #0078d4);
+  --fluent-accent-hover: var(--accent-light-1, var(--fluent-accent-fill));
+  --fluent-accent-pressed: var(--accent-dark-1, var(--fluent-accent-fill));
+  --fluent-accent-foreground: #ffffff;
+  --fluent-danger: #c42b1c;
+  --fluent-danger-hover: rgba(196,43,28,.14);
+
+  --fluent-checkbox-fill: var(--fluent-control-fill);
+  --fluent-checkbox-border: var(--fluent-control-stroke-strong);
+  --fluent-focus-inner: #ffffff;
+  --fluent-focus-outer: #000000;
+}
+
+html[data-resolved-mode="dark"] {
+  --fluent-focus-inner: #000000;
+  --fluent-focus-outer: #ffffff;
+}
+
+html[data-resolved-mode="light"] {
+  --fluent-focus-inner: #ffffff;
+  --fluent-focus-outer: #000000;
+}
+
+/* Accent foreground is intentionally legible, not always white. */
+html[data-theme-choice="veiga-light"],
+html[data-theme-choice="veiga-dark"] {
+  --fluent-accent-foreground: #142007;
+}
+
+html[data-theme-choice="mean-girls"] {
+  --fluent-accent-foreground: #4d1332;
+}
+
+html[data-theme-choice="ea-app"] {
+  --fluent-accent-foreground: #ffffff;
+}
+
+/* Distinct focus states remain visible in High Contrast mode. */
+@media (forced-colors: active) {
+  :root {
+    --fluent-focus-outer: Highlight;
+    --fluent-focus-inner: Canvas;
+    --fluent-control-stroke: ButtonBorder;
+    --fluent-control-stroke-strong: ButtonText;
+    --fluent-text-primary: CanvasText;
+  }
+}

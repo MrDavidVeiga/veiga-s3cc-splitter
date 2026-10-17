@@ -1,0 +1,36 @@
+/*
+ * Shared Manager WinUI 3 button geometry for Packer.
+ * Primary, secondary and danger describe appearance, not control size.
+ * Specific toolbars may opt into their own equal-width/compact variants.
+ */
+body.release-v1 :is(.primary-btn,.secondary-btn,.danger-btn,.compact-btn) {
+  box-sizing:border-box;
+  min-height:var(--fluent-control-height);
+  padding:5px 12px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  vertical-align:middle;
+  text-align:center;
+  font-family:var(--fluent-body-font);
+  font-size:var(--fluent-control-font-size);
+  font-weight:600;
+  line-height:20px;
+  border-style:solid;
+  border-width:1px;
+  border-radius:var(--fluent-radius-control);
+}
+body.release-v1 :is(.primary-btn,.secondary-btn,.danger-btn,.compact-btn) > :is(i,svg,.btn-icon) {
+  flex:0 0 auto;
+}
+@media(prefers-reduced-motion:reduce) {
+  body.release-v1 :is(.primary-btn,.secondary-btn,.danger-btn,.compact-btn) {transition:none;}
+}
+@media(forced-colors:active) {
+  body.release-v1 :is(.primary-btn,.secondary-btn,.danger-btn,.compact-btn) {
+    border-color:ButtonText;
+    color:ButtonText;
+  }
+  body.release-v1 .primary-btn {background:Highlight;color:HighlightText;}
+}

@@ -1,0 +1,138 @@
+/*
+ * WinUI 3-inspired ComboBox dropdown. Native selects retain values/events,
+ * but a button/listbox pairing renders the interactive surface.
+ */
+body.release-v1 .fluent-combobox {
+  display: inline-block;
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+}
+body.release-v1 select.fluent-native-select {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  inset: 0 auto auto 0;
+  border: 0 !important;
+  margin: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+body.release-v1 .fluent-combobox-trigger {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--fluent-control-height);
+  padding: 5px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  font: 400 var(--fluent-control-font-size)/20px var(--fluent-body-font);
+  color: var(--fluent-text-primary);
+  background: var(--fluent-control-fill);
+  border: 1px solid var(--fluent-control-stroke);
+  border-bottom-color: var(--fluent-control-stroke-strong);
+  border-radius: var(--fluent-radius-control);
+  text-align: left;
+  cursor: default;
+}
+body.release-v1 .fluent-combobox-trigger:hover:not(:disabled) {
+  background: var(--fluent-control-hover);
+}
+body.release-v1 .fluent-combobox-trigger:active:not(:disabled),
+body.release-v1 .fluent-combobox.open .fluent-combobox-trigger {
+  background: var(--fluent-control-pressed);
+  border-bottom: 2px solid var(--fluent-accent-fill);
+}
+body.release-v1 .fluent-combobox-trigger:disabled {
+  opacity: .45;
+}
+body.release-v1 .fluent-combobox-caption {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.release-v1 .fluent-combobox-chevron {
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3.5 6 4.5 4.5L12.5 6' stroke='black' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' fill='none'/%3E%3C/svg%3E") center/12px 12px no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3.5 6 4.5 4.5L12.5 6' stroke='black' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' fill='none'/%3E%3C/svg%3E") center/12px 12px no-repeat;
+  transition: transform 120ms ease;
+}
+body.release-v1 .fluent-combobox.open .fluent-combobox-chevron {transform: rotate(180deg);}
+.fluent-combobox-flyout[hidden] {display: none !important;}
+.fluent-combobox-flyout {
+  box-sizing: border-box;
+  position: fixed;
+  z-index: 2100;
+  margin: 0;
+  padding: 4px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--winui-popup);
+  color: var(--fluent-text-primary);
+  border: 1px solid var(--fluent-control-stroke);
+  border-radius: var(--fluent-radius-overlay);
+  box-shadow: 0 10px 25px var(--winui-shadow);
+  scrollbar-width: thin;
+}
+.fluent-combobox-spacer {width: 100%;pointer-events: none;}
+.fluent-combobox-option {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  height: 34px;
+  min-height: 34px;
+  width: 100%;
+  padding: 0 10px 0 8px;
+  gap: 10px;
+  font: 400 var(--fluent-control-font-size)/20px var(--fluent-body-font);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: default;
+  border-radius: 4px;
+  justify-content: flex-start;
+  align-items: center;
+  padding-block: 0;
+}
+.fluent-combobox-option.active,
+.fluent-combobox-option:hover:not(.disabled) {
+  background: var(--fluent-control-hover);
+}
+.fluent-combobox-option:active:not(.disabled) {
+  background: var(--fluent-control-pressed);
+}
+.fluent-combobox-option.disabled {opacity:.4;}
+.fluent-combobox-option-label {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fluent-combobox-check {width:14px; flex:0 0 14px;color:var(--fluent-accent-fill);font-weight:600;}
+.fluent-combobox-option.selected {font-weight:600;}
+body.release-v1 .fluent-combobox-trigger:focus-visible {
+  outline: 2px solid var(--fluent-focus-outer);
+  outline-offset: 2px;
+}
+body.release-v1 .duplicates-toolbar > .fluent-combobox,
+body.release-v1 .conflicts-toolbar > .fluent-combobox {grid-column: 2;}
+@media (forced-colors:active) {
+  body.release-v1 .fluent-combobox-trigger,
+  .fluent-combobox-flyout {
+    border-color: ButtonText;
+    background: Canvas;
+    color: CanvasText;
+  }
+  .fluent-combobox-option.active {
+    background: Highlight;
+    color: HighlightText;
+  }
+}
+@media (prefers-reduced-motion:reduce) {
+  body.release-v1 .fluent-combobox-chevron {transition:none;}
+}
