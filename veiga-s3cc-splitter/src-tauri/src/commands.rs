@@ -852,11 +852,9 @@ fn content_categories_for_key(
         TYPE_FACE => push_unique_category(&mut categories, "Sliders"),
         TYPE_SKINTONE => push_unique_category(&mut categories, "Skins"),
         TYPE_CASP => {
-            let entry = package.files.iter().find(|entry| {
-                entry.resource_type == parts.resource_type
-                    && entry.resource_group == parts.resource_group
-                    && entry.instance == parts.instance
-            });
+            let entry = package
+                .entry_index(parts.resource_type, parts.resource_group, parts.instance)
+                .and_then(|index| package.files.get(index));
 
             if let Some(entry) = entry {
                 let label = object_display_label(package, entry, name_map);
@@ -877,13 +875,8 @@ fn content_categories_for_key(
         }
         TYPE_OBJD => {
             let label = package
-                .files
-                .iter()
-                .find(|entry| {
-                    entry.resource_type == parts.resource_type
-                        && entry.resource_group == parts.resource_group
-                        && entry.instance == parts.instance
-                })
+                .entry_index(parts.resource_type, parts.resource_group, parts.instance)
+                .and_then(|index| package.files.get(index))
                 .map(|entry| object_display_label(package, entry, name_map))
                 .unwrap_or_default();
             push_unique_category(&mut categories, object_content_category(&label));
@@ -905,11 +898,10 @@ fn selection_export_root(
         if parts.resource_type == TYPE_FACE {
             return PathBuf::from(destination_folder).join("Sliders").join(stem);
         }
-        if let Some(entry) = package.files.iter().find(|e| {
-            e.resource_type == parts.resource_type
-                && e.resource_group == parts.resource_group
-                && e.instance == parts.instance
-        }) {
+        if let Some(entry) = package
+            .entry_index(parts.resource_type, parts.resource_group, parts.instance)
+            .and_then(|index| package.files.get(index))
+        {
             if let Some(info) = casp_folder_info(entry, name_map) {
                 let mut path = PathBuf::from(destination_folder);
                 path.push(info.main_category);
@@ -940,11 +932,10 @@ fn selection_reveal_root(
         if parts.resource_type == TYPE_FACE {
             return PathBuf::from(destination_folder).join("Sliders");
         }
-        if let Some(entry) = package.files.iter().find(|e| {
-            e.resource_type == parts.resource_type
-                && e.resource_group == parts.resource_group
-                && e.instance == parts.instance
-        }) {
+        if let Some(entry) = package
+            .entry_index(parts.resource_type, parts.resource_group, parts.instance)
+            .and_then(|index| package.files.get(index))
+        {
             if let Some(info) = casp_folder_info(entry, name_map) {
                 return PathBuf::from(destination_folder).join(info.main_category);
             }
@@ -2912,11 +2903,7 @@ fn selected_entry_indices(package: &DBPF<'_>, keys: &HashSet<String>) -> Vec<usi
 }
 
 fn matching_entry_index(package: &DBPF<'_>, parts: ResourceKeyParts) -> Option<usize> {
-    package.files.iter().position(|entry| {
-        entry.resource_type == parts.resource_type
-            && entry.resource_group == parts.resource_group
-            && entry.instance == parts.instance
-    })
+    package.entry_index(parts.resource_type, parts.resource_group, parts.instance)
 }
 
 fn export_folder_name(package_path: &str) -> String {
