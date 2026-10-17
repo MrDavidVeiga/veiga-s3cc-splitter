@@ -723,9 +723,20 @@ function itemMatchesSearch(item, query) {
     });
 }
 
+let cachedVisibleResources = { source: null, filter: null, search: null, items: [] };
 function getVisibleResources() {
-  return visibleItemsForFilter(state.resources, state.activeContentFilter)
-    .filter((item) => itemMatchesSearch(item, state.search));
+  const filter = state.activeContentFilter;
+  const search = state.search;
+  if (cachedVisibleResources.source === state.resources &&
+      cachedVisibleResources.filter === filter &&
+      cachedVisibleResources.search === search) {
+    return cachedVisibleResources.items;
+  }
+  state.listScrollTop = 0;
+  const items = visibleItemsForFilter(state.resources, filter)
+    .filter((item) => itemMatchesSearch(item, search));
+  cachedVisibleResources = { source: state.resources, filter, search, items };
+  return items;
 }
 
 function contentFilterLabel(filter) {
@@ -914,13 +925,32 @@ function render() {
   renderMergerSources();
 }
 
+let cachedListCounts = { source: null, counts: null };
 function renderList() {
-  el.resourceList.innerHTML = "";
   const visibleResources = getVisibleResources();
+  const rowHeight = 76;
+  const viewportHeight = Math.max(el.resourceList.clientHeight, rowHeight);
+  const maxScrollTop = Math.max(0, visibleResources.length * rowHeight - viewportHeight);
+  const scrollTop = Math.max(0, Math.min(state.listScrollTop || 0, maxScrollTop));
+  const firstIndex = Math.max(0, Math.floor(scrollTop / rowHeight) - 6);
+  const lastIndex = Math.min(visibleResources.length,
+    Math.ceil((scrollTop + viewportHeight) / rowHeight) + 6);
+  const content = document.createElement("div");
+  content.className = "resource-virtual-content";
+  content.style.position = "relative";
+  content.style.width = "100%";
+  content.style.height = `${visibleResources.length * rowHeight}px`;
+  el.resourceList.classList.add("resource-virtualized");
+  el.resourceList.replaceChildren(content);
+  if (el.resourceList.scrollTop !== scrollTop) el.resourceList.scrollTop = scrollTop;
 
-  const sameNameCounts = buildSameNameCounts(visibleResources);
+  if (cachedListCounts.source !== visibleResources) {
+    cachedListCounts = { source: visibleResources, counts: buildSameNameCounts(visibleResources) };
+  }
+  const sameNameCounts = cachedListCounts.counts;
 
-  for (const item of visibleResources) {
+  for (let index = firstIndex; index < lastIndex; index++) {
+    const item = visibleResources[index];
     const displayType = getDisplayType(item);
     const displayDetails = getDisplayDetails(item);
 
@@ -971,8 +1001,14 @@ function renderList() {
     pill.className = "type-pill";
     pill.textContent = displayType || "-";
 
+    row.style.position = "absolute";
+    row.style.top = `${index * rowHeight + 4}px`;
+    row.style.left = "8px";
+    row.style.width = "calc(100% - 16px)";
+    row.style.height = `${rowHeight - 8}px`;
+    row.style.boxSizing = "border-box";
     row.append(checkWrap, button, pill);
-    el.resourceList.appendChild(row);
+    content.appendChild(row);
   }
 }
 
@@ -1507,6 +1543,16 @@ function bindDragAndDrop() {
   });
 }
 function setupEvents() {
+  let listRenderQueued = false;
+  el.resourceList.addEventListener("scroll", () => {
+    state.listScrollTop = el.resourceList.scrollTop;
+    if (listRenderQueued) return;
+    listRenderQueued = true;
+    requestAnimationFrame(() => {
+      listRenderQueued = false;
+      renderList();
+    });
+  }, { passive: true });
   el.modeSplitterBtn?.addEventListener("click", () => setMode("splitter"));
   el.modeMergerBtn?.addEventListener("click", () => setMode("merger"));
   el.mergerAddPackagesBtn?.addEventListener("click", pickMergerPackages);
