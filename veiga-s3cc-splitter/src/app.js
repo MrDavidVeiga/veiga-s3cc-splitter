@@ -369,9 +369,20 @@ function itemMatchesSearch(item, query) {
     });
 }
 
+let cachedVisibleResources = { source: null, filter: null, search: null, items: [] };
 function getVisibleResources() {
-  return visibleItemsForFilter(state.resources, state.activeContentFilter)
-    .filter((item) => itemMatchesSearch(item, state.search));
+  const filter = state.activeContentFilter;
+  const search = state.search;
+  if (cachedVisibleResources.source === state.resources &&
+      cachedVisibleResources.filter === filter &&
+      cachedVisibleResources.search === search) {
+    return cachedVisibleResources.items;
+  }
+  state.listScrollTop = 0;
+  const items = visibleItemsForFilter(state.resources, filter)
+    .filter((item) => itemMatchesSearch(item, search));
+  cachedVisibleResources = { source: state.resources, filter, search, items };
+  return items;
 }
 
 function contentFilterText(filter, counts) {
@@ -456,18 +467,37 @@ function render() {
   renderPreview();
 }
 
+let cachedListCounts = { source: null, counts: null };
 function renderList() {
-  el.resourceList.innerHTML = "";
   const visibleResources = getVisibleResources();
+  const rowHeight = 88;
+  const viewportHeight = Math.max(el.resourceList.clientHeight, rowHeight);
+  const maxScrollTop = Math.max(0, visibleResources.length * rowHeight - viewportHeight);
+  const scrollTop = Math.max(0, Math.min(state.listScrollTop || 0, maxScrollTop));
+  const firstIndex = Math.max(0, Math.floor(scrollTop / rowHeight) - 6);
+  const lastIndex = Math.min(visibleResources.length,
+    Math.ceil((scrollTop + viewportHeight) / rowHeight) + 6);
+  const content = document.createElement("div");
+  content.className = "resource-virtual-content";
+  content.style.position = "relative";
+  content.style.width = "100%";
+  content.style.height = `${visibleResources.length * rowHeight}px`;
+  el.resourceList.classList.add("resource-virtualized");
+  el.resourceList.replaceChildren(content);
+  if (el.resourceList.scrollTop !== scrollTop) el.resourceList.scrollTop = scrollTop;
 
-  const duplicateCounts = new Map();
-  for (const item of visibleResources) {
-    const duplicateKey = String(item.label || "").trim().toLowerCase();
-    if (!duplicateKey) continue;
-    duplicateCounts.set(duplicateKey, (duplicateCounts.get(duplicateKey) || 0) + 1);
+  if (cachedListCounts.source !== visibleResources) {
+    const counts = new Map();
+    for (const item of visibleResources) {
+      const duplicateKey = String(item.label || "").trim().toLowerCase();
+      if (duplicateKey) counts.set(duplicateKey, (counts.get(duplicateKey) || 0) + 1);
+    }
+    cachedListCounts = { source: visibleResources, counts };
   }
+  const duplicateCounts = cachedListCounts.counts;
 
-  for (const item of visibleResources) {
+  for (let index = firstIndex; index < lastIndex; index++) {
+    const item = visibleResources[index];
     const displayType = getDisplayType(item);
     const displayDetails = getDisplayDetails(item);
 
@@ -508,8 +538,14 @@ function renderList() {
     pill.className = "type-pill";
     pill.textContent = displayType || "-";
 
+    row.style.position = "absolute";
+    row.style.top = `${index * rowHeight + 4}px`;
+    row.style.left = "8px";
+    row.style.width = "calc(100% - 16px)";
+    row.style.height = `${rowHeight - 8}px`;
+    row.style.boxSizing = "border-box";
     row.append(checkWrap, button, pill);
-    el.resourceList.appendChild(row);
+    content.appendChild(row);
   }
 }
 
@@ -823,6 +859,16 @@ function bindDragAndDrop() {
 }
 
 function setupEvents() {
+  let listRenderQueued = false;
+  el.resourceList.addEventListener("scroll", () => {
+    state.listScrollTop = el.resourceList.scrollTop;
+    if (listRenderQueued) return;
+    listRenderQueued = true;
+    requestAnimationFrame(() => {
+      listRenderQueued = false;
+      renderList();
+    });
+  }, { passive: true });
   el.pickPackageBtn.addEventListener("click", pickPackage);
   el.pickDestinationBtn.addEventListener("click", pickDestination);
   el.scanBtn.addEventListener("click", scanPackage);
