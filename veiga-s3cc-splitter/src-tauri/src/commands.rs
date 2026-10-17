@@ -1147,7 +1147,9 @@ fn safe_package_resource_names(package: &DBPF<'_>) -> BTreeMap<u64, String> {
 
         let fallback = objd_catalog_name(entry.data())
             .or_else(|| {
-                package.files.iter().find_map(|candidate| {
+                package.entries_for_instance(entry.instance).iter()
+                    .filter_map(|&index| package.files.get(index))
+                    .find_map(|candidate| {
                     if candidate.resource_type != TYPE_XML || candidate.instance != entry.instance {
                         return None;
                     }
@@ -1156,7 +1158,9 @@ fn safe_package_resource_names(package: &DBPF<'_>) -> BTreeMap<u64, String> {
                 })
             })
             .or_else(|| {
-                package.files.iter().find_map(|candidate| {
+                package.entries_for_instance(entry.instance).iter()
+                    .filter_map(|&index| package.files.get(index))
+                    .find_map(|candidate| {
                     if candidate.resource_type != TYPE_OBJK || candidate.instance != entry.instance
                     {
                         return None;
@@ -1998,7 +2002,8 @@ fn object_display_label(
             return name;
         }
 
-        if let Some(xml) = package.files.iter().find(|candidate| {
+        if let Some(xml) = package.entries_for_instance(entry.instance).iter()
+            .filter_map(|&index| package.files.get(index)).find(|candidate| {
             candidate.resource_type == TYPE_XML && candidate.instance == entry.instance
         }) {
             let text = String::from_utf8_lossy(xml.data());
@@ -2007,7 +2012,8 @@ fn object_display_label(
             }
         }
 
-        if let Some(objk) = package.files.iter().find(|candidate| {
+        if let Some(objk) = package.entries_for_instance(entry.instance).iter()
+            .filter_map(|&index| package.files.get(index)).find(|candidate| {
             candidate.resource_type == TYPE_OBJK && candidate.instance == entry.instance
         }) {
             if let Some(name) = objk_script_class_name(objk.data()) {
@@ -2231,10 +2237,8 @@ fn find_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> Option<Stri
 
     // 1) THUM com a mesma instance do recurso selecionado
     if let Some(b64) = encode_best_preview(
-        package
-            .files
-            .iter()
-            .filter(|entry| entry.instance == key.instance)
+        package.entries_for_instance(key.instance).iter()
+            .filter_map(|&index| package.files.get(index))
             .filter(|entry| {
                 thum_types.contains(&entry.resource_type)
                     || (resource_is_png(entry.resource_type)
@@ -2250,11 +2254,8 @@ fn find_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> Option<Stri
 
     // 2) Se o próprio recurso selecionado for ICON, usar ele diretamente
     if key.resource_type == TYPE_ICON {
-        if let Some(entry) = package.files.iter().find(|entry| {
-            entry.resource_type == TYPE_ICON
-                && entry.resource_group == key.resource_group
-                && entry.instance == key.instance
-        }) {
+        if let Some(entry) = package.entry_index(TYPE_ICON, key.resource_group, key.instance)
+            .and_then(|index| package.files.get(index)) {
             let data = entry.data();
             if is_valid_png(data) {
                 return Some(STANDARD.encode(data));
@@ -2275,11 +2276,8 @@ fn find_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> Option<Stri
 
     // 4) ICON apontado por manifest / XML de objeto
     if let Some(icon) = object_manifest_icon_ref(package, key) {
-        if let Some(entry) = package.files.iter().find(|entry| {
-            entry.resource_type == icon.resource_type
-                && entry.resource_group == icon.resource_group
-                && entry.instance == icon.instance
-        }) {
+        if let Some(entry) = package.entry_index(icon.resource_type, icon.resource_group, icon.instance)
+            .and_then(|index| package.files.get(index)) {
             let data = entry.data();
             if is_valid_png(data) {
                 return Some(STANDARD.encode(data));
@@ -2289,10 +2287,8 @@ fn find_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> Option<Stri
 
     // 5) IMG / IMAG (skin e afins)
     encode_best_preview(
-        package
-            .files
-            .iter()
-            .filter(|entry| entry.instance == key.instance)
+        package.entries_for_instance(key.instance).iter()
+            .filter_map(|&index| package.files.get(index))
             .filter(|entry| {
                 matches!(
                     entry.resource_type,
