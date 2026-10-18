@@ -19,7 +19,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 thiserror = "2"
-zip = "0.6"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 memmap = "0.7"
 walkdir = "2.5"
 num-traits = "0.2"
