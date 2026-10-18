@@ -1,0 +1,481 @@
+/* Shared Manager/Packer WinUI3 behavior. Splitter/Merger functions stay untouched. */
+body.release-v1 .app-shell {--sidebar-width:clamp(220px,19vw,276px);grid-template-rows:32px 48px minmax(0,1fr);padding:0;gap:0;max-width:none;}
+html[data-theme-choice] body.release-v1 .app-shell {background:radial-gradient(900px 520px at 10% -8%,var(--accent-low),transparent 64%),var(--winui-mica-base);}
+html[data-theme-choice="mean-girls"] body.release-v1 .app-shell {background:#ffbddb;}
+html[data-theme-choice="ea-app"] body.release-v1 .app-shell {background:#181b2a;}
+body.release-v1 .winui-titlebar {grid-row:1;}
+body.release-v1 .topbar.winui-navview {grid-row:2;}
+body.release-v1 .layout {grid-row:3;min-height:0;grid-template-columns:var(--sidebar-width) minmax(0,1fr);gap:0;}
+body.release-v1 .topbar-mode-switcher {flex:1 1 auto;display:flex;gap:2px;align-items:center;}
+body.release-v1 .topbar .mode-btn {width:auto;min-height:34px;flex:0 1 auto;}
+body.release-v1 .topbar .language-switcher {margin-left:auto;}
+html[data-theme-choice] body.release-v1 .left-panel.card {
+ min-width:0;min-height:0;height:100%;padding:20px 12px 14px;border:0;border-radius:0;
+ background:transparent;color:var(--winui-text-primary);box-shadow:none;backdrop-filter:none;
+ display:flex;flex-direction:column;gap:8px;overflow:hidden;
+}
+html[data-theme-choice] body.release-v1 .right-panel.card {
+ min-width:0;min-height:0;height:100%;padding:clamp(18px,1.5vw,26px);
+ border:1px solid var(--winui-control-stroke);border-right:0;border-bottom:0;
+ border-radius:var(--winui-overlay-radius) 0 0 0;
+ background:var(--winui-layer-fill);color:var(--winui-text-primary);box-shadow:none;backdrop-filter:none;overflow:hidden;
+}
+body.release-v1 .mode-controls:not(.hidden){display:grid;align-content:start;gap:8px;min-width:0;}
+body.release-v1 .mode-controls.hidden{display:none!important;}
+body.release-v1 .control-block{margin:0;min-width:0;width:100%;}
+body.release-v1 .left-panel .path-label{width:100%;margin:0;color:var(--winui-text-secondary);overflow-wrap:anywhere;}
+/* Exactly the Manager's large sidebar CTA geometry (both modes). */
+body.release-v1 #pick-package-btn,
+body.release-v1 #scan-btn,
+body.release-v1 #merger-add-packages-btn {
+ box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;
+ width:100%;min-width:0;min-height:52px;height:auto;padding:12px 14px;margin:0;
+ font:600 14px/20px var(--fluent-body-font);text-align:center;
+ border-radius:var(--fluent-radius-control);white-space:normal;overflow-wrap:anywhere;
+}
+/* No extra decorative card around the button; the target is beneath it. */
+body.release-v1 :is(#package-drop-zone,#merger-drop-zone) {
+ display:flex;flex-direction:column;min-width:0;box-sizing:border-box;
+ border:0;border-radius:0;box-shadow:none;background:transparent;padding:0;margin:0;
+}
+body.release-v1 :is(#package-drop-zone,#merger-drop-zone).drag-over {
+ background:transparent;outline:0;
+}
+body.release-v1 :is(#package-drop-zone,#merger-drop-zone) > .drop-hint {
+ box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;
+ width:100%;min-height:90px;margin:8px 0 0;padding:10px 8px;
+ border:1px dashed var(--winui-control-stroke-strong);border-radius:var(--winui-control-radius);
+ background:var(--winui-card-fill-alt);color:var(--winui-text-secondary);text-align:center;overflow-wrap:anywhere;
+ font:400 12px/17px var(--fluent-body-font);
+ transition:background-color 85ms ease,border-color 85ms ease,color 85ms ease;
+}
+body.release-v1 .drop-hint-icon {width:20px;height:20px;flex:0 0 20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;color:inherit;}
+body.release-v1 .drop-hint-title {font-weight:600;color:inherit;}
+body.release-v1 .drop-hint-formats {color:var(--winui-text-tertiary);font:400 11px/15px var(--fluent-body-font);}
+body.release-v1 :is(#package-drop-zone,#merger-drop-zone) > .drop-hint:hover {
+ border-color:var(--accent-outline);background:var(--winui-control-fill-hover);
+}
+body.release-v1 :is(#package-drop-zone,#merger-drop-zone).drag-over > .drop-hint {
+ border-color:var(--accent);background:var(--accent-low);color:var(--winui-text-primary);
+ box-shadow:inset 0 0 0 1px var(--accent-outline);
+}
+body.release-v1 :is(#package-drop-zone,#merger-drop-zone).drag-over > .drop-hint .drop-hint-formats {color:var(--winui-text-secondary);}
+/* Five social links, same widths and theme/hover states as the Manager. */
+body.release-v1 .left-panel .winui-social-footer {
+ box-sizing:border-box;width:100%;max-width:100%;min-width:0;
+ flex:0 0 auto;margin-top:auto;padding:10px 4px 0;border-top:1px solid var(--winui-divider);
+}
+body.release-v1 .winui-social-footer .social-icons-list {
+ display:flex;align-items:center;justify-content:space-between;gap:0;
+ padding:0;margin:0;width:100%;list-style:none;
+}
+body.release-v1 .winui-social-footer .social-icons-list li {min-width:0;flex:0 0 auto;margin:0;padding:0;}
+body.release-v1 .winui-social-footer .social-icons-list a {
+ box-sizing:border-box;display:grid;place-items:center;width:30px;height:30px;max-width:none;
+ border:1px solid transparent;border-radius:var(--winui-control-radius);
+ background:transparent;color:var(--winui-text-secondary);transform:none;
+ transition:background-color 180ms ease,color 180ms ease,transform 180ms ease;
+}
+body.release-v1 .winui-social-footer .social-icons-list a:hover {
+ color:var(--accent);background:var(--winui-control-fill-hover);
+ border-color:var(--accent-outline);transform:translateY(-1px);
+}
+body.release-v1 .winui-social-footer .social-icons-list a:active {
+ color:var(--accent-dark-1);background:var(--winui-control-fill-pressed);transform:none;
+}
+body.release-v1 .winui-social-footer .social-icons-list svg {width:17px;height:17px;fill:currentColor;color:inherit;}
+/* Never dynamically override accent foreground: theme's Manager tokens win. */
+html[data-theme-choice] body.release-v1 .primary-btn {
+ color:var(--fluent-accent-foreground);background:var(--fluent-accent-fill);
+ border:1px solid var(--fluent-accent-pressed);border-bottom-color:var(--fluent-accent-pressed);
+}
+html[data-theme-choice] body.release-v1 .primary-btn:not(:disabled):hover {
+ color:var(--fluent-accent-foreground);background:var(--fluent-accent-hover);
+}
+html[data-theme-choice] body.release-v1 .primary-btn:not(:disabled):active {
+ color:var(--fluent-accent-foreground);background:var(--fluent-accent-pressed);
+}
+html[data-theme-choice] body.release-v1 :is(.secondary-btn,.danger-btn,.merger-remove-btn){
+ color:var(--fluent-text-primary);background:var(--fluent-control-fill);
+ border:1px solid var(--fluent-control-stroke);border-bottom-color:var(--fluent-control-stroke-strong);
+}
+html[data-theme-choice] body.release-v1 :is(.secondary-btn,.danger-btn,.merger-remove-btn):not(:disabled):hover {
+ color:var(--fluent-text-primary);background:var(--fluent-control-hover);
+}
+html[data-theme-choice] body.release-v1 :is(.secondary-btn,.danger-btn,.merger-remove-btn):not(:disabled):active {
+ background:var(--fluent-control-pressed);
+}
+html[data-theme-choice] body.release-v1 .danger-btn:not(:disabled):hover {
+ color:var(--fluent-danger);border-color:var(--fluent-danger);background:var(--fluent-danger-hover);
+}
+body.release-v1 :is(.primary-btn,.secondary-btn,.danger-btn,.merger-remove-btn):disabled {opacity:.45;cursor:default;}
+body.release-v1 :is(.primary-btn,.secondary-btn,.danger-btn) :is(svg,i){color:inherit;fill:currentColor;}
+body.release-v1 :is(.primary-btn,.secondary-btn,.danger-btn) .btn-icon {
+ display:inline-block;width:18px;height:18px;flex:0 0 18px;
+ background-color:currentColor;-webkit-mask:var(--button-icon) center/contain no-repeat;
+ mask:var(--button-icon) center/contain no-repeat;pointer-events:none;
+}
+/* List filters and selectable actions inherit the same geometry and contrast. */
+body.release-v1 .results-actions {
+ display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;margin:14px 0 12px;
+}
+body.release-v1 .results-query-controls{display:flex;align-items:center;gap:8px;min-width:0;}
+body.release-v1 .content-filter-toggle-btn {min-height:32px;padding:5px 10px;}
+body.release-v1 .results-search-input {
+ min-height:32px;padding:5px 10px;background:var(--fluent-control-fill);color:var(--fluent-text-primary);
+ border:1px solid var(--fluent-control-stroke);border-bottom-color:var(--fluent-control-stroke-strong);
+ border-radius:var(--fluent-radius-control);
+}
+body.release-v1 .results-search-input::placeholder {color:var(--winui-text-tertiary);opacity:1;}
+body.release-v1 .results-search-input:focus{border-bottom:2px solid var(--accent);outline:none;}
+body.release-v1 .results-selection-controls {
+ display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:min(100%,352px);gap:8px;justify-self:end;
+}
+body.release-v1 .results-selection-controls > .secondary-btn {
+ min-height:36px;height:36px;min-width:0;padding:7px 10px;
+ font:600 13px/20px var(--fluent-body-font);white-space:nowrap;
+}
+body.release-v1 .footer-actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-top:10px;min-width:0;}
+body.release-v1 .footer-actions > :is(.primary-btn,.secondary-btn,.danger-btn) {
+ display:inline-flex;align-items:center;justify-content:center;gap:7px;
+ min-width:0;min-height:36px;height:36px;width:100%;
+ margin:0;padding:6px 10px;white-space:nowrap;font:600 13px/20px var(--fluent-body-font);
+}
+body.release-v1 .merger-footer-actions {
+ grid-template-columns:repeat(2,minmax(0,1fr));
+ width:min(100%,calc((100% - 16px)/3*2 + 8px));margin-left:auto;margin-right:auto;
+}
+body.release-v1 :is(.resource-list,.merger-source-list,.content-filter-menu){
+ scrollbar-width:thin;scrollbar-color:var(--winui-control-stroke-strong) transparent;
+}
+body.release-v1 :is(.resource-list,.merger-source-list,.content-filter-menu)::-webkit-scrollbar {width:12px;}
+body.release-v1 :is(.resource-list,.merger-source-list,.content-filter-menu)::-webkit-scrollbar-thumb {
+ border-radius:8px;background:var(--winui-control-stroke-strong);
+ border:2px solid transparent;background-clip:padding-box;
+}
+body.release-v1 :is(.resource-list,.merger-source-list,.content-filter-menu)::-webkit-scrollbar-thumb:hover {
+ background:var(--winui-text-tertiary);border:2px solid transparent;background-clip:padding-box;
+}
+html[data-theme-choice] body.release-v1 :is(.list-card,.preview-card,.progress-card,.merger-source-row){
+ background:var(--winui-card-fill-alt);color:var(--winui-text-primary);
+ border-color:var(--winui-control-stroke);border-radius:var(--winui-overlay-radius);
+}
+html[data-theme-choice] body.release-v1 .merger-source-row:hover{background:var(--winui-control-fill-hover);}
+body.release-v1 .preview-thumb-wrap{aspect-ratio:1/1;}
+body.release-v1 :is(.preview-name,.preview-path,.path-label,.merger-source-path){overflow-wrap:anywhere;}
+body.release-v1 #app-modal{color:var(--winui-text-primary);}
+body.release-v1 #app-modal-panel {
+ background:var(--winui-popup);color:var(--winui-text-primary);
+ border-color:var(--winui-control-stroke-strong);border-radius:var(--winui-overlay-radius);
+}
+body.release-v1 #app-modal :is(.app-modal-title,.app-modal-message){color:var(--winui-text-primary);}
+body.release-v1 :is(button,a,input,[role="button"]):focus-visible {
+ outline:2px solid var(--fluent-focus-outer);outline-offset:2px;
+}
+@media(max-width:1260px){
+ body.release-v1 .results-actions{grid-template-columns:minmax(0,1fr);gap:8px;}
+ body.release-v1 .results-selection-controls{width:min(100%,352px);justify-self:end;}
+}
+@media(max-width:900px){
+ body.release-v1 .app-shell{--sidebar-width:clamp(220px,19vw,276px);}
+ body.release-v1 .topbar.winui-navview{gap:6px;}
+ body.release-v1 .topbar .mode-btn{padding-inline:9px;}
+ body.release-v1 #lang-label{display:none;}
+ html[data-theme-choice] body.release-v1 .left-panel.card{padding:12px;}
+ html[data-theme-choice] body.release-v1 .right-panel.card{padding:12px;}
+}
+@media(max-width:700px){
+ body.release-v1 .app-shell{--sidebar-width:max(180px,30vw);}
+ body.release-v1 .results-grid{grid-template-columns:minmax(0,1fr);}
+ body.release-v1 .preview-card{display:none;}
+}
+@media(max-height:640px){
+ html[data-theme-choice] body.release-v1 .left-panel.card{overflow-y:auto;}
+ body.release-v1 .winui-social-footer{margin-top:12px;}
+}
+@media(prefers-reduced-motion:reduce){
+ body.release-v1 :is(.drop-hint,.winui-social-footer a){transition:none;}
+}
+@media(forced-colors:active){
+ body.release-v1 :is(#package-drop-hint,#merger-add-hint){border-color:ButtonText;color:CanvasText;}
+ body.release-v1 :is(#package-drop-zone,#merger-drop-zone).drag-over > .drop-hint {border-color:Highlight;background:Canvas;color:CanvasText;}
+}
+
+/* Manager/WinUI parity: thumbnail cards and semantic selection (no green constants).
+ * Keep a 1:1 image and the standard Fluent overlay/control radius. */
+html[data-theme-choice] body.release-v1 :is(.list-card,.preview-card,.progress-card,.merger-source-row){
+  background:var(--winui-card-fill-alt);border:1px solid var(--winui-control-stroke);
+  border-radius:var(--fluent-radius-overlay);color:var(--winui-text-primary);
+}
+html[data-theme-choice] body.release-v1 .preview-thumb-wrap{
+  aspect-ratio:1/1;overflow:hidden;border-radius:var(--fluent-radius-control);
+  background:var(--winui-control-fill-pressed);border:1px solid var(--winui-control-stroke);
+}
+html[data-theme-choice] body.release-v1 .preview-thumb{
+  display:block;width:100%;height:100%;object-fit:cover;
+}
+html[data-theme-choice] body.release-v1 :is(.type-pill,.preview-kind){
+  color:var(--winui-text-secondary);background:var(--winui-control-fill-hover);
+  border-color:var(--winui-control-stroke);border-radius:var(--fluent-radius-control);
+}
+html[data-theme-choice] body.release-v1 :is(.lang-menu-item.active,.lang-menu-item:disabled){
+  color:var(--winui-text-primary);background:var(--winui-control-fill-hover);
+}
+html[data-theme-choice] body.release-v1 .resource-row:focus-within{
+  border-color:var(--accent-outline);background:var(--winui-control-fill-hover);
+}
+html[data-theme-choice] body.release-v1 .resource-row.selected,
+html[data-theme-choice] body.release-v1 .merger-source-row.active{
+  border-color:var(--accent-outline);background:var(--winui-control-fill-hover);
+  box-shadow:inset 3px 0 0 var(--accent);
+}
+@media(forced-colors:active){
+  html[data-theme-choice] body.release-v1 :is(.preview-card,.preview-thumb-wrap,.type-pill){
+    background:Canvas;color:CanvasText;border-color:ButtonText;
+  }
+}
+
+/* v2.4 Pose List: match Packer socials, align search to list, sidebar-width select actions. */
+:root {--theme-icon-hover:var(--accent-light-1,var(--accent));}
+html[data-resolved-mode="light"] {--theme-icon-hover:var(--accent-dark-2,var(--accent));}
+html[data-theme-choice] body.release-v1 .winui-social-footer .social-icons-list li a {
+ box-sizing:border-box;width:30px;height:30px;border:1px solid transparent;
+ border-radius:var(--winui-control-radius,4px);background:transparent;
+ color:var(--winui-text-secondary);transform:translateY(0);
+ transition:background-color .18s ease,border-color .18s ease,color .18s ease,transform .18s ease;
+}
+html[data-theme-choice] body.release-v1 .winui-social-footer .social-icons-list li a:hover,
+html[data-theme-choice] body.release-v1 .winui-social-footer .social-icons-list li a:focus-visible {
+ color:var(--theme-icon-hover);background:var(--accent-low);
+ border-color:var(--accent-outline);transform:translateY(-2px);
+}
+html[data-theme-choice] body.release-v1 .winui-social-footer .social-icons-list li a:active {
+ background:var(--winui-control-fill-pressed);transform:translateY(0);
+}
+body.release-v1 #results-state .results-grid,
+body.release-v1 #results-state .results-actions {
+ --splitter-preview-width:clamp(185px,24vw,360px);
+ grid-template-columns:minmax(0,1fr) var(--splitter-preview-width);
+ column-gap:clamp(8px,1.1vw,16px);
+}
+body.release-v1 #results-state .results-actions {
+ grid-template-rows:auto auto;row-gap:8px;align-items:center;
+}
+body.release-v1 #results-state .results-query-controls {
+ grid-column:1;grid-row:1;width:100%;max-width:100%;
+ min-width:0;display:flex;flex-wrap:nowrap;align-items:center;
+}
+body.release-v1 #results-state .results-search-input {
+ flex:1 1 0;width:0;min-width:0;max-width:none;box-sizing:border-box;
+}
+body.release-v1 #results-state .results-selection-controls {
+ grid-column:1/-1;grid-row:2;justify-self:end;
+ display:grid;grid-template-columns:repeat(2,minmax(0,var(--sidebar-width)));
+ width:fit-content;max-width:100%;gap:8px;
+}
+body.release-v1 #results-state .results-selection-controls > button {
+ box-sizing:border-box;min-width:0;width:100%;max-width:var(--sidebar-width);
+ white-space:normal;overflow-wrap:break-word;height:auto;min-height:36px;
+}
+body.release-v1 #restore-manifest-btn > .fa-reply {
+ display:inline-block;font-size:16px;line-height:1;flex:0 0 auto;color:inherit;
+}
+@media(max-width:1100px) {
+ body.release-v1 #results-state .results-query-controls {flex-wrap:wrap;}
+ body.release-v1 #results-state .results-search-input {
+  flex:1 1 100%;width:100%;min-width:0;
+ }
+ body.release-v1 #results-state .results-selection-controls {
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  width:min(100%,calc(var(--sidebar-width) * 2 + 8px));
+ }
+}
+@media(max-width:700px) {
+ body.release-v1 #results-state .results-grid,
+ body.release-v1 #results-state .results-actions {grid-template-columns:minmax(0,1fr);}
+ body.release-v1 #results-state .results-query-controls,
+ body.release-v1 #results-state .results-selection-controls {grid-column:1;}
+}
+@media(prefers-reduced-motion:reduce) {
+ html[data-theme-choice] body.release-v1 .winui-social-footer .social-icons-list li a {transition:none;}
+ html[data-theme-choice] body.release-v1 .winui-social-footer .social-icons-list li a:hover,
+ html[data-theme-choice] body.release-v1 .winui-social-footer .social-icons-list li a:focus-visible,
+ html[data-theme-choice] body.release-v1 .winui-social-footer .social-icons-list li a:active {transform:none;}
+}
+@media(forced-colors:active) {
+ html[data-theme-choice] body.release-v1 .winui-social-footer .social-icons-list li a:hover,
+ html[data-theme-choice] body.release-v1 .winui-social-footer .social-icons-list li a:focus-visible {
+  background:Highlight;color:HighlightText;border-color:Highlight;
+ }
+}
+
+/* Non-selectable instructions for both native drag-and-drop targets. */
+body.release-v1 :is(#package-drop-zone,#merger-drop-zone,.drag-zone,.drop-hint,
+.drop-hint-title,.drop-hint-formats,.drop-hint-icon) {
+  user-select:none;-webkit-user-select:none;-webkit-user-drag:none;
+}
+body.release-v1 #preview-thumb[role="button"] {cursor:pointer;}
+body.release-v1 #preview-thumb[role="button"]:focus-visible {
+  outline:2px solid var(--accent);outline-offset:2px;
+}
+body.release-v1 #restore-manifest-btn > .fa-rotate-left {
+  display:inline-block;flex:0 0 auto;font-size:16px;line-height:1;color:inherit;
+}
+
+/* Drop hints are not selectable; preview thumbnail reveals the source package. */
+body.release-v1 :is(#package-drop-zone,#merger-drop-zone) > .drop-hint,
+body.release-v1 :is(#package-drop-zone,#merger-drop-zone) > .drop-hint * {
+  user-select: none;
+  -webkit-user-select: none;
+}
+body.release-v1 :is(#package-drop-zone,#merger-drop-zone) > .drop-hint svg,
+body.release-v1 :is(#package-drop-zone,#merger-drop-zone) > .drop-hint svg * {
+  -webkit-user-drag: none;
+}
+body.release-v1 #preview-thumb.reveal-source {
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+}
+body.release-v1 #preview-thumb.reveal-source:focus-visible {
+  outline: 2px solid var(--fluent-focus-outer);
+  outline-offset: 2px;
+}
+
+/* Preview image only: Fluent hover, keyboard focus and pressed affordance. */
+html[data-theme-choice] body.release-v1 #preview-thumb.reveal-source {
+  cursor:pointer;
+  user-select:none;-webkit-user-select:none;-webkit-user-drag:none;
+  object-fit:contain;
+  outline:2px solid transparent;
+  outline-offset:-2px;
+  border-radius:var(--fluent-radius-control,4px);
+  transition:filter .14s ease,outline-color .14s ease,transform .14s ease;
+}
+html[data-theme-choice] body.release-v1 #preview-thumb.reveal-source:hover {
+  outline-color:var(--accent);
+  filter:brightness(1.1);
+  transform:scale(1.012);
+}
+html[data-theme-choice] body.release-v1 #preview-thumb.reveal-source:focus-visible {
+  outline:2px solid var(--fluent-focus-outer,var(--accent));
+  outline-offset:-2px;
+  filter:brightness(1.1);
+}
+html[data-theme-choice] body.release-v1 #preview-thumb.reveal-source:active {
+  filter:brightness(.96);
+  transform:scale(.992);
+}
+@media(prefers-reduced-motion:reduce) {
+  html[data-theme-choice] body.release-v1 #preview-thumb.reveal-source {transition:none;}
+  html[data-theme-choice] body.release-v1 #preview-thumb.reveal-source:hover,
+  html[data-theme-choice] body.release-v1 #preview-thumb.reveal-source:active {transform:none;}
+}
+@media(forced-colors:active) {
+  html[data-theme-choice] body.release-v1 #preview-thumb.reveal-source:hover,
+  html[data-theme-choice] body.release-v1 #preview-thumb.reveal-source:focus-visible {outline-color:Highlight;}
+}
+
+/* Mean Girls parity: use Packer's black primary action, not the pink generic
+   Fluent accent action. Pink remains for selected states and progress. */
+html[data-theme-choice="mean-girls"] body.release-v1 .primary-btn {
+  background:#101010;
+  color:#FFFFFF;
+  border-color:#101010;
+  border-bottom-color:#000000;
+}
+html[data-theme-choice="mean-girls"] body.release-v1 .primary-btn:not(:disabled):hover {
+  background:#292929;
+  color:#FFFFFF;
+  border-color:#292929;
+}
+html[data-theme-choice="mean-girls"] body.release-v1 .primary-btn:not(:disabled):active {
+  background:#050505;
+  color:#FFFFFF;
+}
+/* Match the Manager's burgundy title strip and white window controls. */
+html[data-theme-choice="mean-girls"] body.release-v1 .winui-titlebar {
+  background:#5F1B3F;
+  color:#FFFFFF;
+}
+html[data-theme-choice="mean-girls"] body.release-v1 .winui-caption-buttons button {
+  color:#FFFFFF;
+}
+html[data-theme-choice="mean-girls"] body.release-v1 .winui-caption-buttons button:hover {
+  background:rgba(255,255,255,.10);
+}
+html[data-theme-choice="mean-girls"] body.release-v1 .winui-caption-buttons button:active {
+  background:rgba(255,255,255,.06);
+}
+
+/* Language selector parity across Packer, Splitter and Manager. */
+body .topbar #lang-dropdown { box-sizing:border-box; width:64px; min-width:64px; max-width:64px; flex:0 0 64px; }
+body .topbar #lang-dropdown > .lang-toggle-btn { box-sizing:border-box; width:100%; min-width:0; height:32px; padding:0 8px; gap:6px; justify-content:space-between; font:600 12px/18px "Segoe UI Variable Text","Segoe UI",sans-serif; }
+body .topbar #lang-dropdown #lang-current-code { font-size:12px; line-height:18px; font-weight:700; letter-spacing:normal; }
+body .topbar #lang-dropdown #lang-menu { box-sizing:border-box; left:0; right:auto; width:100%; min-width:100%; max-width:100%; }
+body .topbar #lang-dropdown #lang-menu > .lang-menu-item { box-sizing:border-box; width:100%; padding:7px 8px; font:400 12px/18px "Segoe UI Variable Text","Segoe UI",sans-serif; white-space:nowrap; }
+body .topbar #lang-dropdown #lang-menu > .lang-menu-item.hidden { display:none !important; }
+
+/* Restore Manager theme menu appearance without hiding the translated Tema label. */
+html[data-theme-choice] body.release-v1 .topbar .theme-button {
+  width:auto; min-width:32px; height:32px; padding:0 9px;
+  display:inline-flex; align-items:center; justify-content:center; gap:7px;
+  color:var(--winui-text-primary);
+}
+html[data-theme-choice] body.release-v1 .topbar #theme-button-label {
+  display:inline; color:var(--winui-text-primary);
+  font:600 12px/18px "Segoe UI Variable Text","Segoe UI",sans-serif;
+  white-space:nowrap;
+}
+html[data-theme-choice] body.release-v1 .theme-button svg {
+  width:16px; height:16px; fill:currentColor; flex-shrink:0;
+}
+html[data-theme-choice] body.release-v1 .theme-flyout {
+  right:0; width:250px; padding:6px;
+}
+html[data-theme-choice] body.release-v1 .theme-option {
+  min-height:36px; padding:5px 8px; display:grid;
+  grid-template-columns:16px minmax(0,1fr) 14px; gap:8px; align-items:center;
+  color:var(--winui-text-primary);
+}
+html[data-theme-choice] body.release-v1 .theme-option-copy strong {
+  font-size:13px; line-height:18px; font-weight:600;
+}
+html[data-theme-choice] body.release-v1 .theme-swatch {
+  width:12px; height:12px; border-radius:50%;
+  box-shadow:0 0 0 1px var(--winui-control-stroke-strong);
+}
+html[data-theme-choice] body.release-v1 .veiga-swatch {background:#7fad2d;}
+html[data-theme-choice] body.release-v1 .mean-girls-swatch {
+  background:linear-gradient(90deg,#5F1B3F 0 48%,#F92F60 48% 100%);
+}
+html[data-theme-choice] body.release-v1 .ea-app-swatch {
+  background:linear-gradient(90deg,#181B2A 0 58%,#FF4747 58% 100%);
+}
+html[data-theme-choice="ea-app"] {
+  --winui-mica-base:#181B2A; --winui-layer-fill:#1D2030;
+  --winui-card-fill:#232738; --winui-card-fill-alt:#202434;
+  --winui-control-fill:#2A2E3F; --winui-control-fill-hover:#343647;
+  --winui-control-fill-pressed:#3D4052;
+  --winui-text-primary:#F8F8FA; --winui-text-secondary:#A0A2AE;
+  --winui-popup:#232738;
+}
+html[data-theme-choice="ea-app"] body.release-v1,
+html[data-theme-choice="ea-app"] body.release-v1 .app-shell { background:#181B2A; }
+html[data-theme-choice="ea-app"] body.release-v1 .winui-titlebar {
+  background:#000000; color:#FFFFFF; border-bottom:1px solid rgba(255,255,255,.08);
+}
+html[data-theme-choice="ea-app"] body.release-v1 .topbar.winui-navview {
+  background:#181B2A; border-bottom-color:rgba(255,255,255,.08);
+}
+html[data-theme-choice="ea-app"] body.release-v1 .left-panel {
+  background:#181B2A; border-right:1px solid rgba(255,255,255,.06);
+}
+html[data-theme-choice="ea-app"] body.release-v1 .right-panel {
+  background:#1D2030; border-color:rgba(255,255,255,.08);
+}
+html[data-theme-choice="ea-app"] body.release-v1 .mode-btn.active {
+  color:#FFFFFF; background:#343647;
+}
+html[data-theme-choice="ea-app"] body.release-v1 .mode-btn.active::after {background:#FFFFFF;}

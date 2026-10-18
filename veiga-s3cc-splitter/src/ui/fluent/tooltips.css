@@ -1,0 +1,27 @@
+/* Lightweight theme-aware ToolTip. Contents are the existing title strings. */
+.fluent-tooltip {
+  position:fixed;
+  z-index:2000;
+  box-sizing:border-box;
+  max-width:min(350px,calc(100vw - 16px));
+  padding:6px 10px;
+  color:var(--fluent-text-primary, var(--text));
+  border:1px solid var(--fluent-control-stroke, rgba(255,255,255,.10));
+  border-radius:var(--fluent-radius-control,4px);
+  background:var(--winui-popup,var(--surface));
+  box-shadow:0 6px 18px var(--winui-shadow,rgba(0,0,0,.2));
+  font:12px/18px var(--fluent-body-font,"Segoe UI",sans-serif);
+  overflow-wrap:anywhere;
+  pointer-events:none;
+  opacity:0;
+  transform:translateY(-2px);
+  transition:opacity 110ms ease, transform 110ms ease;
+}
+.fluent-tooltip[data-visible="true"] { opacity:1; transform:translateY(0); }
+.fluent-tooltip[hidden] { display:none; }
+@media(prefers-reduced-motion:reduce){
+  .fluent-tooltip {transition:none;}
+}
+@media(forced-colors:active){
+  .fluent-tooltip {background:Canvas;color:CanvasText;border-color:CanvasText;box-shadow:none;}
+}
