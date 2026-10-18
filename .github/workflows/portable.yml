@@ -4,6 +4,9 @@ run-name: Portable builds by @${{ github.actor }}
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - ci/build-v2.2.0-winui3-20261017
 
 jobs:
   build-portable:
