@@ -291,10 +291,30 @@ function render() {
   renderPreview();
 }
 
+let virtualResourcesRef=null;
 function renderList() {
-  el.resourceList.innerHTML = "";
+  const rowHeight=82;
+  if (virtualResourcesRef!==state.resources) {
+    virtualResourcesRef=state.resources;
+    state.listScrollTop=0;
+  }
+  const viewportHeight=Math.max(el.resourceList.clientHeight,rowHeight);
+  const maxScrollTop=Math.max(0,state.resources.length*rowHeight-viewportHeight);
+  const scrollTop=Math.max(0,Math.min(state.listScrollTop||0,maxScrollTop));
+  const firstIndex=Math.max(0,Math.floor(scrollTop/rowHeight)-6);
+  const lastIndex=Math.min(state.resources.length,Math.ceil((scrollTop+viewportHeight)/rowHeight)+6);
+  const holder=document.createElement("div");
+  holder.className="resource-virtual-content";
+  holder.style.position="relative";
+  holder.style.width="100%";
+  holder.style.height=`${state.resources.length*rowHeight}px`;
+  el.resourceList.style.display="block";
+  el.resourceList.style.gap="0";
+  el.resourceList.replaceChildren(holder);
+  if(el.resourceList.scrollTop!==scrollTop)el.resourceList.scrollTop=scrollTop;
 
-  for (const item of state.resources) {
+  for(let index=firstIndex;index<lastIndex;index++) {
+    const item=state.resources[index];
     const displayType = getDisplayType(item);
     const displayDetails = getDisplayDetails(item);
 
@@ -327,8 +347,14 @@ function renderList() {
     pill.className = "type-pill";
     pill.textContent = displayType || "-";
 
-    row.append(checkWrap, button, pill);
-    el.resourceList.appendChild(row);
+    row.style.position="absolute";
+    row.style.top=`${index*rowHeight+4}px`;
+    row.style.left="8px";
+    row.style.width="calc(100% - 16px)";
+    row.style.height=`${rowHeight-8}px`;
+    row.style.boxSizing="border-box";
+    row.append(checkWrap,button,pill);
+    holder.appendChild(row);
   }
 }
 
@@ -531,6 +557,13 @@ function bindDragAndDrop() {
 }
 
 function setupEvents() {
+  let listRenderQueued=false;
+  el.resourceList.addEventListener("scroll",()=>{
+    state.listScrollTop=el.resourceList.scrollTop;
+    if(listRenderQueued)return;
+    listRenderQueued=true;
+    requestAnimationFrame(()=>{listRenderQueued=false;renderList();});
+  },{passive:true});
   el.pickPackageBtn.addEventListener("click", pickPackage);
   el.pickDestinationBtn.addEventListener("click", pickDestination);
   el.scanBtn.addEventListener("click", scanPackage);
