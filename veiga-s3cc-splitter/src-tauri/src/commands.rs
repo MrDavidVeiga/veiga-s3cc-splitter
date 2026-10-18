@@ -852,11 +852,8 @@ fn content_categories_for_key(
         TYPE_FACE => push_unique_category(&mut categories, "Sliders"),
         TYPE_SKINTONE => push_unique_category(&mut categories, "Skins"),
         TYPE_CASP => {
-            let entry = package.files.iter().find(|entry| {
-                entry.resource_type == parts.resource_type
-                    && entry.resource_group == parts.resource_group
-                    && entry.instance == parts.instance
-            });
+            let entry = package.entry_index(parts.resource_type, parts.resource_group, parts.instance)
+            .and_then(|index| package.files.get(index));
 
             if let Some(entry) = entry {
                 let label = object_display_label(package, entry, name_map);
@@ -905,11 +902,8 @@ fn selection_export_root(
         if parts.resource_type == TYPE_FACE {
             return PathBuf::from(destination_folder).join("Sliders").join(stem);
         }
-        if let Some(entry) = package.files.iter().find(|e| {
-            e.resource_type == parts.resource_type
-                && e.resource_group == parts.resource_group
-                && e.instance == parts.instance
-        }) {
+        if let Some(entry) = package.entry_index(parts.resource_type, parts.resource_group, parts.instance)
+            .and_then(|index| package.files.get(index)) {
             if let Some(info) = casp_folder_info(entry, name_map) {
                 let mut path = PathBuf::from(destination_folder);
                 path.push(info.main_category);
@@ -940,11 +934,8 @@ fn selection_reveal_root(
         if parts.resource_type == TYPE_FACE {
             return PathBuf::from(destination_folder).join("Sliders");
         }
-        if let Some(entry) = package.files.iter().find(|e| {
-            e.resource_type == parts.resource_type
-                && e.resource_group == parts.resource_group
-                && e.instance == parts.instance
-        }) {
+        if let Some(entry) = package.entry_index(parts.resource_type, parts.resource_group, parts.instance)
+            .and_then(|index| package.files.get(index)) {
             if let Some(info) = casp_folder_info(entry, name_map) {
                 return PathBuf::from(destination_folder).join(info.main_category);
             }
@@ -1594,7 +1585,9 @@ fn safe_package_resource_names(package: &DBPF<'_>) -> BTreeMap<u64, String> {
 
         let fallback = objd_catalog_name(entry.data())
             .or_else(|| {
-                package.files.iter().find_map(|candidate| {
+                package.entries_for_instance(entry.instance).iter()
+                    .filter_map(|&index| package.files.get(index))
+                    .find_map(|candidate| {
                     if candidate.resource_type != TYPE_XML || candidate.instance != entry.instance {
                         return None;
                     }
@@ -1603,7 +1596,9 @@ fn safe_package_resource_names(package: &DBPF<'_>) -> BTreeMap<u64, String> {
                 })
             })
             .or_else(|| {
-                package.files.iter().find_map(|candidate| {
+                package.entries_for_instance(entry.instance).iter()
+                    .filter_map(|&index| package.files.get(index))
+                    .find_map(|candidate| {
                     if candidate.resource_type != TYPE_OBJK || candidate.instance != entry.instance
                     {
                         return None;
@@ -1936,11 +1931,8 @@ fn face_group_members(
     face: ResourceKeyParts,
     name_map: &BTreeMap<u64, String>,
 ) -> Vec<ResourceKeyParts> {
-    let Some(entry) = package.files.iter().find(|entry| {
-        entry.resource_type == face.resource_type
-            && entry.resource_group == face.resource_group
-            && entry.instance == face.instance
-    }) else {
+    let Some(entry) = package.entry_index(face.resource_type, face.resource_group, face.instance)
+            .and_then(|index| package.files.get(index)) else {
         return Vec::new();
     };
 
@@ -2183,11 +2175,8 @@ fn tone_group_members(
     tone: ResourceKeyParts,
     name_map: &BTreeMap<u64, String>,
 ) -> Vec<ResourceKeyParts> {
-    let Some(entry) = package.files.iter().find(|entry| {
-        entry.resource_type == tone.resource_type
-            && entry.resource_group == tone.resource_group
-            && entry.instance == tone.instance
-    }) else {
+    let Some(entry) = package.entry_index(tone.resource_type, tone.resource_group, tone.instance)
+            .and_then(|index| package.files.get(index)) else {
         return Vec::new();
     };
 
@@ -2435,7 +2424,8 @@ fn object_display_label(
             return name;
         }
 
-        if let Some(xml) = package.files.iter().find(|candidate| {
+        if let Some(xml) = package.entries_for_instance(entry.instance).iter()
+            .filter_map(|&index| package.files.get(index)).find(|candidate| {
             candidate.resource_type == TYPE_XML && candidate.instance == entry.instance
         }) {
             let text = String::from_utf8_lossy(xml.data());
@@ -2444,7 +2434,8 @@ fn object_display_label(
             }
         }
 
-        if let Some(objk) = package.files.iter().find(|candidate| {
+        if let Some(objk) = package.entries_for_instance(entry.instance).iter()
+            .filter_map(|&index| package.files.get(index)).find(|candidate| {
             candidate.resource_type == TYPE_OBJK && candidate.instance == entry.instance
         }) {
             if let Some(name) = objk_script_class_name(objk.data()) {
@@ -2757,10 +2748,8 @@ fn find_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> Option<Stri
 
     // 1) THUM com a mesma instance do recurso selecionado
     if let Some(b64) = encode_best_preview(
-        package
-            .files
-            .iter()
-            .filter(|entry| entry.instance == key.instance)
+        package.entries_for_instance(key.instance).iter()
+            .filter_map(|&index| package.files.get(index))
             .filter(|entry| {
                 thum_types.contains(&entry.resource_type)
                     || (resource_is_png(entry.resource_type)
@@ -2776,11 +2765,8 @@ fn find_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> Option<Stri
 
     // 2) Se o próprio recurso selecionado for ICON, usar ele diretamente
     if key.resource_type == TYPE_ICON {
-        if let Some(entry) = package.files.iter().find(|entry| {
-            entry.resource_type == TYPE_ICON
-                && entry.resource_group == key.resource_group
-                && entry.instance == key.instance
-        }) {
+        if let Some(entry) = package.entry_index(TYPE_ICON, key.resource_group, key.instance)
+            .and_then(|index| package.files.get(index)) {
             let data = entry.data();
             if is_valid_png(data) {
                 return Some(STANDARD.encode(data));
@@ -2801,11 +2787,8 @@ fn find_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> Option<Stri
 
     // 4) ICON apontado por manifest / XML de objeto
     if let Some(icon) = object_manifest_icon_ref(package, key) {
-        if let Some(entry) = package.files.iter().find(|entry| {
-            entry.resource_type == icon.resource_type
-                && entry.resource_group == icon.resource_group
-                && entry.instance == icon.instance
-        }) {
+        if let Some(entry) = package.entry_index(icon.resource_type, icon.resource_group, icon.instance)
+            .and_then(|index| package.files.get(index)) {
             let data = entry.data();
             if is_valid_png(data) {
                 return Some(STANDARD.encode(data));
@@ -2815,10 +2798,8 @@ fn find_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> Option<Stri
 
     // 5) IMG / IMAG (skin e afins)
     encode_best_preview(
-        package
-            .files
-            .iter()
-            .filter(|entry| entry.instance == key.instance)
+        package.entries_for_instance(key.instance).iter()
+            .filter_map(|&index| package.files.get(index))
             .filter(|entry| {
                 matches!(
                     entry.resource_type,
@@ -2912,11 +2893,7 @@ fn selected_entry_indices(package: &DBPF<'_>, keys: &HashSet<String>) -> Vec<usi
 }
 
 fn matching_entry_index(package: &DBPF<'_>, parts: ResourceKeyParts) -> Option<usize> {
-    package.files.iter().position(|entry| {
-        entry.resource_type == parts.resource_type
-            && entry.resource_group == parts.resource_group
-            && entry.instance == parts.instance
-    })
+    package.entry_index(parts.resource_type, parts.resource_group, parts.instance)
 }
 
 fn export_folder_name(package_path: &str) -> String {
@@ -3604,11 +3581,8 @@ fn object_stbl_refs(package: &DBPF<'_>, objd_instance: u64) -> Vec<ResourceKeyPa
 }
 
 fn object_group_members(package: &DBPF<'_>, objd: ResourceKeyParts) -> Vec<ResourceKeyParts> {
-    let Some(entry) = package.files.iter().find(|entry| {
-        entry.resource_type == objd.resource_type
-            && entry.resource_group == objd.resource_group
-            && entry.instance == objd.instance
-    }) else {
+    let Some(entry) = package.entry_index(objd.resource_type, objd.resource_group, objd.instance)
+            .and_then(|index| package.files.get(index)) else {
         return Vec::new();
     };
 
@@ -5583,11 +5557,8 @@ fn selection_output_stem(
             if parts.resource_type != TYPE_XML {
                 continue;
             }
-            if let Some(entry) = package.files.iter().find(|entry| {
-                entry.resource_type == parts.resource_type
-                    && entry.resource_group == parts.resource_group
-                    && entry.instance == parts.instance
-            }) {
+            if let Some(entry) = package.entry_index(parts.resource_type, parts.resource_group, parts.instance)
+            .and_then(|index| package.files.get(index)) {
                 if is_pose_list_xml(entry) {
                     let text = String::from_utf8_lossy(entry.data());
                     return sanitize_file_name(&pose_list_display_label(&text, entry.instance));
@@ -5597,11 +5568,8 @@ fn selection_output_stem(
 
         if let Some(first) = parsed.first().copied() {
             if first.resource_type == TYPE_SKINTONE {
-                if let Some(entry) = package.files.iter().find(|entry| {
-                    entry.resource_type == first.resource_type
-                        && entry.resource_group == first.resource_group
-                        && entry.instance == first.instance
-                }) {
+                if let Some(entry) = package.entry_index(first.resource_type, first.resource_group, first.instance)
+            .and_then(|index| package.files.get(index)) {
                     let label = tone_display_name(entry, name_map);
                     if !label.trim().is_empty() {
                         return sanitize_file_name(label.trim());
@@ -5609,11 +5577,8 @@ fn selection_output_stem(
                 }
             }
             if first.resource_type == TYPE_CASP {
-                if let Some(entry) = package.files.iter().find(|entry| {
-                    entry.resource_type == first.resource_type
-                        && entry.resource_group == first.resource_group
-                        && entry.instance == first.instance
-                }) {
+                if let Some(entry) = package.entry_index(first.resource_type, first.resource_group, first.instance)
+            .and_then(|index| package.files.get(index)) {
                     let label = object_display_label(package, entry, name_map);
                     if is_bodyhair_label(&label) {
                         return sanitize_file_name(&format!(
@@ -5624,11 +5589,8 @@ fn selection_output_stem(
                 }
             }
             if first.resource_type == TYPE_FACE {
-                if let Some(entry) = package.files.iter().find(|entry| {
-                    entry.resource_type == first.resource_type
-                        && entry.resource_group == first.resource_group
-                        && entry.instance == first.instance
-                }) {
+                if let Some(entry) = package.entry_index(first.resource_type, first.resource_group, first.instance)
+            .and_then(|index| package.files.get(index)) {
                     let label = normalized_face_name(&resource_label(entry, name_map));
                     if !label.trim().is_empty() {
                         return sanitize_file_name(label.trim());
@@ -5639,11 +5601,8 @@ fn selection_output_stem(
     }
 
     if let Ok(parts) = parse_key(first_compound_key(base_key)) {
-        if let Some(entry) = package.files.iter().find(|entry| {
-            entry.resource_type == parts.resource_type
-                && entry.resource_group == parts.resource_group
-                && entry.instance == parts.instance
-        }) {
+        if let Some(entry) = package.entry_index(parts.resource_type, parts.resource_group, parts.instance)
+            .and_then(|index| package.files.get(index)) {
             let label = if parts.resource_type == TYPE_SKINTONE {
                 tone_display_name(entry, name_map)
             } else {
@@ -6469,11 +6428,8 @@ pub fn get_resource_preview(app: AppHandle, payload: PreviewPayload) -> Result<P
         if parts.resource_type != TYPE_XML {
             continue;
         }
-        let Some(xml) = package.files.iter().find(|entry| {
-            entry.resource_type == parts.resource_type
-                && entry.resource_group == parts.resource_group
-                && entry.instance == parts.instance
-        }) else {
+        let Some(xml) = package.entry_index(parts.resource_type, parts.resource_group, parts.instance)
+            .and_then(|index| package.files.get(index)) else {
             continue;
         };
         if !is_pose_list_xml(xml) {
