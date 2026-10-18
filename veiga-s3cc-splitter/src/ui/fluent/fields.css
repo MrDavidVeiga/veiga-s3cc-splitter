@@ -1,0 +1,70 @@
+/* SearchBox fields preserve original input IDs and debounced search logic. */
+body.release-v1 .fluent-search-box {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+body.release-v1 .fluent-search-box > input.text-input {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding-inline-start: 34px;
+  padding-inline-end: 32px;
+  text-overflow: ellipsis;
+}
+body.release-v1 .fluent-search-box::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  width: 13px;
+  height: 13px;
+  pointer-events: none;
+  opacity: .72;
+  background: currentColor;
+  color: var(--fluent-text-secondary);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='6.9' cy='6.9' r='4.9' fill='none' stroke='black' stroke-width='1.7'/%3E%3Cpath d='m10.6 10.6 3.4 3.4' stroke='black' stroke-width='1.7' stroke-linecap='round'/%3E%3C/svg%3E") center/contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='6.9' cy='6.9' r='4.9' fill='none' stroke='black' stroke-width='1.7'/%3E%3Cpath d='m10.6 10.6 3.4 3.4' stroke='black' stroke-width='1.7' stroke-linecap='round'/%3E%3C/svg%3E") center/contain no-repeat;
+}
+body.release-v1 .fluent-search-box:focus-within::before { color: var(--fluent-text-primary); opacity: 1; }
+body.release-v1 .fluent-search-clear {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 25px;
+  height: 24px;
+  min-height: 24px;
+  border: none;
+  border-radius: var(--fluent-radius-control);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: transparent;
+  color: var(--fluent-text-secondary);
+  cursor: pointer;
+}
+body.release-v1 .fluent-search-clear[hidden] { display: none; }
+body.release-v1 .fluent-search-clear:hover { background: var(--fluent-control-hover); color: var(--fluent-text-primary); }
+body.release-v1 .fluent-search-clear:active { background: var(--fluent-control-pressed); }
+body.release-v1 .fluent-search-clear:focus-visible { outline: 2px solid var(--fluent-focus-outer); outline-offset: -2px; }
+body.release-v1 .fluent-search-clear svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+/* Hide Chromium's redundant × only on SearchBoxes with custom clear buttons. */
+body.release-v1 .fluent-search-box input[type=search]::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+
+/* Refine fields without changing original control/validation behavior. */
+body.release-v1 :is(input.text-input, textarea.text-input):not(:disabled):focus-visible {
+  outline: 2px solid var(--fluent-focus-outer);
+  outline-offset: 1px;
+}
+body.release-v1 :is(input.text-input, textarea.text-input):not(:disabled):invalid:not(:placeholder-shown) {
+  border-bottom-color: var(--fluent-danger);
+}
+@media (forced-colors: active) {
+  body.release-v1 .fluent-search-clear { color: ButtonText; }
+  body.release-v1 .fluent-search-box::before { color: CanvasText; }
+}

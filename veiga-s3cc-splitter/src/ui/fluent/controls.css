@@ -1,0 +1,291 @@
+/*
+ * First migration batch: Button, TextBox/SearchBox and CheckBox.
+ * Preserves all existing DOM ids, event handlers and markup. Select popups,
+ * ContentDialog and NavigationView keyboard models are later stages.
+ */
+
+/* App-wide keyboard focus visual, with sufficient separation from surfaces. */
+body.release-v1 :is(button, input, select, summary, a, [role="button"]):focus-visible {
+  outline: 2px solid var(--fluent-focus-outer);
+  outline-offset: 2px;
+}
+
+/* Common in-page command surfaces. The special navigation/caption buttons
+   keep their dedicated shapes in src/winui.css. */
+body.release-v1 :is(
+  .primary-btn,
+  .secondary-btn,
+  .danger-btn,
+  .compact-btn,
+  .icon-btn,
+  .lang-toggle-btn,
+  .theme-button,
+  .filter-btn,
+  .content-filter-toggle-btn
+) {
+  min-height: var(--fluent-control-height);
+  border-radius: var(--fluent-radius-control);
+  font-family: var(--fluent-body-font);
+  font-size: var(--fluent-control-font-size);
+  line-height: 20px;
+  font-weight: 600;
+  transition: background-color 85ms ease, border-color 85ms ease, color 85ms ease;
+}
+
+body.release-v1 :is(
+  .secondary-btn,
+  .compact-btn,
+  .icon-btn,
+  .lang-toggle-btn,
+  .theme-button,
+  .filter-btn,
+  .content-filter-toggle-btn
+) {
+  color: var(--fluent-text-primary);
+  border: 1px solid var(--fluent-control-stroke);
+  border-bottom-color: var(--fluent-control-stroke-strong);
+  background: var(--fluent-control-fill);
+}
+
+body.release-v1 :is(
+  .secondary-btn,
+  .compact-btn,
+  .icon-btn,
+  .lang-toggle-btn,
+  .theme-button,
+  .filter-btn,
+  .content-filter-toggle-btn
+):not(:disabled):hover {
+  background: var(--fluent-control-hover);
+}
+
+body.release-v1 :is(
+  .secondary-btn,
+  .compact-btn,
+  .icon-btn,
+  .lang-toggle-btn,
+  .theme-button,
+  .filter-btn,
+  .content-filter-toggle-btn
+):not(:disabled):active {
+  background: var(--fluent-control-pressed);
+}
+
+body.release-v1 .primary-btn {
+  background: var(--fluent-accent-fill);
+  color: var(--fluent-accent-foreground);
+  border: 1px solid var(--fluent-accent-pressed);
+  border-bottom-color: var(--fluent-accent-pressed);
+}
+body.release-v1 .primary-btn:not(:disabled):hover {
+  background: var(--fluent-accent-hover);
+}
+body.release-v1 .primary-btn:not(:disabled):active {
+  background: var(--fluent-accent-pressed);
+}
+
+/* Correct icon commands separately; they have no text label inside the button. */
+body.release-v1 .icon-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+}
+
+/* Keep destructive actions distinct, but subtle until pointed at. */
+body.release-v1 .danger-btn {
+  color: var(--fluent-text-primary);
+  background: var(--fluent-control-fill);
+  border: 1px solid var(--fluent-control-stroke);
+  border-bottom-color: var(--fluent-control-stroke-strong);
+}
+body.release-v1 .danger-btn:not(:disabled):hover {
+  color: var(--fluent-danger);
+  border-color: var(--fluent-danger);
+  background: var(--fluent-danger-hover);
+}
+body.release-v1 .danger-btn:not(:disabled):active {
+  background: var(--fluent-control-pressed);
+}
+
+/* Disabled looks inert without destroying the visible label. */
+body.release-v1 :is(
+  .primary-btn,
+  .secondary-btn,
+  .danger-btn,
+  .compact-btn,
+  .icon-btn,
+  .lang-toggle-btn,
+  .theme-button,
+  .filter-btn,
+  .content-filter-toggle-btn
+):disabled {
+  opacity: .45;
+  cursor: default;
+  box-shadow: none;
+}
+
+/* A TextBox is flat, with a subtle resting bottom stroke and a 2px accent
+   focus underline. Native <select> is styled only when closed for now. */
+body.release-v1 :is(input.text-input, select.text-input) {
+  min-height: var(--fluent-control-height);
+  min-width: 0;
+  border: 1px solid var(--fluent-control-stroke);
+  border-bottom-color: var(--fluent-control-stroke-strong);
+  border-radius: var(--fluent-radius-control);
+  background: var(--fluent-control-fill);
+  color: var(--fluent-text-primary);
+  font-family: var(--fluent-body-font);
+  font-size: var(--fluent-control-font-size);
+  line-height: 20px;
+  padding: 5px 10px;
+  box-shadow: none;
+  color-scheme: inherit;
+}
+
+body.release-v1 input.text-input::placeholder {
+  color: var(--fluent-text-secondary);
+  opacity: 1;
+}
+body.release-v1 :is(input.text-input, select.text-input):not(:disabled):hover {
+  background: var(--fluent-control-hover);
+}
+body.release-v1 :is(input.text-input, select.text-input):focus {
+  background: var(--fluent-control-fill);
+  border-bottom: 2px solid var(--fluent-accent-fill);
+  box-shadow: none;
+}
+body.release-v1 :is(input.text-input, select.text-input):disabled {
+  opacity: .5;
+  cursor: default;
+}
+body.release-v1 input.text-input:read-only {
+  color: var(--fluent-text-secondary);
+}
+
+/* Search cancel affordance remains the browser's accessible native action
+   until the later SearchBox/ComboBox behavior migration. */
+body.release-v1 input[type="search"].text-input::-webkit-search-cancel-button {
+  cursor: pointer;
+}
+
+/* Checked/unchecked/indeterminate/hover/focus/disabled states for all
+   checkbox inputs, including those generated dynamically in src/app.js. */
+body.release-v1 input[type="checkbox"]:not([role="switch"]) {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 0 0 var(--fluent-check-size);
+  display: inline-grid;
+  place-content: center;
+  width: var(--fluent-check-size);
+  height: var(--fluent-check-size);
+  min-width: var(--fluent-check-size);
+  min-height: var(--fluent-check-size);
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--fluent-checkbox-border);
+  border-radius: var(--fluent-radius-control);
+  background: var(--fluent-checkbox-fill);
+  vertical-align: middle;
+  color: var(--fluent-accent-foreground);
+  cursor: pointer;
+}
+
+body.release-v1 input[type="checkbox"]:not([role="switch"]):not(:checked):not(:disabled):hover {
+  background: var(--fluent-control-hover);
+  border-color: var(--fluent-text-secondary);
+}
+
+body.release-v1 input[type="checkbox"]:not([role="switch"]):checked,
+body.release-v1 input[type="checkbox"]:not([role="switch"]):indeterminate {
+  background: var(--fluent-accent-fill);
+  border-color: var(--fluent-accent-fill);
+}
+
+/* SVG mask follows the theme's actual accent-foreground rather than
+   assuming every branded accent can support a white checkmark. */
+body.release-v1 input[type="checkbox"]:not([role="switch"])::after {
+  content: "";
+  width: 14px;
+  height: 14px;
+  background: var(--fluent-accent-foreground);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 8l3.2 3.2L13 4.4' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/14px 14px no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 8l3.2 3.2L13 4.4' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/14px 14px no-repeat;
+  opacity: 0;
+}
+body.release-v1 input[type="checkbox"]:not([role="switch"]):checked::after {
+  opacity: 1;
+}
+body.release-v1 input[type="checkbox"]:not([role="switch"]):indeterminate::after {
+  opacity: 1;
+  width: 10px;
+  height: 2px;
+  -webkit-mask: none;
+  mask: none;
+  border-radius: 1px;
+}
+body.release-v1 input[type="checkbox"]:not([role="switch"]):checked:not(:disabled):hover,
+body.release-v1 input[type="checkbox"]:not([role="switch"]):indeterminate:not(:disabled):hover {
+  background: var(--fluent-accent-hover);
+  border-color: var(--fluent-accent-hover);
+}
+body.release-v1 input[type="checkbox"]:not([role="switch"]):checked:not(:disabled):active {
+  background: var(--fluent-accent-pressed);
+  border-color: var(--fluent-accent-pressed);
+}
+body.release-v1 input[type="checkbox"]:not([role="switch"]):disabled {
+  opacity: .4;
+  cursor: default;
+}
+
+/* Original EA App, Mean Girls and Veiga palettes remain untouched; improve
+   the glyph/label contrast on bright brand accents. */
+html[data-theme-choice="veiga-light"] body.release-v1 .primary-btn,
+html[data-theme-choice="veiga-dark"] body.release-v1 .primary-btn,
+html[data-theme-choice="mean-girls"] body.release-v1 .primary-btn,
+html[data-theme-choice="ea-app"] body.release-v1 .primary-btn {
+  color: var(--fluent-accent-foreground);
+}
+
+/* Mean Girls x EA App: the campaign's 'Get Kit' primary action is
+ * black with white type. Keep pink as the accent for selection, progress,
+ * checkboxes and navigation; the standard EA App remains blue/white. */
+html[data-theme-choice="mean-girls"] body.release-v1 .primary-btn {
+  background: #101010;
+  color: #ffffff;
+  border-color: #101010;
+  border-bottom-color: #000000;
+}
+html[data-theme-choice="mean-girls"] body.release-v1 .primary-btn:hover:not(:disabled) {
+  background: #292929;
+  color: #ffffff;
+}
+html[data-theme-choice="mean-girls"] body.release-v1 .primary-btn:active:not(:disabled) {
+  background: #050505;
+  color: #ffffff;
+}
+
+
+@media (prefers-reduced-motion: reduce) {
+  body.release-v1 :is(button, input, select) {
+    transition: none;
+  }
+}
+@media (forced-colors: active) {
+  body.release-v1 input[type="checkbox"]:not([role="switch"]) {
+    forced-color-adjust: none;
+    background: Canvas;
+    border-color: ButtonText;
+  }
+  body.release-v1 input[type="checkbox"]:not([role="switch"]):checked {
+    background: Highlight;
+    border-color: Highlight;
+  }
+  body.release-v1 input[type="checkbox"]:not([role="switch"]):checked::after {
+    background: HighlightText;
+  }
+  body.release-v1 :is(button, input, select, a, summary):focus-visible {
+    outline-color: Highlight;
+  }
+}
