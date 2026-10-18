@@ -1,3 +1,4 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 /* WinUI 3 keyboard affordances. No native processing changes. */
 const focusAt = (elements,index) => {
   const element=elements[(index+elements.length)%elements.length];
@@ -41,3 +42,31 @@ document.addEventListener("keydown",(event)=>{
     if(next!==null&&options.length){event.preventDefault();focusAt(options,next);}
   }
 });
+
+const legacyWindow = getCurrentWindow();
+const minimizeControl = document.getElementById("titlebar-minimize");
+const maximizeControl = document.getElementById("titlebar-maximize");
+const closeControl = document.getElementById("titlebar-close");
+const updateCaption = async () => {
+  if (!maximizeControl) return;
+  try {
+    const isMax = await legacyWindow.isMaximized();
+    const maxGlyph = maximizeControl.querySelector(".winui-maximize-glyph");
+    const restoreGlyph = maximizeControl.querySelector(".winui-restore-glyph");
+    if (maxGlyph) maxGlyph.hidden = isMax;
+    if (restoreGlyph) restoreGlyph.hidden = !isMax;
+    maximizeControl.title = isMax ? "Restore" : "Maximize";
+    maximizeControl.setAttribute("aria-label", maximizeControl.title);
+  } catch (error) { console.warn("Cannot check maximized state", error); }
+};
+minimizeControl?.addEventListener("click", () => legacyWindow.minimize().catch(console.error));
+maximizeControl?.addEventListener("click", async () => {
+  try {
+    if (await legacyWindow.isMaximized()) await legacyWindow.unmaximize();
+    else await legacyWindow.maximize();
+    await updateCaption();
+  } catch (error) { console.error(error); }
+});
+closeControl?.addEventListener("click", () => legacyWindow.close().catch(console.error));
+void legacyWindow.onResized(updateCaption);
+void updateCaption();
