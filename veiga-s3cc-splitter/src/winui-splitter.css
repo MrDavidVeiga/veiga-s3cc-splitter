@@ -377,31 +377,6 @@ html[data-theme-choice] body.release-v1 #preview-thumb.reveal-source:active {
   html[data-theme-choice] body.release-v1 #preview-thumb.reveal-source:focus-visible {outline-color:Highlight;}
 }
 
-/* Packer-compatible icon + localized label in theme button. */
-html[data-theme-choice] body.release-v1 .topbar .theme-control {
-  position:relative;
-  z-index:2;
-}
-html[data-theme-choice] body.release-v1 .topbar .theme-button {
-  width:auto;
-  min-width:32px;
-  height:32px;
-  padding:0 9px;
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  gap:7px;
-}
-html[data-theme-choice] body.release-v1 .topbar #theme-button-label {
-  color:var(--winui-text-primary);
-  font:600 12px/18px "Segoe UI Variable Text","Segoe UI",sans-serif;
-  white-space:nowrap;
-}
-@media(max-width:620px) {
-  html[data-theme-choice] body.release-v1 .topbar #theme-button-label {display:none;}
-  html[data-theme-choice] body.release-v1 .topbar .theme-button {width:32px;padding:0;}
-}
-
 /* Mean Girls parity: use Packer's black primary action, not the pink generic
    Fluent accent action. Pink remains for selected states and progress. */
 html[data-theme-choice="mean-girls"] body.release-v1 .primary-btn {
@@ -441,3 +416,66 @@ body .topbar #lang-dropdown #lang-current-code { font-size:12px; line-height:18p
 body .topbar #lang-dropdown #lang-menu { box-sizing:border-box; left:0; right:auto; width:100%; min-width:100%; max-width:100%; }
 body .topbar #lang-dropdown #lang-menu > .lang-menu-item { box-sizing:border-box; width:100%; padding:7px 8px; font:400 12px/18px "Segoe UI Variable Text","Segoe UI",sans-serif; white-space:nowrap; }
 body .topbar #lang-dropdown #lang-menu > .lang-menu-item.hidden { display:none !important; }
+
+/* Restore Manager theme menu appearance without hiding the translated Tema label. */
+html[data-theme-choice] body.release-v1 .topbar .theme-button {
+  width:auto; min-width:32px; height:32px; padding:0 9px;
+  display:inline-flex; align-items:center; justify-content:center; gap:7px;
+  color:var(--winui-text-primary);
+}
+html[data-theme-choice] body.release-v1 .topbar #theme-button-label {
+  display:inline; color:var(--winui-text-primary);
+  font:600 12px/18px "Segoe UI Variable Text","Segoe UI",sans-serif;
+  white-space:nowrap;
+}
+html[data-theme-choice] body.release-v1 .theme-button svg {
+  width:16px; height:16px; fill:currentColor; flex-shrink:0;
+}
+html[data-theme-choice] body.release-v1 .theme-flyout {
+  right:0; width:250px; padding:6px;
+}
+html[data-theme-choice] body.release-v1 .theme-option {
+  min-height:36px; padding:5px 8px; display:grid;
+  grid-template-columns:16px minmax(0,1fr) 14px; gap:8px; align-items:center;
+  color:var(--winui-text-primary);
+}
+html[data-theme-choice] body.release-v1 .theme-option-copy strong {
+  font-size:13px; line-height:18px; font-weight:600;
+}
+html[data-theme-choice] body.release-v1 .theme-swatch {
+  width:12px; height:12px; border-radius:50%;
+  box-shadow:0 0 0 1px var(--winui-control-stroke-strong);
+}
+html[data-theme-choice] body.release-v1 .veiga-swatch {background:#7fad2d;}
+html[data-theme-choice] body.release-v1 .mean-girls-swatch {
+  background:linear-gradient(90deg,#5F1B3F 0 48%,#F92F60 48% 100%);
+}
+html[data-theme-choice] body.release-v1 .ea-app-swatch {
+  background:linear-gradient(90deg,#181B2A 0 58%,#FF4747 58% 100%);
+}
+html[data-theme-choice="ea-app"] {
+  --winui-mica-base:#181B2A; --winui-layer-fill:#1D2030;
+  --winui-card-fill:#232738; --winui-card-fill-alt:#202434;
+  --winui-control-fill:#2A2E3F; --winui-control-fill-hover:#343647;
+  --winui-control-fill-pressed:#3D4052;
+  --winui-text-primary:#F8F8FA; --winui-text-secondary:#A0A2AE;
+  --winui-popup:#232738;
+}
+html[data-theme-choice="ea-app"] body.release-v1,
+html[data-theme-choice="ea-app"] body.release-v1 .app-shell { background:#181B2A; }
+html[data-theme-choice="ea-app"] body.release-v1 .winui-titlebar {
+  background:#000000; color:#FFFFFF; border-bottom:1px solid rgba(255,255,255,.08);
+}
+html[data-theme-choice="ea-app"] body.release-v1 .topbar.winui-navview {
+  background:#181B2A; border-bottom-color:rgba(255,255,255,.08);
+}
+html[data-theme-choice="ea-app"] body.release-v1 .left-panel {
+  background:#181B2A; border-right:1px solid rgba(255,255,255,.06);
+}
+html[data-theme-choice="ea-app"] body.release-v1 .right-panel {
+  background:#1D2030; border-color:rgba(255,255,255,.08);
+}
+html[data-theme-choice="ea-app"] body.release-v1 .mode-btn.active {
+  color:#FFFFFF; background:#343647;
+}
+html[data-theme-choice="ea-app"] body.release-v1 .mode-btn.active::after {background:#FFFFFF;}
