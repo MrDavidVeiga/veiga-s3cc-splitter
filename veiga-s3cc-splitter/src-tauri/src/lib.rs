@@ -2,6 +2,7 @@ mod commands;
 mod merge_manifest;
 mod system_appearance;
 
+#[cfg(not(test))]
 use tauri::Manager;
 
 #[cfg(all(target_os = "windows", not(test)))]
@@ -15,6 +16,7 @@ fn set_windows_app_identity() {
     }
 }
 
+#[cfg(not(test))]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(all(target_os = "windows", not(test)))]
