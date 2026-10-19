@@ -1,11 +1,12 @@
-S3CC Splitter v2.4.0
+S3CC Splitter v2.2.0
 
-What's new in v2.4.0
+What's new in v2.2.0
 
 - Splitter and Merger modes are available in the same application.
 - Results can be filtered and searched, with zero preselection, multiple selection, Shift + click, and Select All / Select None limited to the visible result set.
   - Shift + click range selection was suggested by Jacinda, who also reported a large Select All/export crash while working with hundreds of detected items.
 - Preview, themed dialogs, and the responsive EN/PT/ES interface are integrated into the current workflow.
+- The WinUI 3 theme selector shows the localized “Tema” label beside its icon; theme indicators and the EA App blue accent (#276AFC) match Veiga’s S3CC Manager.
 - Merger writes a Veiga Merge Manifest so supported merges can preserve original package names, CASP/OBJD anchors, and the resource ownership needed for reversible operations.
   - Improved original-name recovery was suggested through feedback from greatdaysimmer, based on cases where merged/unmerged CC could lose its original package naming.
 - Unmerge can rebuild the original packages from a valid Veiga Merge Manifest.
