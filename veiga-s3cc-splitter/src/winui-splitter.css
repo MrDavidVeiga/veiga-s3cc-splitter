@@ -377,23 +377,29 @@ html[data-theme-choice] body.release-v1 #preview-thumb.reveal-source:active {
   html[data-theme-choice] body.release-v1 #preview-thumb.reveal-source:focus-visible {outline-color:Highlight;}
 }
 
-/* Match the Manager's compact 32px, icon-only theme selector.
-   The translated theme name stays in the button's accessible label/title. */
+/* Packer-compatible icon + localized label in theme button. */
 html[data-theme-choice] body.release-v1 .topbar .theme-control {
   position:relative;
   z-index:2;
 }
 html[data-theme-choice] body.release-v1 .topbar .theme-button {
-  width:32px;
+  width:auto;
   min-width:32px;
   height:32px;
-  padding:0;
-  display:grid;
-  place-items:center;
-  gap:0;
+  padding:0 9px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:7px;
 }
 html[data-theme-choice] body.release-v1 .topbar #theme-button-label {
-  display:none;
+  color:var(--winui-text-primary);
+  font:600 12px/18px "Segoe UI Variable Text","Segoe UI",sans-serif;
+  white-space:nowrap;
+}
+@media(max-width:620px) {
+  html[data-theme-choice] body.release-v1 .topbar #theme-button-label {display:none;}
+  html[data-theme-choice] body.release-v1 .topbar .theme-button {width:32px;padding:0;}
 }
 
 /* Mean Girls parity: use Packer's black primary action, not the pink generic
