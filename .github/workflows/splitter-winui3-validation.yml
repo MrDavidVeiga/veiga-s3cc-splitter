@@ -1,5 +1,5 @@
 name: Splitter WinUI 3 validation
-# Final theme parity pass: icon-only selector and exact EA App red/white palette.
+# Final theme and localization pass: icon-only selector, EA App red/white palette, and regression-tested translations.
 
 on:
   push:
