@@ -1,0 +1,60 @@
+name: Splitter version validation
+
+on:
+  push:
+    branches:
+      - "ui/winui3-manager-themes-v2.0.0"
+      - "ui/winui3-manager-themes-v2.1.0"
+    paths:
+      - ".github/workflows/splitter-version-validation.yml"
+      - "veiga-s3cc-splitter/**"
+      - "sims3-core/**"
+      - "sims3-pack/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend tests and production build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: veiga-s3cc-splitter/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: veiga-s3cc-splitter
+        run: npm ci
+      - name: Check JavaScript syntax
+        working-directory: veiga-s3cc-splitter
+        run: |
+          node --check src/app.js
+          node --check src/winui-theme.js
+      - name: Run regression tests
+        working-directory: veiga-s3cc-splitter
+        run: node --test
+      - name: Build frontend
+        working-directory: veiga-s3cc-splitter
+        run: npm run build
+
+  rust:
+    name: Rust workspace checks
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check workspace
+        run: cargo check --workspace
+      - name: Run workspace tests
+        run: cargo test --workspace
