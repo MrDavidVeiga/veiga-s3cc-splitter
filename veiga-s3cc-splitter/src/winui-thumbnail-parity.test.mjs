@@ -16,7 +16,11 @@ test("WinUI thumbnail cards preserve Fluent theme backgrounds and borders",()=>{
   assert.match(tokens,/--fluent-accent-foreground/);
 });
 test("Thumbnail parity overrides use live theme attributes, never hardcoded green",()=>{
-  const parity=css.slice(css.lastIndexOf("/* Manager"));
+  const marker="/* Manager/WinUI parity: thumbnail cards and semantic selection (no green constants).";
+  const start=css.indexOf(marker);
+  assert.ok(start>=0,"thumbnail parity marker must exist");
+  const end=css.indexOf("/* v2.4 Pose List:",start);
+  const parity=css.slice(start,end<0?undefined:end);
   assert.ok(parity.includes("html[data-theme-choice]"));
   assert.doesNotMatch(parity, /#(?:9acd3f|7fad2d|618422|435c17)|rgba?\(\s*(?:96\s*,\s*132\s*,\s*34|122\s*,\s*166\s*,\s*43)/i);
 });
