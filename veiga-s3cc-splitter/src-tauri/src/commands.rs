@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use memmap::Mmap;
@@ -5477,6 +5477,8 @@ pub fn restore_manifest_packages(
 }
 
 fn write_removed_package(
+    app: Option<&AppHandle>,
+    started: Instant,
     package: &DBPF<'_>,
     source_package: &WritablePackage,
     source_file: &mut File,
@@ -5509,6 +5511,19 @@ fn write_removed_package(
     let updated_manifest = read_merge_manifest_from_writable(source_package)?
         .map(|manifest| manifest.update_after_removal(selected_keys, resources_to_remove));
 
+    // Keep memory bounded even if a single resource occupies hundreds of MiB.
+    // Only resources retained in the rebuilt package need to be copied.
+    let total_bytes = source_package.entries.iter()
+        .filter(|entry| {
+            entry.type_id != TYPE_KEY
+                && !is_manifest_tgi(entry.type_id, entry.group, entry.instance)
+                && !resources_to_remove.contains(&key_string_from_writable(entry))
+        })
+        .fold(0u64, |total, entry| total.saturating_add(entry.file_size as u64));
+    let mut copied_bytes = 0u64;
+    let mut last_progress = Instant::now();
+    let mut copy_buffer = vec![0u8; 4 * 1024 * 1024];
+
     for entry in &source_package.entries {
         let key = key_string_from_writable(entry);
         if entry.type_id == TYPE_KEY
@@ -5518,9 +5533,32 @@ fn write_removed_package(
             continue;
         }
 
-        let raw = read_raw_writable_entry(source_file, entry)?;
         let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
-        out_f.write_all(&raw).map_err(|e| e.to_string())?;
+        source_file
+            .seek(SeekFrom::Start(entry.chunk_offset as u64))
+            .map_err(|e| e.to_string())?;
+        let mut remaining = entry.file_size as u64;
+        while remaining > 0 {
+            let chunk_size = copy_buffer.len().min(remaining as usize);
+            source_file.read_exact(&mut copy_buffer[..chunk_size]).map_err(|e| e.to_string())?;
+            out_f.write_all(&copy_buffer[..chunk_size]).map_err(|e| e.to_string())?;
+            remaining -= chunk_size as u64;
+            copied_bytes += chunk_size as u64;
+
+            if last_progress.elapsed() >= Duration::from_millis(400) {
+                let percent = 25 + (copied_bytes.saturating_mul(40) / total_bytes.max(1)) as u32;
+                let message = format!(
+                    "Gravando recursos preservados: {} de {} MiB.",
+                    copied_bytes / (1024 * 1024),
+                    total_bytes / (1024 * 1024)
+                );
+                emit_package_progress(
+                    app, started, "Reconstruindo merged", &message,
+                    percent.min(65), 100, out_pkg.entries.len(), 0,
+                );
+                last_progress = Instant::now();
+            }
+        }
         out_pkg.entries.push(WritableEntry {
             type_id: entry.type_id,
             group: entry.group,
@@ -6351,8 +6389,10 @@ fn build_merge_manifest_items(
 }
 
 #[tauri::command]
-pub fn scan_package_resources(app: AppHandle, payload: ScanPayload) -> Result<ScanResult, String> {
-    scan_package_resources_inner(Some(&app), payload)
+pub async fn scan_package_resources(app: AppHandle, payload: ScanPayload) -> Result<ScanResult, String> {
+    tauri::async_runtime::spawn_blocking(move || scan_package_resources_inner(Some(&app), payload))
+        .await
+        .map_err(|error| format!("Falha ao executar a leitura do package: {error}"))?
 }
 
 fn scan_package_resources_inner(
@@ -6528,13 +6568,29 @@ pub fn analyze_remove_selection(
 }
 
 #[tauri::command]
-pub fn remove_selected_from_merged(
+pub async fn remove_selected_from_merged(
+    app: AppHandle,
+    payload: RemoveSelectionApplyPayload,
+) -> Result<RemoveSelectionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || remove_selected_from_merged_inner(Some(&app), payload))
+        .await
+        .map_err(|error| format!("Falha interna ao remover do merged: {error}"))?
+}
+
+fn remove_selected_from_merged_inner(
+    app: Option<&AppHandle>,
     payload: RemoveSelectionApplyPayload,
 ) -> Result<RemoveSelectionResult, String> {
     if payload.destination_folder.trim().is_empty() {
         return Err("Escolha uma pasta de destino.".to_string());
     }
     validate_package_extension(&payload.package_path)?;
+
+    let started = Instant::now();
+    let progress = |stage: &str, message: &str, percent: u32| {
+        emit_package_progress(app, started, stage, message, percent, 100, 0, 0);
+    };
+    progress("Analisando merged", "Preparando o arquivo e verificando os recursos.", 2);
 
     let source_path = PathBuf::from(&payload.package_path);
     let destination = PathBuf::from(&payload.destination_folder);
@@ -6578,6 +6634,7 @@ pub fn remove_selected_from_merged(
     let (_selected_resources, shared_preserved, resources_to_remove) =
         removal_plan_sets(&package, &payload.selected_keys, &name_map)?;
 
+    progress("Preparando remoção", "Preservando dependências e recursos compartilhados.", 18);
     let source_package = WritablePackage::load(&payload.package_path).map_err(|e| e.to_string())?;
     let mut source_file = File::open(&payload.package_path).map_err(|e| e.to_string())?;
 
@@ -6591,15 +6648,22 @@ pub fn remove_selected_from_merged(
         extension
     ));
 
-    write_removed_package(
+    progress("Reconstruindo merged", "Gravando os recursos preservados em blocos de 4 MiB.", 25);
+    if let Err(error) = write_removed_package(
+        app,
+        started,
         &package,
         &source_package,
         &mut source_file,
         &payload.selected_keys,
         &resources_to_remove,
         &temp_path,
-    )?;
+    ) {
+        let _ = remove_file(&temp_path);
+        return Err(error);
+    }
 
+    progress("Validando merged", "Conferindo os recursos e o manifesto reconstruídos.", 66);
     if let Err(error) = validate_removed_package(
         &source_package,
         &temp_path,
@@ -6610,6 +6674,7 @@ pub fn remove_selected_from_merged(
         return Err(error);
     }
 
+    progress("Criando backup", "Copiando o merged original antes de substituí-lo.", 75);
     let backup_dir = unique_backup_directory(&destination, stem);
     create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
     let backup_path = backup_dir.join(file_name);
@@ -6618,6 +6683,7 @@ pub fn remove_selected_from_merged(
         format!("Não foi possível criar o backup do original: {e}")
     })?;
 
+    progress("Verificando backup", "Comparando a cópia com o arquivo original.", 88);
     match files_are_identical(&source_path, &backup_path) {
         Ok(true) => {}
         Ok(false) => {
@@ -6646,6 +6712,18 @@ pub fn remove_selected_from_merged(
     drop(package);
     drop(mmap);
 
+    // A preview can retain its own memory map after the command's map is
+    // dropped. Release it before renaming the original file on Windows.
+    if output_is_source {
+        let mut cache = preview_cache()
+            .lock()
+            .map_err(|_| "Não foi possível liberar o cache de preview antes de substituir o merged.".to_string())?;
+        if cache.as_ref().map(|entry| entry.path == source_canonical).unwrap_or(false) {
+            *cache = None;
+        }
+    }
+
+    progress("Finalizando remoção", "Substituindo o merged e preservando o backup validado.", 96);
     if output_is_source {
         if let Err(error) = replace_source_with_rollback(&source_path, &temp_path, &output_path) {
             let _ = remove_file(&temp_path);
@@ -6658,6 +6736,7 @@ pub fn remove_selected_from_merged(
         })?;
     }
 
+    progress("Remoção concluída", "Merged atualizado com sucesso.", 100);
     Ok(RemoveSelectionResult {
         output_path: output_path.display().to_string(),
         backup_path: backup_path.display().to_string(),
@@ -7276,6 +7355,47 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn removal_releases_preview_cache_and_preserves_verified_backup() {
+        let root = test_dir("remove-with-preview-cache");
+        let merged = root.join("Merged.package");
+        let removed_instance = 0x1000_0000_0000_0001u64;
+        let retained_instance = 0x1000_0000_0000_0002u64;
+        write_test_package(
+            &merged,
+            &[
+                (TYPE_IMG, 0, removed_instance, vec![1, 2, 3, 4]),
+                (TYPE_IMG, 0, retained_instance, vec![5, 6, 7, 8]),
+            ],
+        );
+        let before = std::fs::read(&merged).unwrap();
+        let canonical = merged.canonicalize().unwrap();
+        {
+            let mut cache = preview_cache().lock().unwrap();
+            *cache = Some(build_preview_cache(&canonical).unwrap());
+        }
+
+        let result = remove_selected_from_merged_inner(
+            None,
+            RemoveSelectionApplyPayload {
+                package_path: merged.display().to_string(),
+                destination_folder: root.display().to_string(),
+                selected_keys: vec![test_resource_key(TYPE_IMG, 0, removed_instance)],
+            },
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read(&result.backup_path).unwrap(), before);
+        assert_eq!(result.removed_resources, 1);
+        let rebuilt = WritablePackage::load(&merged).unwrap();
+        assert_eq!(rebuilt.entries.len(), 1);
+        assert_eq!(rebuilt.entries[0].instance, retained_instance);
+        assert!(!preview_cache().lock().unwrap().as_ref()
+            .map(|entry| entry.path == canonical).unwrap_or(false));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn scan_only_marks_valid_veiga_merge_manifest_as_reversible() {
         let root = test_dir("manifest-detection");
         let valid = root.join("Valid.package");
@@ -7403,7 +7523,7 @@ mod remove_selected_tests {
 
         let external_dir = root.join("external-output");
         std::fs::create_dir_all(&external_dir).unwrap();
-        let external_result = remove_selected_from_merged(RemoveSelectionApplyPayload {
+        let external_result = remove_selected_from_merged_inner(None, RemoveSelectionApplyPayload {
             package_path: other_tool.display().to_string(),
             destination_folder: external_dir.display().to_string(),
             selected_keys: vec![casp_key.clone()],

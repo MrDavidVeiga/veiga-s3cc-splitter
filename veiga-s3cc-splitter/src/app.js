@@ -1462,6 +1462,9 @@ async function removeSelectionFromMerged() {
       state.isContentFilterOpen = false;
       state.selectionAnchorKey = null;
       state.preview = null;
+      // The successful removal owns the busy state; release it so the scan
+      // does not return early with an empty resource list.
+      clearBusy();
       await scanPackage();
     }
   } catch (error) {
