@@ -100,7 +100,7 @@ struct PackageRelationUpdate {
 }
 
 fn emit_package_progress(
-    app: &AppHandle,
+    app: Option<&AppHandle>,
     started: Instant,
     stage: &str,
     message: &str,
@@ -123,7 +123,9 @@ fn emit_package_progress(
         "[package-progress] stage={} percent={} resources={} mapped_bytes={} elapsed_ms={}",
         event.stage, event.percent, event.resource_count, event.mapped_bytes, event.elapsed_ms
     );
-    let _ = app.emit("package-progress", event);
+    if let Some(app) = app {
+        let _ = app.emit("package-progress", event);
+    }
 }
 
 fn check_cancelled() -> Result<(), String> {
@@ -6350,6 +6352,13 @@ fn build_merge_manifest_items(
 
 #[tauri::command]
 pub fn scan_package_resources(app: AppHandle, payload: ScanPayload) -> Result<ScanResult, String> {
+    scan_package_resources_inner(Some(&app), payload)
+}
+
+fn scan_package_resources_inner(
+    app: Option<&AppHandle>,
+    payload: ScanPayload,
+) -> Result<ScanResult, String> {
     let package_path = payload.package_path.trim();
     if package_path.is_empty() {
         return Err("Nenhum package foi selecionado.".to_string());
@@ -6366,7 +6375,7 @@ pub fn scan_package_resources(app: AppHandle, payload: ScanPayload) -> Result<Sc
     CANCEL_REQUESTED.store(false, Ordering::Release);
     let started = Instant::now();
     emit_package_progress(
-        &app, started, "Opening package",
+        app, started, "Opening package",
         "Mapping package data without copying all resource payloads.", 0, 5, 0, 0,
     );
 
@@ -6376,7 +6385,7 @@ pub fn scan_package_resources(app: AppHandle, payload: ScanPayload) -> Result<Sc
         let package = parse_package(&mmap)?;
         check_cancelled()?;
         emit_package_progress(
-            &app, started, "Reading names",
+            app, started, "Reading names",
             "Reading package metadata and resource names.", 1, 5, package.files.len(), mmap.len(),
         );
         let query = payload.search.unwrap_or_default().to_lowercase();
@@ -6389,7 +6398,7 @@ pub fn scan_package_resources(app: AppHandle, payload: ScanPayload) -> Result<Sc
             .unwrap_or(0);
 
         emit_package_progress(
-            &app, started, "Building resource list",
+            app, started, "Building resource list",
             "Building and sorting resource metadata.", 2, 5, package.files.len(), mmap.len(),
         );
         check_cancelled()?;
@@ -6444,22 +6453,20 @@ pub fn scan_package_resources(app: AppHandle, payload: ScanPayload) -> Result<Sc
 
         check_cancelled()?;
         emit_package_progress(
-            &app, started, "Preparing relationship metadata",
+            app, started, "Preparing relationship metadata",
             "Keeping large-package loading responsive.", 3, 5, package.files.len(), mmap.len(),
         );
         let relations = if mmap.len() <= MAX_RELATION_ANALYSIS_PACKAGE_BYTES {
             let relations = build_resource_relations(&package, &name_map, &items);
             check_cancelled()?;
             relations
-        } else {
-            // Relationship detection hashes/decompresses payloads. Let the
-            // resource list return first for huge packages, then restore the
-            // newest UI's duplicate/conflict badges from a background pass.
+        } else if let Some(relation_app) = app.cloned() {
+            // Relationship detection hashes/decompresses payloads. For large
+            // packages, compute optional UI badges after returning the list.
             eprintln!(
                 "[package-scan] deferring relationship analysis: package={} bytes limit={} bytes",
                 mmap.len(), MAX_RELATION_ANALYSIS_PACKAGE_BYTES
             );
-            let relation_app = app.clone();
             let relation_path = package_path.to_string();
             let relation_name_map = name_map.clone();
             let relation_items = items.clone();
@@ -6490,10 +6497,14 @@ pub fn scan_package_resources(app: AppHandle, payload: ScanPayload) -> Result<Sc
                 }
             });
             BTreeMap::new()
-        };
+        } else {
+            // Unit tests do not own a Tauri AppHandle; calculate this result
+            // synchronously so they still cover relation-analysis behavior.
+            build_resource_relations(&package, &name_map, &items)
+        };;
         check_cancelled()?;
         emit_package_progress(
-            &app, started, "Ready", "Resource list ready.", 5, 5, package.files.len(), mmap.len(),
+            app, started, "Ready", "Resource list ready.", 5, 5, package.files.len(), mmap.len(),
         );
 
         Ok(ScanResult {
@@ -7157,7 +7168,7 @@ mod remove_selected_tests {
             ],
         );
 
-        let scan = scan_package_resources(ScanPayload {
+        let scan = scan_package_resources_inner(None, ScanPayload {
             package_path: path.display().to_string(),
             resource_type: "casp".to_string(),
             search: None,
@@ -7190,7 +7201,7 @@ mod remove_selected_tests {
             ],
         );
 
-        let scan = scan_package_resources(ScanPayload {
+        let scan = scan_package_resources_inner(None, ScanPayload {
             package_path: path.display().to_string(),
             resource_type: "casp".to_string(),
             search: None,
@@ -7217,7 +7228,7 @@ mod remove_selected_tests {
             ],
         );
 
-        let scan = scan_package_resources(ScanPayload {
+        let scan = scan_package_resources_inner(None, ScanPayload {
             package_path: path.display().to_string(),
             resource_type: "casp".to_string(),
             search: None,
@@ -7248,7 +7259,7 @@ mod remove_selected_tests {
             ],
         );
 
-        let scan = scan_package_resources(ScanPayload {
+        let scan = scan_package_resources_inner(None, ScanPayload {
             package_path: path.display().to_string(),
             resource_type: "casp".to_string(),
             search: None,
@@ -7362,7 +7373,7 @@ mod remove_selected_tests {
             (&old, 1usize),
             (&corrupt, 0usize),
         ] {
-            let scan = scan_package_resources(ScanPayload {
+            let scan = scan_package_resources_inner(None, ScanPayload {
                 package_path: path.display().to_string(),
                 resource_type: "all".to_string(),
                 search: None,
@@ -7463,7 +7474,7 @@ mod remove_selected_tests {
         assert_eq!(manifest.packages[0].anchors[0].kind, "CASP");
         assert_eq!(manifest.packages[1].anchors[0].kind, "OBJD");
 
-        let scan = scan_package_resources(ScanPayload {
+        let scan = scan_package_resources_inner(None, ScanPayload {
             package_path: result.output_path.clone(),
             resource_type: "all".to_string(),
             search: None,
@@ -7841,7 +7852,7 @@ mod remove_selected_tests {
             ],
         );
 
-        let scan = scan_package_resources(ScanPayload {
+        let scan = scan_package_resources_inner(None, ScanPayload {
             package_path: path.display().to_string(),
             resource_type: "all".to_string(),
             search: None,
