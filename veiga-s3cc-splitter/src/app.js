@@ -1,5 +1,6 @@
 import "@fortawesome/fontawesome-free/css/all.min.css";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -134,6 +135,7 @@ const translations = {
     busyDefaultMessage: "Please wait.",
     busyReadTitle: "Reading package...",
     busyReadMessage: "Building the resource list from the file.",
+    cancelOperation: "Cancel operation",
     busyExportTitle: "Exporting...",
     busyExportMessage: "Saving resources to folder.",
     modalInfoTitle: "Information",
@@ -275,6 +277,7 @@ const translations = {
     busyDefaultMessage: "Aguarde.",
     busyReadTitle: "Lendo package...",
     busyReadMessage: "Montando a lista de recursos do arquivo.",
+    cancelOperation: "Cancelar operação",
     busyExportTitle: "Exportando...",
     busyExportMessage: "Gravando recursos em pasta.",
     modalInfoTitle: "Informação",
@@ -416,6 +419,7 @@ const translations = {
     busyDefaultMessage: "Espera un momento.",
     busyReadTitle: "Leyendo package...",
     busyReadMessage: "Armando la lista de recursos del archivo.",
+    cancelOperation: "Cancelar operación",
     busyExportTitle: "Exportando...",
     busyExportMessage: "Guardando recursos en la carpeta.",
     modalInfoTitle: "Información",
@@ -460,7 +464,9 @@ const state = {
   isBusy: false,
   busyTitle: "",
   busyMessage: "",
-  progress: 30,
+  progress: 0,
+  operationCancellable: false,
+  operationCancelRequested: false,
   language: "en",
   isLangMenuOpen: false,
   isContentFilterOpen: false,
@@ -527,6 +533,7 @@ const el = {
   busyTitle: document.querySelector("#busy-title"),
   busyMessage: document.querySelector("#busy-message"),
   progressBar: document.querySelector("#progress-bar"),
+  cancelOperationBtn: document.querySelector("#cancel-operation-btn"),
   resourceList: document.querySelector("#resource-list"),
   previewThumb: document.querySelector("#preview-thumb"),
   previewEmpty: document.querySelector("#preview-empty"),
@@ -665,6 +672,9 @@ function setBusy(title, message) {
   state.isBusy = true;
   state.busyTitle = title;
   state.busyMessage = message;
+  state.progress = 0;
+  state.operationCancellable = false;
+  state.operationCancelRequested = false;
   render();
 }
 
@@ -672,7 +682,25 @@ function clearBusy() {
   state.isBusy = false;
   state.busyTitle = "";
   state.busyMessage = "";
+  state.progress = 0;
+  state.operationCancellable = false;
+  state.operationCancelRequested = false;
   render();
+}
+
+async function cancelCurrentOperation() {
+  if (!state.isBusy || !state.operationCancellable || state.operationCancelRequested) return;
+  state.operationCancelRequested = true;
+  if (el.cancelOperationBtn) {
+    el.cancelOperationBtn.disabled = true;
+    el.cancelOperationBtn.textContent = t("cancelOperation");
+  }
+  render();
+  try {
+    await invoke("cancel_package_operation");
+  } catch (error) {
+    console.error("Could not request package cancellation:", error);
+  }
 }
 
 function getDisplayType(item) {
@@ -896,6 +924,11 @@ function render() {
   el.busyTitle.textContent = state.busyTitle || t("busyDefaultTitle");
   el.busyMessage.textContent = state.busyMessage || t("busyDefaultMessage");
   el.progressBar.style.width = `${state.progress}%`;
+  if (el.cancelOperationBtn) {
+    el.cancelOperationBtn.classList.toggle("hidden", !state.isBusy || !state.operationCancellable);
+    el.cancelOperationBtn.disabled = state.operationCancelRequested;
+    el.cancelOperationBtn.textContent = t("cancelOperation");
+  }
 
   el.emptyState.classList.toggle("hidden", state.packagePath || state.isBusy || state.resources.length > 0);
   el.busyState.classList.toggle("hidden", !state.isBusy);
@@ -1128,6 +1161,9 @@ async function scanPackage() {
   if (state.isBusy || !isScannablePackagePath(state.packagePath)) return;
 
   setBusy(t("busyReadTitle"), t("busyReadMessage"));
+  state.operationCancellable = true;
+  state.operationCancelRequested = false;
+  render();
 
   try {
     const result = await invoke("scan_package_resources", {
@@ -1578,6 +1614,7 @@ function setupEvents() {
   }
 
   el.clearBtn.addEventListener("click", clearAll);
+  el.cancelOperationBtn?.addEventListener("click", cancelCurrentOperation);
 
   el.selectAllBtn.addEventListener("click", () => {
     state.selectedKeys = selectVisibleItems(getVisibleResources(), state.selectedKeys, "all");
@@ -1653,3 +1690,21 @@ function setupEvents() {
 
 setupEvents();
 setLanguage(getSystemLanguage());
+
+
+async function setupProgressEvents() {
+  try {
+    await listen("package-progress", (event) => {
+      const payload = event.payload || {};
+      if (!state.isBusy) return;
+      state.progress = Math.max(0, Math.min(100, Number(payload.percent) || 0));
+      state.busyTitle = payload.stage || state.busyTitle;
+      state.busyMessage = payload.message || state.busyMessage;
+      render();
+    });
+  } catch (error) {
+    console.error("Could not attach package progress listener:", error);
+  }
+}
+
+void setupProgressEvents();
