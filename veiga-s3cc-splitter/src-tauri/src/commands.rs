@@ -4,6 +4,9 @@ use std::fs::{copy, create_dir_all, remove_file, rename, File, OpenOptions};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Instant, SystemTime};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use memmap::Mmap;
@@ -13,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use sims3_core::dbpf::filetypes::{resource_is_png, ResourceType};
 use sims3_core::dbpf::{DBPFEntry, DBPF};
 use sims3_pack::dbpf::{Package as WritablePackage, ResourceEntry as WritableEntry};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use zip::write::FileOptions;
 
 use crate::merge_manifest::{
@@ -58,6 +61,77 @@ const TYPE_RIG: u32 = 0x8EAF13DE;
 const TYPE_ICON: u32 = 0x2E75C765;
 const TYPE_CLIP: u32 = 0x6B20C4F3;
 const TYPE_S3SA: u32 = 0x073FAA07;
+
+// Optional relation badges must not delay loading a very large package.
+const MAX_RELATION_ANALYSIS_PACKAGE_BYTES: usize = 256 * 1024 * 1024;
+
+static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
+static PREVIEW_CACHE: OnceLock<Mutex<Option<PreviewCacheEntry>>> = OnceLock::new();
+
+struct PreviewCacheEntry {
+    // The DBPF borrows the memory map; declaration order keeps the DBPF
+    // view alive only while its backing map remains alive.
+    package: DBPF<'static>,
+    mmap: Arc<Mmap>,
+    path: PathBuf,
+    file_len: u64,
+    modified: Option<SystemTime>,
+    name_map: BTreeMap<u64, String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PackageProgress {
+    stage: String,
+    message: String,
+    completed_stages: u32,
+    total_stages: u32,
+    percent: u32,
+    elapsed_ms: u128,
+    resource_count: usize,
+    mapped_bytes: usize,
+}
+
+fn emit_package_progress(
+    app: &AppHandle,
+    started: Instant,
+    stage: &str,
+    message: &str,
+    completed_stages: u32,
+    total_stages: u32,
+    resource_count: usize,
+    mapped_bytes: usize,
+) {
+    let event = PackageProgress {
+        stage: stage.to_string(),
+        message: message.to_string(),
+        completed_stages,
+        total_stages,
+        percent: completed_stages.saturating_mul(100) / total_stages.max(1),
+        elapsed_ms: started.elapsed().as_millis(),
+        resource_count,
+        mapped_bytes,
+    };
+    eprintln!(
+        "[package-progress] stage={} percent={} resources={} mapped_bytes={} elapsed_ms={}",
+        event.stage, event.percent, event.resource_count, event.mapped_bytes, event.elapsed_ms
+    );
+    let _ = app.emit("package-progress", event);
+}
+
+fn check_cancelled() -> Result<(), String> {
+    if CANCEL_REQUESTED.load(Ordering::Acquire) {
+        Err("Operação cancelada com segurança.".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+#[tauri::command]
+pub fn cancel_package_operation() -> Result<(), String> {
+    CANCEL_REQUESTED.store(true, Ordering::Release);
+    Ok(())
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -215,8 +289,26 @@ struct ResourceKeyParts {
 
 fn open_package(path: &str) -> Result<Mmap, String> {
     let file = File::open(path).map_err(|e| format!("Não foi possível abrir o arquivo: {e}"))?;
-    let mmap = unsafe { Mmap::map(&file) }
-        .map_err(|e| format!("Não foi possível mapear o arquivo: {e}"))?;
+    let length = file
+        .metadata()
+        .map_err(|e| format!("Não foi possível obter o tamanho do arquivo: {e}"))?
+        .len();
+    if std::mem::size_of::<usize>() < 8 && length > usize::MAX as u64 {
+        return Err(format!(
+            "Este processo de 32 bits não consegue mapear um package de {} bytes. Use a versão x64.",
+            length
+        ));
+    }
+    let mmap = unsafe { Mmap::map(&file) }.map_err(|e| {
+        if std::mem::size_of::<usize>() < 8 && length > 512 * 1024 * 1024 {
+            format!(
+                "Não foi possível mapear o package de {} bytes em processo de 32 bits: {}. Use a versão x64.",
+                length, e
+            )
+        } else {
+            format!("Não foi possível mapear o arquivo: {e}")
+        }
+    })?;
 
     if mmap.len() < 4 {
         return Err("Arquivo inválido: muito pequeno para ser um package DBPF.".to_string());
@@ -230,7 +322,48 @@ fn open_package(path: &str) -> Result<Mmap, String> {
 }
 
 fn parse_package(mmap: &Mmap) -> Result<DBPF<'_>, String> {
-    DBPF::new(&mmap[..]).map_err(|e| format!("Package inválido: {e:?}"))
+    parse_package_from_bytes(&mmap[..])
+}
+
+fn parse_package_from_bytes(bytes: &[u8]) -> Result<DBPF<'_>, String> {
+    DBPF::new(bytes).map_err(|e| format!("Package inválido: {e:?}"))
+}
+
+fn preview_cache() -> &'static Mutex<Option<PreviewCacheEntry>> {
+    PREVIEW_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn canonical_package_path(path: &str) -> PathBuf {
+    Path::new(path)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(path))
+}
+
+fn preview_cache_is_current(cache: &PreviewCacheEntry, path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    cache.path.as_path() == path
+        && cache.file_len == metadata.len()
+        && cache.modified == metadata.modified().ok()
+}
+
+fn build_preview_cache(path: &Path) -> Result<PreviewCacheEntry, String> {
+    let mmap = Arc::new(open_package(&path.display().to_string())?);
+    // SAFETY: DBPF is only held inside this cache entry and borrows the map.
+    // The DBPF field is declared before the Arc<Mmap>, so it is dropped first.
+    let bytes: &'static [u8] = unsafe { std::mem::transmute::<&[u8], &'static [u8]>(&mmap[..]) };
+    let package = parse_package_from_bytes(bytes)?;
+    let name_map = package_resource_names(&package);
+    let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    Ok(PreviewCacheEntry {
+        package,
+        mmap,
+        path: path.to_path_buf(),
+        file_len: metadata.len(),
+        modified: metadata.modified().ok(),
+        name_map,
+    })
 }
 
 fn kind_from_type(resource_type: u32) -> &'static str {
@@ -6209,7 +6342,7 @@ fn build_merge_manifest_items(
 }
 
 #[tauri::command]
-pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String> {
+pub fn scan_package_resources(app: AppHandle, payload: ScanPayload) -> Result<ScanResult, String> {
     let package_path = payload.package_path.trim();
     if package_path.is_empty() {
         return Err("Nenhum package foi selecionado.".to_string());
@@ -6223,17 +6356,36 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
         _ => "all".to_string(),
     };
 
-    std::panic::catch_unwind(|| {
+    CANCEL_REQUESTED.store(false, Ordering::Release);
+    let started = Instant::now();
+    emit_package_progress(
+        &app, started, "Opening package",
+        "Mapping package data without copying all resource payloads.", 0, 5, 0, 0,
+    );
+
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mmap = open_package(package_path)?;
+        check_cancelled()?;
         let package = parse_package(&mmap)?;
+        check_cancelled()?;
+        emit_package_progress(
+            &app, started, "Reading names",
+            "Reading package metadata and resource names.", 1, 5, package.files.len(), mmap.len(),
+        );
         let query = payload.search.unwrap_or_default().to_lowercase();
         let name_map = package_resource_names(&package);
+        check_cancelled()?;
         let merge_manifest = read_valid_merge_manifest_from_dbpf(&package);
         let manifest_package_count = merge_manifest
             .as_ref()
             .map(|manifest| manifest.packages.len())
             .unwrap_or(0);
 
+        emit_package_progress(
+            &app, started, "Building resource list",
+            "Building and sorting resource metadata.", 2, 5, package.files.len(), mmap.len(),
+        );
+        check_cancelled()?;
         let items = if resource_type == "all" && merge_manifest.is_some() {
             build_merge_manifest_items(
                 &package,
@@ -6283,7 +6435,29 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
             items
         };
 
-        let relations = build_resource_relations(&package, &name_map, &items);
+        check_cancelled()?;
+        emit_package_progress(
+            &app, started, "Preparing relationship metadata",
+            "Keeping large-package loading responsive.", 3, 5, package.files.len(), mmap.len(),
+        );
+        let relations = if mmap.len() <= MAX_RELATION_ANALYSIS_PACKAGE_BYTES {
+            let relations = build_resource_relations(&package, &name_map, &items);
+            check_cancelled()?;
+            relations
+        } else {
+            // Relationship detection hashes/decompresses payloads. It is
+            // optional UI metadata, so do not run a second payload pass for
+            // huge packages after the resource list has already been built.
+            eprintln!(
+                "[package-scan] skipped expensive relationship analysis: package={} bytes limit={} bytes",
+                mmap.len(), MAX_RELATION_ANALYSIS_PACKAGE_BYTES
+            );
+            BTreeMap::new()
+        };
+        check_cancelled()?;
+        emit_package_progress(
+            &app, started, "Ready", "Resource list ready.", 5, 5, package.files.len(), mmap.len(),
+        );
 
         Ok(ScanResult {
             items,
@@ -6450,73 +6624,79 @@ pub fn remove_selected_from_merged(
 pub fn get_resource_preview(app: AppHandle, payload: PreviewPayload) -> Result<PreviewResult, String> {
     validate_package_extension(&payload.package_path)?;
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-
-    let mmap = open_package(&payload.package_path)?;
-    let package = parse_package(&mmap)?;
-
-    for part in payload.resource_key.split("||") {
-        let Ok(parts) = parse_key(part.trim()) else {
-            continue;
-        };
-        if parts.resource_type != TYPE_XML {
-            continue;
+        let path = canonical_package_path(&payload.package_path);
+        let mut cache = preview_cache()
+            .lock()
+            .map_err(|_| "Cache de preview indisponível.".to_string())?;
+        if cache
+            .as_ref()
+            .map(|entry| !preview_cache_is_current(entry, &path))
+            .unwrap_or(true)
+        {
+            *cache = Some(build_preview_cache(&path)?);
         }
-        let Some(xml) = package.files.iter().find(|entry| {
-            entry.resource_type == parts.resource_type
-                && entry.resource_group == parts.resource_group
-                && entry.instance == parts.instance
-        }) else {
-            continue;
-        };
-        if !is_pose_list_xml(xml) {
-            continue;
+        let cached = cache
+            .as_ref()
+            .ok_or_else(|| "Cache de preview indisponível.".to_string())?;
+        let package = &cached.package;
+
+        for part in payload.resource_key.split("||") {
+            let Ok(parts) = parse_key(part.trim()) else {
+                continue;
+            };
+            if parts.resource_type != TYPE_XML {
+                continue;
+            }
+            let Some(xml_index) = package.entry_index(
+                parts.resource_type,
+                parts.resource_group,
+                parts.instance,
+            ) else {
+                continue;
+            };
+            let xml = &package.files[xml_index];
+            if !is_pose_list_xml(xml) {
+                continue;
+            }
+
+            let text = String::from_utf8_lossy(xml.data());
+            let declared = xml_tag_values(&text, "Key").len();
+            let matched = pose_list_clip_hashes(&text)
+                .into_iter()
+                .filter(|instance| {
+                    package
+                        .files
+                        .iter()
+                        .any(|entry| entry.resource_type == TYPE_CLIP && entry.instance == *instance)
+                })
+                .count();
+            return Ok(PreviewResult {
+                label: pose_list_display_label(&text, xml.instance),
+                key: payload.resource_key.clone(),
+                kind: "Pose".to_string(),
+                details: format!("Pose List • {matched}/{declared} pose(s) vinculada(s)"),
+                thumb_base64: pose_list_preview_base64(package, &text),
+            });
         }
 
-        let text = String::from_utf8_lossy(xml.data());
-        let declared = xml_tag_values(&text, "Key").len();
-        let matched = pose_list_clip_hashes(&text)
-            .into_iter()
-            .filter(|instance| {
-                package
-                    .files
-                    .iter()
-                    .any(|entry| entry.resource_type == TYPE_CLIP && entry.instance == *instance)
-            })
-            .count();
-        return Ok(PreviewResult {
-            label: pose_list_display_label(&text, xml.instance),
-            key: payload.resource_key.clone(),
-            kind: "Pose".to_string(),
-            details: format!("Pose List • {matched}/{declared} pose(s) vinculada(s)"),
-            thumb_base64: pose_list_preview_base64(&package, &text),
-        });
-    }
+        let key = parse_key(first_compound_key(&payload.resource_key))?;
+        let entry_index = package
+            .entry_index(key.resource_type, key.resource_group, key.instance)
+            .ok_or_else(|| "Resource not found in package.".to_string())?;
+        let entry = &package.files[entry_index];
+        let name_map = &cached.name_map;
 
-    let key = parse_key(first_compound_key(&payload.resource_key))?;
-    let entry = package
-        .files
-        .iter()
-        .find(|entry| {
-            entry.resource_type == key.resource_type
-                && entry.resource_group == key.resource_group
-                && entry.instance == key.instance
+        Ok(PreviewResult {
+            label: object_display_label(package, entry, name_map),
+            key: key_string(entry),
+            kind: kind_from_type(entry.resource_type).to_string(),
+            details: format!(
+                "Type 0x{:08X} • Group 0x{:08X}",
+                entry.resource_type, entry.resource_group
+            ),
+            thumb_base64: find_preview_base64(package, key)
+                .or_else(|| external_thumbnail_base64(&app, key)),
         })
-        .ok_or_else(|| "Resource not found in package.".to_string())?;
-
-    let name_map = package_resource_names(&package);
-
-    Ok(PreviewResult {
-        label: object_display_label(&package, entry, &name_map),
-        key: key_string(entry),
-        kind: kind_from_type(entry.resource_type).to_string(),
-        details: format!(
-            "Type 0x{:08X} • Group 0x{:08X}",
-            entry.resource_type, entry.resource_group
-        ),
-        thumb_base64: find_preview_base64(&package, key)
-            .or_else(|| external_thumbnail_base64(&app, key)),
-    })
-
     }))
     .unwrap_or_else(|_| Err("A prévia deste recurso falhou inesperadamente; o arquivo original não foi alterado.".to_string()))
 }
