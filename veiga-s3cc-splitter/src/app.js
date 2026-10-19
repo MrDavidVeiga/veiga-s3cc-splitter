@@ -4,9 +4,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import noPreviewImage from "./assets/no-preview.png";
-import exportIcon from "./assets/icons/export.png";
-import zipIcon from "./assets/icons/zip.png";
-import clearIcon from "./assets/icons/clear.png";
 import {
   availableContentFilters,
   CONTENT_FILTERS,
@@ -15,6 +12,14 @@ import {
   selectVisibleItems,
   visibleItemsForFilter,
 } from "./filter-logic.js";
+
+const buttonIcons = {
+  export: `<svg class="btn-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M10 13V3"/><path d="m6.5 6.5 3.5-3.5 3.5 3.5"/><path d="M4 12.5v3A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5v-3"/></svg>`,
+  remove: `<svg class="btn-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 6h12"/><path d="M8 6V4.5h4V6"/><path d="m5.5 6 .7 10.5h7.6L14.5 6"/><path d="M8.5 9v4.5M11.5 9v4.5"/></svg>`,
+  revert: `<svg class="btn-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7.5A7 7 0 1 1 4.8 14"/><path d="M4 3.5v4h4"/></svg>`,
+  clear: `<svg class="btn-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 5h8"/><path d="M4 10h8"/><path d="M4 15h5"/><path d="m14 12 4 4m0-4-4 4"/><path d="M2.5 5h.01M2.5 10h.01M2.5 15h.01"/></svg>`,
+  zip: `<svg class="btn-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m10 2 7 4v8l-7 4-7-4V6l7-4Z"/><path d="m3 6 7 4 7-4"/><path d="M10 10v8"/><path d="M8.5 3.2v2M11.5 3.2v2"/></svg>`
+};
 
 const translations = {
   en: {
@@ -283,10 +288,15 @@ function applyStaticTranslations() {
   if (el.selectNoneBtn) el.selectNoneBtn.textContent = t("selectNone");
   if (el.previewTitle) el.previewTitle.textContent = t("previewTitle");
   if (el.previewEmpty) el.previewEmpty.textContent = t("previewEmpty");
-  if (el.exportBtn) el.exportBtn.innerHTML = `<img src="${exportIcon}" alt="" class="btn-icon" /><span>${t("exportSelection")}</span>`;
-  if (el.removeMergedBtn) el.removeMergedBtn.textContent = t("removeFromMerged");
-  if (el.zipBtn) el.zipBtn.innerHTML = `<img src="${zipIcon}" alt="" class="btn-icon" /><span>${t("busyZipTitle").replace("...", "")}</span>`;
-  if (el.clearBtn) el.clearBtn.innerHTML = `<img src="${clearIcon}" alt="" class="btn-icon" /><span>${t("clear")}</span>`;
+  if (el.exportBtn) el.exportBtn.innerHTML = `${buttonIcons.export}<span>${t("exportSelection")}</span>`;
+  if (el.removeMergedBtn) {
+    const removalLabel = t("removeFromMerged");
+    el.removeMergedBtn.innerHTML = `${buttonIcons.remove}<span>${removalLabel}</span>`;
+    el.removeMergedBtn.title = removalLabel;
+    el.removeMergedBtn.setAttribute("aria-label", removalLabel);
+  }
+  if (el.zipBtn) el.zipBtn.innerHTML = `${buttonIcons.zip}<span>${t("busyZipTitle").replace("...", "")}</span>`;
+  if (el.clearBtn) el.clearBtn.innerHTML = `${buttonIcons.clear}<span>${t("clear")}</span>`;
   if (el.emptyTitle) el.emptyTitle.textContent = t("emptyTitle");
   if (el.emptySubtitle) el.emptySubtitle.textContent = t("emptySubtitle");
 
