@@ -28,8 +28,8 @@ jobs:
     name: Frontend tests and production build
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -53,10 +53,23 @@ jobs:
     name: Rust workspace checks
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Check workspace
         run: cargo check --workspace
       - name: Run workspace tests
-        run: cargo test --workspace
+        shell: pwsh
+        run: |
+          # Avoid a Windows Server 2022 Service Fabric DLL collision that can
+          # abort freshly built test executables with STATUS_ENTRYPOINT_NOT_FOUND.
+          $serviceFabric = 'C:\Program Files\Microsoft Service Fabric\bin\Fabric\Fabric.Code'
+          $pathEntries = $env:PATH -split ';'
+          $found = $pathEntries | Where-Object {
+            $_.Trim().TrimEnd('\') -ieq $serviceFabric.TrimEnd('\')
+          }
+          Write-Host "Service Fabric DLL path in PATH: $([bool]$found)"
+          $env:PATH = ($pathEntries | Where-Object {
+            $_.Trim().TrimEnd('\') -ine $serviceFabric.TrimEnd('\')
+          }) -join ';'
+          cargo test --workspace
