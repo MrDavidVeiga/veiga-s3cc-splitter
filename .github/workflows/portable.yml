@@ -117,12 +117,19 @@ jobs:
 
           echo "artifact_path=$file_path" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare Windows executable filename
+        if: matrix.platform == 'windows-2022'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "portable" | Out-Null
+          Copy-Item "${{ steps.locate_windows.outputs.artifact_path }}" "portable/Veiga's S3CC Splitter.exe"
+
       - name: Upload portable artifact on Windows
         if: matrix.platform == 'windows-2022'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ steps.locate_windows.outputs.artifact_path }}
+          path: portable/Veiga's S3CC Splitter.exe
           if-no-files-found: error
           retention-days: 30
 
