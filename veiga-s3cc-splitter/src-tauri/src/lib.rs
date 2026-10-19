@@ -4,7 +4,7 @@ mod system_appearance;
 
 use tauri::Manager;
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", not(test)))]
 fn set_windows_app_identity() {
     use windows::core::PCWSTR;
     use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
@@ -17,7 +17,7 @@ fn set_windows_app_identity() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", not(test)))]
     set_windows_app_identity();
 
     tauri::Builder::default()
