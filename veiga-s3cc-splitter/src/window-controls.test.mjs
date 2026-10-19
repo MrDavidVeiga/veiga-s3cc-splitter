@@ -21,7 +21,16 @@ test("All three window actions are explicitly authorized for the main Tauri wind
   assert.notEqual(mainWindow.closable, false);
 });
 
-test("Legacy version retains functional native titlebar controls", () => {
-  assert.notEqual(config.app.windows[0].decorations, false);
-  assert.doesNotMatch(html, /id="titlebar-(?:minimize|maximize|close)"/);
+test("Custom WinUI 3 titlebar buttons are wired to Tauri window commands", () => {
+  assert.equal(config.app.windows[0].decorations, false);
+  const script = read("./winui-theme.js");
+  for (const id of ["minimize", "maximize", "close"]) {
+    assert.match(html, new RegExp('id="titlebar-' + id + '"'));
+  }
+  assert.match(script, /getCurrentWindow\(\)/);
+  assert.match(script, /appWindow\.minimize\(\)/);
+  assert.match(script, /appWindow\.toggleMaximize\(\)/);
+  assert.match(script, /appWindow\.close\(\)/);
+  assert.match(script, /appWindow\.isMaximized\(\)/);
+  assert.doesNotMatch(html, /<button[^>]*id="titlebar-(?:minimize|maximize|close)"[^>]*data-tauri-drag-region/);
 });
