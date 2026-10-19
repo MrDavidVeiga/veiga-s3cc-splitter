@@ -2839,19 +2839,25 @@ fn thumbnail_cache_file_order(resource_type: u32) -> [&'static str; 3] {
 }
 
 fn thumbnail_from_cache_package(path: &Path, instance: u64) -> Option<String> {
-    if !path.is_file() {
-        return None;
-    }
-    let bytes = std::fs::read(path).ok()?;
-    let package = DBPF::new(&bytes).ok()?;
-    encode_best_preview(
-        package
-            .files
-            .iter()
-            .filter(|entry| entry.instance == instance)
-            .map(|entry| (entry.data().len(), entry.data().to_vec())),
-    )
-}
+    // Large Sims 3 thumbnail caches can be several gigabytes. Use a memory map
+    // instead of allocating a full heap copy for the automatic first preview.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if !path.is_file() {
+            return None;
+        }
+        let file = File::open(path).ok()?;
+        let mmap = unsafe { Mmap::map(&file).ok()? };
+        let package = DBPF::new(&mmap[..]).ok()?;
+        encode_best_preview(
+            package
+                .files
+                .iter()
+                .filter(|entry| entry.instance == instance)
+                .map(|entry| (entry.data().len(), entry.data().to_vec())),
+        )
+    }))
+    .ok()
+    .flatten()
 
 fn external_thumbnail_base64_from_dir(
     thumbnails_dir: &Path,
@@ -6442,6 +6448,8 @@ pub fn remove_selected_from_merged(
 #[tauri::command]
 pub fn get_resource_preview(app: AppHandle, payload: PreviewPayload) -> Result<PreviewResult, String> {
     validate_package_extension(&payload.package_path)?;
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+
     let mmap = open_package(&payload.package_path)?;
     let package = parse_package(&mmap)?;
 
@@ -8124,4 +8132,7 @@ mod merge_source_collection_tests {
     }
 
 
+
+    }))
+    .unwrap_or_else(|_| Err("A prévia deste recurso falhou inesperadamente; o arquivo original não foi alterado.".to_string()))
 }
