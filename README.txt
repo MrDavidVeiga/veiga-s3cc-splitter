@@ -7,7 +7,7 @@ What's new in v2.2.0
 - Improved Remove from Merged handling for consolidated PoseList content while preserving shared resources still needed by remaining items.
 - Added external thumbnail-cache fallback using the Sims 3 thumbnail caches in the actual Documents folder when a package does not contain a usable preview.
 - Improved Unmerge duplicate protection and added regression coverage for PoseList merging, restoration, and related content handling.
-- Updated the WinUI 3 interface, including theme selector icons and their colors, with EA App theme styling aligned with Veiga's S3CC Manager.
+- Matched the Manager's WinUI 3 theme selector: the localized “Tema” label sits beside the icon, and EA App uses the same blue accent (#276AFC) and theme-indicator colors.
 - Included the latest performance and regression fixes for large custom-content collections.
 - Portable builds target Windows x64/x86/ARM64, Linux x64/x86/ARM64, and macOS Intel/Apple Silicon.
 
