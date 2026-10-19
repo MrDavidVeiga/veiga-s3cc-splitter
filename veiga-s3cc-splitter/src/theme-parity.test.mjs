@@ -18,7 +18,7 @@ test("Theme selector displays the localized label beside the icon", () => {
 
 test("EA App accent and theme icon colors match Manager", () => {
   assert.match(engine, /const EA_APP_ACCENT = "#276AFC";/);
-  assert.match(engine, /if \(choice==="ea-app"\) return accentRamp\(EA_APP_ACCENT,"dark",false\);/);
+  assert.match(engine, /if \(choice==="ea-app"\) return \{[\s\S]*?accentRamp\(EA_APP_ACCENT,"dark",false\),[\s\S]*?light1: "#3978FC",[\s\S]*?dark1: "#215BD8"/);
   assert.match(foundation, /\.ea-app-swatch\s*\{[^}]*#276AFC/s);
   assert.match(foundation, /\.theme-check\s*\{[^}]*color:var\(--accent\)/);
   assert.match(css, /:root \{--theme-icon-hover:var\(--accent-light-1,var\(--accent\)\);\}/);
