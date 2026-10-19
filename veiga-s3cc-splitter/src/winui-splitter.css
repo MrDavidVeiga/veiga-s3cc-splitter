@@ -486,3 +486,14 @@ html[data-theme-choice="ea-app"] body.release-v1 .mode-btn.active {
   color:#FFFFFF; background:#343647;
 }
 html[data-theme-choice="ea-app"] body.release-v1 .mode-btn.active::after {background:#FFFFFF;}
+
+/* Exact Manager foreground and hover colors for the EA App theme glyph. */
+html[data-theme-choice="ea-app"] body.release-v1 .theme-button {
+  background:#2A2E3F;
+  color:#FFFFFF;
+  border-color:rgba(255,255,255,.13);
+}
+html[data-theme-choice="ea-app"] body.release-v1 .theme-button:hover,
+html[data-theme-choice="ea-app"] body.release-v1 .theme-button[aria-expanded="true"] {
+  background:#343647;
+}
