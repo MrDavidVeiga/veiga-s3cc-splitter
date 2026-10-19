@@ -407,7 +407,7 @@ const translations = {
     packageReady: (count) => `${count} ${count === 1 ? "encontrado" : "encontrados"}:`,
     selectedCount: (count) => `${count} ${countForm(count, "seleccionado", "seleccionados")}`,
     selectAll: "Seleccionar Todo",
-    selectNone: "Seleccionar Ninguno",
+    selectNone: "Deseleccionar Todo",
     busyDefaultTitle: "Procesando",
     busyDefaultMessage: "Espera un momento.",
     busyReadTitle: "Leyendo package...",
