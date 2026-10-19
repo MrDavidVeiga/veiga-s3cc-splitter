@@ -27,7 +27,7 @@ test("All three languages use consistent interaction terminology",()=>{
  assert.equal(locale.pt.modeMerger,"Mesclador");
  assert.equal(locale.es.modeMerger,"Fusionador");
  assert.equal(locale.es.selectNone,"Deseleccionar Todo");
- assert.equal(locale.pt.previewTitle,"Preview"); // Retained as familiar software UI terminology.
+ assert.equal(locale.pt.previewTitle,"Pré-visualização");
  assert.equal(locale.pt.clear,"Limpar Lista");
  assert.equal(locale.es.restoreOriginals,"Desfusionar");
  for(const language of ["en","pt","es"]){
