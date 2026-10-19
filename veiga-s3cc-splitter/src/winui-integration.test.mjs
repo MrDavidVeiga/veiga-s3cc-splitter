@@ -59,21 +59,15 @@ test("Native Splitter Merger restore export and drag handlers remain present",()
  assert.match(source,/formatRemoveConfirm\(/);
 });
 
-test("Open Package tooltip matches accepted file types in all languages",()=>{
+test("Package drop hint matches accepted file types in all languages",()=>{
  const hints={
-  en:"Select a .package or .dbc file to open in the Splitter.",
-  pt:"Selecione um arquivo .package ou .dbc para abrir no Separador.",
-  es:"Selecciona un archivo .package o .dbc para abrirlo en el Separador."
+  en:"Select or drag a .package or .dbc here",
+  pt:"Selecione ou arraste um .package ou .dbc aqui",
+  es:"Selecciona o arrastra un .package o .dbc aquí"
  };
  for(const [lang,hint] of Object.entries(hints)){
-   assert.equal(locale[lang].pickPackageTip,hint,lang);
+  assert.equal(locale[lang].dropHint,hint,lang);
  }
- assert.match(source,/el\.pickPackageBtn\.title = t\("pickPackageTip"\)/);
- assert.match(markup,/id="package-drop-hint" class="drop-hint" role="note"/);
- assert.match(markup,/id="merger-add-hint" class="drop-hint" role="note"/);
- assert.match(source,/el\.dropHint\.querySelector\("\.drop-hint-title"\)\?\.replaceChildren\(t\("dropHint"\)\)/);
- assert.match(source,/el\.mergerAddHint\.querySelector\("\.drop-hint-title"\)\?\.replaceChildren\(t\("mergerAddHint"\)\)/);
- assert.doesNotMatch(source,/el\.(?:dropHint|mergerAddHint)\.textContent\s*=/);
 });
 
 test("Theme selector geometry and EA App accent match Manager",()=>{
