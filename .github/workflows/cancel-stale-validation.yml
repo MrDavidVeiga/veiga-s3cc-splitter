@@ -1,0 +1,22 @@
+name: Cancel stale validation run
+
+on:
+  push:
+    branches:
+      - ci/build-v2.4.0-winui3-optimized-theme-20261018
+    paths:
+      - ".github/workflows/cancel-stale-validation.yml"
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cancel-stale-validation:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Cancel superseded validation only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/39186096953/cancel" || true
