@@ -92,6 +92,13 @@ struct PackageProgress {
     mapped_bytes: usize,
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PackageRelationUpdate {
+    package_path: String,
+    relations: BTreeMap<String, ResourceRelation>,
+}
+
 fn emit_package_progress(
     app: &AppHandle,
     started: Instant,
@@ -6445,13 +6452,43 @@ pub fn scan_package_resources(app: AppHandle, payload: ScanPayload) -> Result<Sc
             check_cancelled()?;
             relations
         } else {
-            // Relationship detection hashes/decompresses payloads. It is
-            // optional UI metadata, so do not run a second payload pass for
-            // huge packages after the resource list has already been built.
+            // Relationship detection hashes/decompresses payloads. Let the
+            // resource list return first for huge packages, then restore the
+            // newest UI's duplicate/conflict badges from a background pass.
             eprintln!(
-                "[package-scan] skipped expensive relationship analysis: package={} bytes limit={} bytes",
+                "[package-scan] deferring relationship analysis: package={} bytes limit={} bytes",
                 mmap.len(), MAX_RELATION_ANALYSIS_PACKAGE_BYTES
             );
+            let relation_app = app.clone();
+            let relation_path = package_path.to_string();
+            let relation_name_map = name_map.clone();
+            let relation_items = items.clone();
+            std::thread::spawn(move || {
+                let result = (|| -> Result<BTreeMap<String, ResourceRelation>, String> {
+                    let mmap = open_package(&relation_path)?;
+                    let package = parse_package(&mmap)?;
+                    Ok(build_resource_relations(
+                        &package,
+                        &relation_name_map,
+                        &relation_items,
+                    ))
+                })();
+                match result {
+                    Ok(relations) => {
+                        let _ = relation_app.emit(
+                            "package-relations",
+                            PackageRelationUpdate {
+                                package_path: relation_path,
+                                relations,
+                            },
+                        );
+                    }
+                    Err(error) => eprintln!(
+                        "[package-relations] deferred analysis failed: {}",
+                        error
+                    ),
+                }
+            });
             BTreeMap::new()
         };
         check_cancelled()?;
