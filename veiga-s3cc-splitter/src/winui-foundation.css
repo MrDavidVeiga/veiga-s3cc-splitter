@@ -406,7 +406,7 @@ body.release-v1 { overflow: hidden; font-family: "Segoe UI Variable Text","Segoe
 }
 .release-v1 .veiga-swatch { background:#7fad2d; }
 .release-v1 .mean-girls-swatch { background:linear-gradient(90deg,#5f1b3f 0 48%,#f92f60 48% 100%); }
-.release-v1 .ea-app-swatch { background:linear-gradient(90deg,#181B2A 0 58%,#FF4747 58% 100%); }
+.release-v1 .ea-app-swatch { background:linear-gradient(90deg,#181B2A 0 58%,#276AFC 58% 100%); }
 .release-v1 .theme-flyout-divider { height:1px; margin:5px 7px; background:var(--winui-divider); }
 .release-v1 .theme-flyout-footnote { padding:7px 9px 5px; color:var(--winui-text-tertiary); font-size:11px; line-height:15px; }
 
