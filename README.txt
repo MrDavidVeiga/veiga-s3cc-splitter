@@ -1,6 +1,17 @@
-S3CC Splitter v2.4.0
+S3CC Splitter v2.2.0
 
-What's new in v2.4.0
+What's new in v2.2.0
+
+- Added CLIP/Pose List-aware classification: a CLIP is treated as a Pose only when a matching PoseList explicitly references it.
+- Added support for combining multiple PoseList XML files during merging, deduplicating entries, and preserving original PoseList/registrar resources for reversible Unmerge.
+- Improved Remove from Merged handling for consolidated PoseList content while preserving shared resources still needed by remaining items.
+- Added external thumbnail-cache fallback using the Sims 3 thumbnail caches in the actual Documents folder when a package does not contain a usable preview.
+- Improved Unmerge duplicate protection and added regression coverage for PoseList merging, restoration, and related content handling.
+- Updated the WinUI 3 interface, including theme selector icons and their colors, with EA App theme styling aligned with Veiga's S3CC Manager.
+- Included the latest performance and regression fixes for large custom-content collections.
+- Portable builds target Windows x64/x86/ARM64, Linux x64/x86/ARM64, and macOS Intel/Apple Silicon.
+
+Existing Splitter/Merger capabilities
 
 - Splitter and Merger modes are available in the same application.
 - Results can be filtered and searched, with zero preselection, multiple selection, Shift + click, and Select All / Select None limited to the visible result set.
@@ -23,7 +34,7 @@ What's new in v2.4.0
   - quietlyshout reported excessive RAM usage during large exports, duplicate-name export issues, and suggested improvements for a more compact/resizable interface and clearer duplicate handling.
 - The portable build workflow covers Windows x64, Windows x86, Windows ARM64, Linux x64, Linux x86, Linux ARM64, macOS Intel, and macOS Apple Silicon.
 
-Current main-branch additions (not yet assigned a new release version)
+v2.2.0 implementation details
 
 CLIP and Pose List support
 
