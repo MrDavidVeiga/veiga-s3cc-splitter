@@ -82,4 +82,6 @@ test("Theme selector geometry and EA App accent match Manager",()=>{
  assert.match(engine,/const EA_APP_ACCENT = "#FF4747";/);
  assert.match(foundation,/\.ea-app-swatch\s*\{\s*background:linear-gradient\(90deg,#181B2A 0 58%,#FF4747 58% 100%\);\s*\}/);
  assert.match(foundation,/\.theme-check\s*\{[^}]*color:var\(--accent\)/);
+ assert.match(css,/html\[data-theme-choice="ea-app"\] body\.release-v1 \.theme-button\s*\{[^}]*color:#FFFFFF/s);
+ assert.match(css,/html\[data-theme-choice="ea-app"\] body\.release-v1 \.theme-button:hover[\s\S]*?background:#343647/);
 });
