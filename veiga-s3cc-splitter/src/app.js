@@ -5,9 +5,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import noPreviewImage from "./assets/no-preview.png";
-import exportIcon from "./assets/icons/export.png";
-import zipIcon from "./assets/icons/zip.png";
-import clearIcon from "./assets/icons/clear.png";
 import { canUseReversibleMergeActions, formatRemoveConfirm } from "./remove-confirm.js";
 import { createModalController, runConfirmedAction } from "./modal.js";
 import {
@@ -21,6 +18,14 @@ import {
 import { buildSameNameCounts, displayRelationForItem, sameNameCountForItem } from "./label-relations.js";
 
 const countForm = (value, singular, plural) => Number(value) === 1 ? singular : plural;
+
+const buttonIcons = {
+  export: `<svg class="btn-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M10 13V3"/><path d="m6.5 6.5 3.5-3.5 3.5 3.5"/><path d="M4 12.5v3A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5v-3"/></svg>`,
+  remove: `<svg class="btn-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 6h12"/><path d="M8 6V4.5h4V6"/><path d="m5.5 6 .7 10.5h7.6L14.5 6"/><path d="M8.5 9v4.5M11.5 9v4.5"/></svg>`,
+  revert: `<svg class="btn-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7.5A7 7 0 1 1 4.8 14"/><path d="M4 3.5v4h4"/></svg>`,
+  clear: `<svg class="btn-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 5h8"/><path d="M4 10h8"/><path d="M4 15h5"/><path d="m14 12 4 4m0-4-4 4"/><path d="M2.5 5h.01M2.5 10h.01M2.5 15h.01"/></svg>`,
+  zip: `<svg class="btn-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m10 2 7 4v8l-7 4-7-4V6l7-4Z"/><path d="m3 6 7 4 7-4"/><path d="M10 10v8"/><path d="M8.5 3.2v2M11.5 3.2v2"/></svg>`
+};
 
 const translations = {
   en: {
@@ -624,11 +629,11 @@ function applyStaticTranslations() {
   if (el.modeMergerBtn) el.modeMergerBtn.textContent = t("modeMerger");
   if (el.mergerAddPackagesBtn) el.mergerAddPackagesBtn.textContent = t("mergerAddPackages");
   if (el.mergerAddHint) el.mergerAddHint.querySelector(".drop-hint-title")?.replaceChildren(t("mergerAddHint"));
-  if (el.mergerRunBtn) el.mergerRunBtn.innerHTML = `<img src="${zipIcon}" alt="" class="btn-icon" /><span>${state.mergerBusy ? t("mergerBusy") : t("mergerRun")}</span>`;
-  if (el.mergerClearBtn) el.mergerClearBtn.innerHTML = `<img src="${clearIcon}" alt="" class="btn-icon" /><span>${t("mergerClear")}</span>`;
+  if (el.mergerRunBtn) el.mergerRunBtn.innerHTML = `${buttonIcons.zip}<span>${state.mergerBusy ? t("mergerBusy") : t("mergerRun")}</span>`;
+  if (el.mergerClearBtn) el.mergerClearBtn.innerHTML = `${buttonIcons.clear}<span>${t("mergerClear")}</span>`;
   if (el.mergerTitle) el.mergerTitle.textContent = t("mergerTitle");
   if (el.restoreManifestBtn) {
-    el.restoreManifestBtn.innerHTML = `<i class="fa-solid fa-rotate-left" aria-hidden="true"></i><span>${t("restoreOriginals")}</span>`;
+    el.restoreManifestBtn.innerHTML = `${buttonIcons.revert}<span>${t("restoreOriginals")}</span>`;
     el.restoreManifestBtn.title = t("restoreOriginals");
     el.restoreManifestBtn.setAttribute("aria-label", t("restoreOriginals"));
   }
@@ -641,14 +646,14 @@ function applyStaticTranslations() {
   if (el.selectNoneBtn) el.selectNoneBtn.textContent = t("selectNone");
   if (el.previewTitle) el.previewTitle.textContent = t("previewTitle");
   if (el.previewEmpty) el.previewEmpty.textContent = t("previewEmpty");
-  if (el.exportBtn) el.exportBtn.innerHTML = `<img src="${exportIcon}" alt="" class="btn-icon" /><span>${t("exportSelection")}</span>`;
+  if (el.exportBtn) el.exportBtn.innerHTML = `${buttonIcons.export}<span>${t("exportSelection")}</span>`;
   if (el.removeMergedBtn) {
     const removalLabel = t("removeFromMerged");
-    el.removeMergedBtn.innerHTML = `<img src="${clearIcon}" alt="" class="btn-icon" /><span>${removalLabel}</span>`;
+    el.removeMergedBtn.innerHTML = `${buttonIcons.remove}<span>${removalLabel}</span>`;
     el.removeMergedBtn.title = removalLabel;
     el.removeMergedBtn.setAttribute("aria-label", removalLabel);
   }
-  if (el.clearBtn) el.clearBtn.innerHTML = `<img src="${clearIcon}" alt="" class="btn-icon" /><span>${t("clear")}</span>`;
+  if (el.clearBtn) el.clearBtn.innerHTML = `${buttonIcons.clear}<span>${t("clear")}</span>`;
   if (el.emptyTitle) el.emptyTitle.textContent = t("emptyTitle");
   if (el.emptySubtitle) el.emptySubtitle.textContent = t("emptySubtitle");
 
@@ -959,7 +964,7 @@ function render() {
     el.removeMergedBtn.classList.remove("hidden");
     el.removeMergedBtn.disabled = state.selectedKeys.length === 0;
     const removalLabel = t("removeFromMerged");
-    el.removeMergedBtn.innerHTML = `<img src="${clearIcon}" alt="" class="btn-icon" /><span>${removalLabel}</span>`;
+    el.removeMergedBtn.innerHTML = `${buttonIcons.remove}<span>${removalLabel}</span>`;
     el.removeMergedBtn.title = removalLabel;
     el.removeMergedBtn.setAttribute("aria-label", removalLabel);
   }
@@ -1022,6 +1027,7 @@ function renderList() {
     const button = document.createElement("button");
     button.className = "resource-button";
 
+    let sameNameBadge = "";
     const metaLines = [];
     if (displayType) metaLines.push(displayType);
     if (displayDetails) metaLines.push(displayDetails);
@@ -1034,13 +1040,14 @@ function renderList() {
         `<span class="duplicate-badge" title="${t("duplicateHint")}">${t("duplicateLabel", relation.count)}</span>`,
       );
     } else if (relation?.kind === "same-name") {
-      metaLines.push(
-        `<span class="same-name-badge" title="${t("sameNameHint")}">${t("sameNameLabel", relation.count)}</span>`,
-      );
+      sameNameBadge = `<span class="same-name-badge" title="${t("sameNameHint")}">${t("sameNameLabel", relation.count)}</span>`;
     }
 
     button.innerHTML = `
-      <div class="resource-name">${item.label}</div>
+      <div class="resource-heading">
+        <div class="resource-name">${item.label}</div>
+        ${sameNameBadge}
+      </div>
       <div class="resource-meta">${metaLines.join("<br />")}</div>
     `;
     button.addEventListener("click", () => loadPreview(item));
