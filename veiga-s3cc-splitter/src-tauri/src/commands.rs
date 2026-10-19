@@ -6489,6 +6489,9 @@ pub fn get_resource_preview(app: AppHandle, payload: PreviewPayload) -> Result<P
         thumb_base64: find_preview_base64(&package, key)
             .or_else(|| external_thumbnail_base64(&app, key)),
     })
+
+    }))
+    .unwrap_or_else(|_| Err("A prévia deste recurso falhou inesperadamente; o arquivo original não foi alterado.".to_string()))
 }
 
 #[tauri::command]
@@ -8106,7 +8109,4 @@ mod merge_source_collection_tests {
     }
 
 
-
-    }))
-    .unwrap_or_else(|_| Err("A prévia deste recurso falhou inesperadamente; o arquivo original não foi alterado.".to_string()))
 }
