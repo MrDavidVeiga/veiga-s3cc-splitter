@@ -1,6 +1,6 @@
 name: Portable Builds
 
-run-name: S3CC Splitter v2.4.0 WinUI 3 optimized build by @${{ github.actor }}
+run-name: S3CC Splitter v2.4.0 WinUI 3 optimized build with Manager theme parity by @${{ github.actor }}
 
 on:
   push:
