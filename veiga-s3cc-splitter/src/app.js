@@ -471,6 +471,7 @@ const state = {
   isLangMenuOpen: false,
   isContentFilterOpen: false,
   manifestPackageCount: 0,
+  pendingRelationUpdates: [],
   mergerSources: [],
   mergerBusy: false,
   mergerResult: null,
@@ -678,6 +679,15 @@ function setBusy(title, message) {
   render();
 }
 
+function applyRelationUpdate(payload) {
+  if (!payload || payload.packagePath !== state.packagePath) return;
+  const relations = payload.relations || {};
+  state.resources = state.resources.map((item) => ({
+    ...item,
+    relation: relations[item.key] || null,
+  }));
+}
+
 function clearBusy() {
   state.isBusy = false;
   state.busyTitle = "";
@@ -685,6 +695,8 @@ function clearBusy() {
   state.progress = 0;
   state.operationCancellable = false;
   state.operationCancelRequested = false;
+  const pending = state.pendingRelationUpdates.splice(0);
+  pending.forEach(applyRelationUpdate);
   render();
 }
 
@@ -1700,6 +1712,16 @@ async function setupProgressEvents() {
       state.progress = Math.max(0, Math.min(100, Number(payload.percent) || 0));
       state.busyTitle = payload.stage || state.busyTitle;
       state.busyMessage = payload.message || state.busyMessage;
+      render();
+    });
+    await listen("package-relations", (event) => {
+      const payload = event.payload || {};
+      if (payload.packagePath !== state.packagePath) return;
+      if (state.isBusy) {
+        state.pendingRelationUpdates.push(payload);
+        return;
+      }
+      applyRelationUpdate(payload);
       render();
     });
   } catch (error) {
