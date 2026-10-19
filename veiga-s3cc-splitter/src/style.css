@@ -1441,3 +1441,10 @@ body {
     display: none;
   }
 }
+
+
+/* Large-package scan cancellation shares the existing WinUI secondary-button style. */
+.release-v1 .progress-card .operation-cancel {
+  align-self: flex-end;
+  margin-top: 12px;
+}
