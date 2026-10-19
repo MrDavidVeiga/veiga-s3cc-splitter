@@ -9,6 +9,7 @@ const css=readFileSync(new URL("./winui-splitter.css",import.meta.url),"utf8");
 const foundation=readFileSync(new URL("./winui-foundation.css",import.meta.url),"utf8");
 const engine=readFileSync(new URL("./winui-theme.js",import.meta.url),"utf8");
 const backend=readFileSync(new URL("../src-tauri/src/lib.rs",import.meta.url),"utf8");
+const rustCommands=readFileSync(new URL("../src-tauri/src/commands.rs",import.meta.url),"utf8");
 const begin=source.indexOf("const translations = {");
 const end=source.indexOf("const state = {",begin);
 assert.ok(begin>=0&&end>begin);
@@ -76,10 +77,25 @@ test("Theme selector displays the localized label and matches Manager's EA App p
  assert.match(css,/html\[data-theme-choice\] body\.release-v1 \.topbar \.theme-button\s*\{[\s\S]*?width:auto;[\s\S]*?display:inline-flex;[\s\S]*?gap:7px;/);
  assert.match(css,/html\[data-theme-choice\] body\.release-v1 \.topbar #theme-button-label\s*\{[\s\S]*?white-space:nowrap;/);
  assert.match(engine,/const label = lang === "pt" \? "Tema" : lang === "es" \? "Tema" : "Theme";/);
- assert.match(engine,/const EA_APP_ACCENT = "#276AFC";/);
- assert.match(engine,/if \(choice==="ea-app"\) return \{\s*\.\.\.accentRamp\(EA_APP_ACCENT,"dark",false\),\s*light1: "#3978FC",\s*dark1: "#215BD8"\s*\};/);
- assert.match(foundation,/\.ea-app-swatch\s*\{[^}]*#276AFC/s);
+ assert.match(engine,/const EA_APP_ACCENT = "#FF4747";/);
+ assert.match(engine,/if \(choice==="ea-app"\) return accentRamp\(EA_APP_ACCENT,"dark",false\);/);
+ assert.match(foundation,/\.ea-app-swatch\s*\{[^}]*#FF4747/s);
  assert.match(foundation,/\.theme-check\s*\{[^}]*color:var\(--accent\)/);
  assert.match(css,/html\[data-theme-choice="ea-app"\] body\.release-v1 \.theme-button\s*\{[^}]*color:#FFFFFF/s);
  assert.match(css,/html\[data-theme-choice="ea-app"\] body\.release-v1 \.theme-button:hover[\s\S]*?background:#343647/);
+});
+
+test("Path validation, preview interaction and large-cache memory safeguards remain present",()=>{
+ assert.match(source,/function isScannablePackagePath\(path\)/);
+ assert.match(source,/async function revealPreviewSource\(\)/);
+ assert.match(source,/el\.previewThumb\.addEventListener\("click",[\s\S]*?revealPreviewSource/);
+ const cacheStart=rustCommands.indexOf("fn thumbnail_from_cache_package");
+ const cacheEnd=rustCommands.indexOf("fn external_thumbnail_base64_from_dir",cacheStart);
+ assert.ok(cacheStart>=0 && cacheEnd>cacheStart);
+ const cacheReader=rustCommands.slice(cacheStart,cacheEnd);
+ assert.match(cacheReader,/Mmap::map\(&file\)/);
+ assert.doesNotMatch(cacheReader,/std::fs::read\(path\)/);
+ const previewStart=rustCommands.indexOf("pub fn get_resource_preview");
+ assert.ok(previewStart>=0);
+ assert.match(rustCommands.slice(previewStart),/catch_unwind/);
 });
