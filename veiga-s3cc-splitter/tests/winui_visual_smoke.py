@@ -1,0 +1,198 @@
+"""Split/Merge WinUI 3 smoke: static browser, no fake claims about native CC processing."""
+from pathlib import Path
+import re
+from playwright.sync_api import sync_playwright
+
+ROOT = Path(__file__).resolve().parents[1]
+html = (ROOT / "index.html").read_text(encoding="utf-8")
+
+def css_inline(match):
+    path = match.group(1).removeprefix("./")
+    css = (ROOT / path).read_text(encoding="utf-8")
+    if path.endswith("winui-foundation.css"):
+        css = css.replace('@import url("./ui/fluent/tokens.css");',
+            (ROOT / "src/ui/fluent/tokens.css").read_text(encoding="utf-8"))
+    return "<style>\n" + css + "\n</style>"
+
+html = re.sub(r'<link rel="stylesheet" href="([^"]+)"\s*/>', css_inline, html)
+
+theme_js = (ROOT / "src/winui-theme.js").read_text(encoding="utf-8")
+theme_js = re.sub(r'^import\s+.*?;\s*$', "", theme_js, flags=re.M)
+
+VIEWPORTS = [(1280,800),(1100,720),(1024,768),(900,680),(820,620)]
+THEMES = ["system","veiga-light","veiga-dark","mean-girls","ea-app","winui-light","winui-dark"]
+FOREGROUNDS = {
+    "system":"#ffffff", "winui-light":"#ffffff", "winui-dark":"#ffffff",
+    "veiga-light":"#142007","veiga-dark":"#142007",
+    "mean-girls":"#4d1332","ea-app":"#ffffff"
+}
+
+def run():
+    image_dir = ROOT / "winui-smoke-previews"
+    image_dir.mkdir(exist_ok=True)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+        try:
+            for width,height in VIEWPORTS:
+                page=browser.new_page(viewport={"width":width,"height":height})
+                errors=[]
+                page.on("pageerror",lambda e: errors.append(str(e)))
+                page.set_content(html,wait_until="domcontentloaded")
+                page.evaluate("""() => {
+                    const store = {};
+                    Object.defineProperty(window,'localStorage', {configurable:true,value:{
+                      getItem:k=>store[k]||null,setItem:(k,v)=>{store[k]=String(v)}
+                    }});
+                    window.matchMedia=()=>({matches:true,addEventListener:()=>{}});
+                    window.invoke=async()=>({mode:'dark',accent:'#7FAD2D'});
+                    window.getCurrentWindow=()=>({
+                      isMaximized:async()=>false,toggleMaximize:async()=>{},
+                      minimize:async()=>{},close:async()=>{},
+                      onResized:()=>Promise.resolve(),
+                      onFocusChanged:()=>Promise.resolve()
+                    });
+                }""")
+                page.evaluate(theme_js)
+                assert page.locator(".winui-app-icon").count()==1
+                assert page.locator(".winui-social-footer .social-icons-list a").count()==5
+                for theme in THEMES:
+                    page.locator("#theme-button").click()
+                    page.locator(f'.theme-option[data-theme="{theme}"]').click()
+                    page.wait_for_timeout(130)
+                    state=page.evaluate("""() => {
+                      const root=document.documentElement;
+                      const computed=getComputedStyle(root);
+                      const sidebar=document.querySelector('.left-panel').getBoundingClientRect();
+                      const cta=document.querySelector('#pick-package-btn').getBoundingClientRect();
+                      const load=document.querySelector('#scan-btn').getBoundingClientRect();
+                      const icon=getComputedStyle(document.querySelector('.winui-app-icon'));
+                      const pane=getComputedStyle(document.querySelector('.right-panel'));
+                      const left=getComputedStyle(document.querySelector('.left-panel'));
+                      const hint=document.querySelector('#package-drop-hint');
+                      const hs=getComputedStyle(hint),hr=hint.getBoundingClientRect();
+                      const links=Array.from(document.querySelectorAll('.winui-social-footer a'));
+                      return {
+                        theme:root.dataset.themeChoice,
+                        accent:root.style.getPropertyValue('--accent').trim(),
+                        foreground:computed.getPropertyValue('--fluent-accent-foreground').trim(),
+                        customForeground:root.style.getPropertyValue('--fluent-accent-foreground'),
+                        sidebar:sidebar.width,
+                        ctaWidth:cta.width,ctaHeight:cta.height,
+                        loadWidth:load.width,loadHeight:load.height,
+                        paneBackground:pane.backgroundColor,leftBackground:left.backgroundColor,
+                        hintBorder:hs.borderTopStyle,hintBg:hs.backgroundColor,
+                        hintHeight:hr.height,hintBelow:hr.top>=cta.bottom,
+                        captionHeight:document.querySelector('.winui-titlebar').getBoundingClientRect().height,
+                        navHeight:document.querySelector('.topbar').getBoundingClientRect().height,
+                        iconWidth:document.querySelector('.winui-app-icon').getBoundingClientRect().width,
+                        socialWidths:links.map(e=>e.getBoundingClientRect().width),
+                        extraWidth:document.documentElement.scrollWidth>innerWidth+1,
+                        buttonColor:getComputedStyle(document.querySelector('#pick-package-btn')).color
+                      };
+                    }""")
+                    assert state["theme"]==theme,(width,theme,state)
+                    assert state["foreground"].lower()==FOREGROUNDS[theme],(width,theme,state)
+                    assert state["customForeground"]=="",(width,theme,state)
+                    for key in ["ctaHeight","loadHeight"]:
+                        assert abs(state[key]-52)<1,(width,theme,state)
+                    assert abs(state["ctaWidth"]-state["loadWidth"])<1,(width,theme,state)
+                    assert abs(state["captionHeight"]-32)<1 and abs(state["navHeight"]-48)<1,(width,theme,state)
+                    assert state["iconWidth"]==16 and not state["extraWidth"],(width,theme,state)
+                    assert state["hintBelow"] and state["hintBorder"]=="dashed" and state["hintHeight"]>=90,(width,theme,state)
+                    assert state["hintBg"] not in ("transparent","rgba(0, 0, 0, 0)"),(width,theme,state)
+                    assert state["leftBackground"] in ("transparent","rgba(0, 0, 0, 0)"),(width,theme,state)
+                    assert state["paneBackground"] not in ("transparent","rgba(0, 0, 0, 0)"),(width,theme,state)
+                    assert max(state["socialWidths"])-min(state["socialWidths"])<1,(width,theme,state)
+                    if theme=="veiga-dark":
+                        page.screenshot(path=str(image_dir / f"splitter-{width}-{theme}.png"))
+                    base=page.locator("#package-drop-hint").evaluate("e=>getComputedStyle(e).backgroundColor")
+                    page.locator("#package-drop-zone").evaluate("e=>e.classList.add('drag-over')")
+                    page.wait_for_timeout(110)
+                    active=page.locator("#package-drop-hint").evaluate("e=>getComputedStyle(e).backgroundColor")
+                    assert active!=base,(width,theme,base,active)
+                    page.locator("#package-drop-zone").evaluate("e=>e.classList.remove('drag-over')")
+                    # Merger: separate CTA/hint, matching geometry and accent states.
+                    page.evaluate("""() => {
+                      document.querySelector('#splitter-controls').classList.add('hidden');
+                      document.querySelector('#merger-controls').classList.remove('hidden');
+                      document.querySelector('#splitter-workspace').classList.add('hidden');
+                      document.querySelector('#merger-workspace').classList.remove('hidden');
+                    }""")
+                    merged=page.evaluate("""() => {
+                      const b=document.querySelector('#merger-add-packages-btn').getBoundingClientRect();
+                      const h=document.querySelector('#merger-add-hint');
+                      const rect=h.getBoundingClientRect();
+                      return {w:b.width,h:b.height,hintBorder:getComputedStyle(h).borderTopStyle,
+                        hintBelow:rect.top>=b.bottom};
+                    }""")
+                    assert abs(merged["h"]-52)<1 and abs(merged["w"]-state["ctaWidth"])<1,(width,theme,merged)
+                    assert merged["hintBorder"]=="dashed" and merged["hintBelow"],(width,theme,merged)
+                    if theme=="veiga-dark":
+                        page.screenshot(path=str(image_dir / f"merger-{width}-{theme}.png"))
+                    page.evaluate("""() => {
+                      document.querySelector('#splitter-controls').classList.remove('hidden');
+                      document.querySelector('#merger-controls').classList.add('hidden');
+                      document.querySelector('#splitter-workspace').classList.remove('hidden');
+                      document.querySelector('#merger-workspace').classList.add('hidden');
+                    }""")
+                    # Synthetic resources exercise the real CSS result layout
+                    # without inventing or simulating Tauri native data.
+                    page.evaluate("""() => {
+                      document.getElementById('empty-state').classList.add('hidden');
+                      document.getElementById('results-state').classList.remove('hidden');
+                      const list=document.getElementById('resource-list');
+                      list.replaceChildren();
+                      for(let i=0;i<36;i++){
+                        const row=document.createElement('div');
+                        row.className='resource-row';
+                        row.innerHTML='<div class="resource-check"><input type="checkbox"></div>'+
+                          '<button class="resource-button">Resource '+i+'</button>'+
+                          '<span class="type-pill">CASP</span>';
+                        list.appendChild(row);
+                      }
+                    }""")
+                    controls=page.evaluate("""() => {
+                      const rect=id=>document.getElementById(id).getBoundingClientRect();
+                      const list=document.getElementById('resource-list');
+                      const all=rect('select-all-btn'),none=rect('select-none-btn');
+                      const exportBtn=rect('export-btn'),clear=rect('clear-btn');
+                      return {allH:all.height,noneH:none.height,allW:all.width,noneW:none.width,
+                        exportH:exportBtn.height,clearH:clear.height,
+                        exportW:exportBtn.width,clearW:clear.width,
+                        scroll:list.scrollHeight>list.clientHeight,
+                        listWidth:list.clientWidth,outerWidth:document.documentElement.scrollWidth};
+                    }""")
+                    assert controls["allH"]==36 and controls["noneH"]==36,(width,theme,controls)
+                    assert abs(controls["allW"]-controls["noneW"])<1,(width,theme,controls)
+                    assert controls["exportH"]==36 and controls["clearH"]==36,(width,theme,controls)
+                    assert abs(controls["exportW"]-controls["clearW"])<1,(width,theme,controls)
+                    assert controls["listWidth"]>0 and controls["scroll"],(width,theme,controls)
+                    assert controls["outerWidth"]<=width+1,(width,theme,controls)
+                    # All modals keep theme surface/text and remain in viewport.
+                    modal=page.evaluate("""() => {
+                      const overlay=document.getElementById('app-modal');
+                      overlay.classList.remove('hidden');
+                      overlay.setAttribute('aria-hidden','false');
+                      const dialog=document.getElementById('app-modal-panel');
+                      const s=getComputedStyle(dialog),r=dialog.getBoundingClientRect();
+                      const root=getComputedStyle(document.documentElement);
+                      return {background:s.backgroundColor,color:s.color,
+                        token:root.getPropertyValue('--winui-text-primary').trim(),
+                        x:r.x,right:r.right,y:r.y,bottom:r.bottom};
+                    }""")
+                    assert modal["background"] not in ("transparent","rgba(0, 0, 0, 0)"),(width,theme,modal)
+                    assert modal["x"]>=0 and modal["right"]<=width+1,(width,theme,modal)
+                    assert modal["y"]>=0 and modal["bottom"]<=height+1,(width,theme,modal)
+                    page.evaluate("""() => {
+                      document.getElementById('app-modal').classList.add('hidden');
+                      document.getElementById('results-state').classList.add('hidden');
+                      document.getElementById('empty-state').classList.remove('hidden');
+                    }""")
+                    print("PASS",width,height,theme,flush=True)
+                assert not errors,(width,errors)
+                page.close()
+        finally:
+            browser.close()
+
+if __name__=="__main__":
+    run()
