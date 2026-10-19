@@ -7,7 +7,6 @@ import noPreviewImage from "./assets/no-preview.png";
 import exportIcon from "./assets/icons/export.png";
 import zipIcon from "./assets/icons/zip.png";
 import clearIcon from "./assets/icons/clear.png";
-import unmergeIcon from "./assets/icons/unmerge.png";
 import { canUseReversibleMergeActions, formatRemoveConfirm } from "./remove-confirm.js";
 import { createModalController, runConfirmedAction } from "./modal.js";
 import {
@@ -27,6 +26,7 @@ const translations = {
     appTitle: "Veiga's S3CC Splitter",
     langLabel: "Language:",
     pickPackage: "Open Package",
+    pickPackageTip: "Select a .package or .dbc file to open in the Splitter.",
     dropHint: "Select or drag a .package or .dbc here",
     scanList: "Load List",
     modeSplitter: "Splitter",
@@ -147,6 +147,7 @@ const translations = {
     emptyTitle: "Open a package to begin.",
     emptySubtitle: "The list, preview and actions will appear here.",
     previewTitle: "Preview",
+    revealSourcePackage: "Reveal source package in folder",
     previewEmpty: "Select a resource to see the preview.",
     exportSelection: "Export Selection",
     removeFromMerged: "Remove from Merged",
@@ -166,6 +167,7 @@ const translations = {
     appTitle: "Veiga's S3CC Splitter",
     langLabel: "Idioma:",
     pickPackage: "Abrir Package",
+    pickPackageTip: "Selecione um arquivo .package ou .dbc para abrir no Separador.",
     dropHint: "Selecione ou arraste um .package ou .dbc aqui",
     scanList: "Carregar Lista",
     modeSplitter: "Separador",
@@ -256,7 +258,7 @@ const translations = {
       "Other Build": "Outros de Construção",
     },
     searchPlaceholder: "Buscar por nome ou Instance ID",
-    instanceLabel: "Instance",
+    instanceLabel: "Instância",
     duplicateLabel: (count) => `Duplicado ×${count}`,
     duplicateHint: "Conteúdo lógico duplicado verificado. O nome sozinho nunca é usado para esta classificação.",
     tgiConflictLabel: (count) => `Conflito de TGI ×${count}`,
@@ -285,11 +287,12 @@ const translations = {
     modalRemove: "Remover",
     emptyTitle: "Abra um package para começar.",
     emptySubtitle: "A lista, preview e ações aparecem aqui.",
-    previewTitle: "Preview",
+    previewTitle: "Pré-visualização",
+    revealSourcePackage: "Mostrar package de origem na pasta",
     previewEmpty: "Selecione um recurso para ver o preview.",
     exportSelection: "Exportar Seleção",
     removeFromMerged: "Remover do Mesclado",
-    removeSelectedFiles: "Remover arquivos selecionados",
+    removeSelectedFiles: "Remover Arquivos Selecionados",
     removeBusyTitle: "Reconstruindo package mesclado...",
     removeBusyMessage: "Preservando recursos compartilhados e validando o novo package.",
     removeDestinationRequired: "Escolha primeiro uma pasta de destino.",
@@ -305,6 +308,7 @@ const translations = {
     appTitle: "Veiga's S3CC Splitter",
     langLabel: "Idioma:",
     pickPackage: "Abrir Package",
+    pickPackageTip: "Selecciona un archivo .package o .dbc para abrirlo en el Separador.",
     dropHint: "Selecciona o arrastra un .package o .dbc aquí",
     scanList: "Cargar Lista",
     modeSplitter: "Separador",
@@ -395,7 +399,7 @@ const translations = {
       "Other Build": "Otros de Construcción",
     },
     searchPlaceholder: "Buscar por nombre o Instance ID",
-    instanceLabel: "Instance",
+    instanceLabel: "Instancia",
     duplicateLabel: (count) => `Duplicado ×${count}`,
     duplicateHint: "Contenido lógico duplicado verificado. El nombre por sí solo nunca se usa para esta clasificación.",
     tgiConflictLabel: (count) => `Conflicto TGI ×${count}`,
@@ -425,10 +429,11 @@ const translations = {
     emptyTitle: "Abre un package para empezar.",
     emptySubtitle: "La lista, la vista previa y las acciones aparecerán aquí.",
     previewTitle: "Vista previa",
+    revealSourcePackage: "Mostrar package de origen en la carpeta",
     previewEmpty: "Selecciona un recurso para ver la vista previa.",
     exportSelection: "Exportar Selección",
     removeFromMerged: "Eliminar del Fusionado",
-  removeSelectedFiles: "Eliminar archivos seleccionados",
+  removeSelectedFiles: "Eliminar Archivos Seleccionados",
     removeBusyTitle: "Reconstruyendo package fusionado...",
     removeBusyMessage: "Conservando recursos compartidos y validando el nuevo package.",
     removeDestinationRequired: "Elige primero una carpeta de destino.",
@@ -600,18 +605,22 @@ function setLanguage(language) {
 function applyStaticTranslations() {
   if (el.appTitle) el.appTitle.textContent = t("appTitle");
   if (el.langLabel) el.langLabel.textContent = t("langLabel");
-  if (el.pickPackageBtn) el.pickPackageBtn.textContent = t("pickPackage");
-  if (el.dropHint) el.dropHint.textContent = t("dropHint");
+  if (el.pickPackageBtn) {
+    el.pickPackageBtn.textContent = t("pickPackage");
+    el.pickPackageBtn.title = t("pickPackageTip");
+  }
+  // Update only the text, preserving the drag target icon and .package/.dbc list.
+  if (el.dropHint) el.dropHint.querySelector(".drop-hint-title")?.replaceChildren(t("dropHint"));
   if (el.scanBtn) el.scanBtn.textContent = t("scanList");
   if (el.modeSplitterBtn) el.modeSplitterBtn.textContent = t("modeSplitter");
   if (el.modeMergerBtn) el.modeMergerBtn.textContent = t("modeMerger");
   if (el.mergerAddPackagesBtn) el.mergerAddPackagesBtn.textContent = t("mergerAddPackages");
-  if (el.mergerAddHint) el.mergerAddHint.textContent = t("mergerAddHint");
+  if (el.mergerAddHint) el.mergerAddHint.querySelector(".drop-hint-title")?.replaceChildren(t("mergerAddHint"));
   if (el.mergerRunBtn) el.mergerRunBtn.innerHTML = `<img src="${zipIcon}" alt="" class="btn-icon" /><span>${state.mergerBusy ? t("mergerBusy") : t("mergerRun")}</span>`;
   if (el.mergerClearBtn) el.mergerClearBtn.innerHTML = `<img src="${clearIcon}" alt="" class="btn-icon" /><span>${t("mergerClear")}</span>`;
   if (el.mergerTitle) el.mergerTitle.textContent = t("mergerTitle");
   if (el.restoreManifestBtn) {
-    el.restoreManifestBtn.innerHTML = `<img src="${unmergeIcon}" alt="" class="btn-icon" /><span>${t("restoreOriginals")}</span>`;
+    el.restoreManifestBtn.innerHTML = `<i class="fa-solid fa-rotate-left" aria-hidden="true"></i><span>${t("restoreOriginals")}</span>`;
     el.restoreManifestBtn.title = t("restoreOriginals");
     el.restoreManifestBtn.setAttribute("aria-label", t("restoreOriginals"));
   }
@@ -714,16 +723,19 @@ function itemMatchesSearch(item, query) {
     });
 }
 
-let cachedVisibleResources = { source:null, filter:null, search:null, items:[] };
+let cachedVisibleResources = { source: null, filter: null, search: null, items: [] };
 function getVisibleResources() {
-  const filter=state.activeContentFilter, search=state.search;
-  if (cachedVisibleResources.source===state.resources &&
-      cachedVisibleResources.filter===filter && cachedVisibleResources.search===search) {
+  const filter = state.activeContentFilter;
+  const search = state.search;
+  if (cachedVisibleResources.source === state.resources &&
+      cachedVisibleResources.filter === filter &&
+      cachedVisibleResources.search === search) {
     return cachedVisibleResources.items;
   }
-  state.listScrollTop=0;
-  const items=visibleItemsForFilter(state.resources,filter).filter(item=>itemMatchesSearch(item,search));
-  cachedVisibleResources={source:state.resources,filter,search,items};
+  state.listScrollTop = 0;
+  const items = visibleItemsForFilter(state.resources, filter)
+    .filter((item) => itemMatchesSearch(item, search));
+  cachedVisibleResources = { source: state.resources, filter, search, items };
   return items;
 }
 
@@ -869,6 +881,8 @@ function render() {
   el.splitterWorkspace?.classList.toggle("hidden", !splitterMode);
   el.mergerWorkspace?.classList.toggle("hidden", splitterMode);
 
+  // Carregar Lista is available only after a valid source package is chosen.
+  if (el.scanBtn) el.scanBtn.disabled = state.isBusy || !isScannablePackagePath(state.packagePath);
   updatePathLabel(el.packagePath, state.packagePath);
 
   const visibleResources = getVisibleResources();
@@ -911,31 +925,35 @@ function render() {
   renderMergerSources();
 }
 
-let cachedListCounts = {source:null,counts:null};
+let cachedListCounts = { source: null, counts: null };
 function renderList() {
-  const visibleResources=getVisibleResources();
-  const rowHeight=76;
-  const viewportHeight=Math.max(el.resourceList.clientHeight,rowHeight);
-  const maxScrollTop=Math.max(0,visibleResources.length*rowHeight-viewportHeight);
-  const scrollTop=Math.max(0,Math.min(state.listScrollTop||0,maxScrollTop));
-  const firstIndex=Math.max(0,Math.floor(scrollTop/rowHeight)-6);
-  const lastIndex=Math.min(visibleResources.length,Math.ceil((scrollTop+viewportHeight)/rowHeight)+6);
-  const content=document.createElement("div");
-  content.className="resource-virtual-content";
-  content.style.position="relative";
-  content.style.width="100%";
-  content.style.height=`${visibleResources.length*rowHeight}px`;
+  const visibleResources = getVisibleResources();
+  const rowHeight = 76;
+  const viewportHeight = Math.max(el.resourceList.clientHeight, rowHeight);
+  const maxScrollTop = Math.max(0, visibleResources.length * rowHeight - viewportHeight);
+  const scrollTop = Math.max(0, Math.min(state.listScrollTop || 0, maxScrollTop));
+  const firstIndex = Math.max(0, Math.floor(scrollTop / rowHeight) - 6);
+  const lastIndex = Math.min(visibleResources.length,
+    Math.ceil((scrollTop + viewportHeight) / rowHeight) + 6);
+  const content = document.createElement("div");
+  content.className = "resource-virtual-content";
+  content.style.position = "relative";
+  content.style.width = "100%";
+  content.style.height = `${visibleResources.length * rowHeight}px`;
   el.resourceList.classList.add("resource-virtualized");
-  el.resourceList.style.display="block";
-  el.resourceList.style.gap="0";
+  // The historical styles use a flex column; a virtual spacer needs a block scrollport.
+  el.resourceList.style.display = "block";
+  el.resourceList.style.gap = "0";
   el.resourceList.replaceChildren(content);
-  if(el.resourceList.scrollTop!==scrollTop)el.resourceList.scrollTop=scrollTop;
-  if(cachedListCounts.source!==visibleResources)
-    cachedListCounts={source:visibleResources,counts:buildSameNameCounts(visibleResources)};
-  const sameNameCounts=cachedListCounts.counts;
+  if (el.resourceList.scrollTop !== scrollTop) el.resourceList.scrollTop = scrollTop;
 
-  for(let index=firstIndex;index<lastIndex;index++) {
-    const item=visibleResources[index];
+  if (cachedListCounts.source !== visibleResources) {
+    cachedListCounts = { source: visibleResources, counts: buildSameNameCounts(visibleResources) };
+  }
+  const sameNameCounts = cachedListCounts.counts;
+
+  for (let index = firstIndex; index < lastIndex; index++) {
+    const item = visibleResources[index];
     const displayType = getDisplayType(item);
     const displayDetails = getDisplayDetails(item);
 
@@ -986,18 +1004,25 @@ function renderList() {
     pill.className = "type-pill";
     pill.textContent = displayType || "-";
 
-    row.style.position="absolute";
-    row.style.top=`${index*rowHeight+4}px`;
-    row.style.left="8px";
-    row.style.width="calc(100% - 16px)";
-    row.style.height=`${rowHeight-8}px`;
-    row.style.boxSizing="border-box";
-    row.append(checkWrap,button,pill);
+    row.style.position = "absolute";
+    row.style.top = `${index * rowHeight + 4}px`;
+    row.style.left = "8px";
+    row.style.width = "calc(100% - 16px)";
+    row.style.height = `${rowHeight - 8}px`;
+    row.style.boxSizing = "border-box";
+    row.append(checkWrap, button, pill);
     content.appendChild(row);
   }
 }
 
 function renderPreview() {
+  const canRevealSource = Boolean(state.preview && state.packagePath);
+  el.previewThumb.classList.toggle("reveal-source", canRevealSource);
+  el.previewThumb.draggable = false;
+  el.previewThumb.tabIndex = canRevealSource ? 0 : -1;
+  el.previewThumb.setAttribute("role", canRevealSource ? "button" : "presentation");
+  el.previewThumb.setAttribute("aria-label", canRevealSource ? t("revealSourcePackage") : "");
+  el.previewThumb.title = canRevealSource ? state.packagePath : "";
   if (!state.preview) {
     el.previewThumb.src = noPreviewImage;
     el.previewThumb.classList.remove("hidden");
@@ -1067,9 +1092,13 @@ function handleSelectionClick(key, event) {
   render();
 }
 
+function isScannablePackagePath(path) {
+  return /\.(?:package|dbc)$/i.test(String(path || "").trim());
+}
+
 async function pickPackage() {
   const result = await open({ multiple: false, filters: [{ name: "Package", extensions: ["package", "dbc"] }] });
-  if (typeof result === "string") {
+  if (typeof result === "string" && isScannablePackagePath(result)) {
     state.packagePath = result;
     state.resources = [];
     state.selectedKeys = [];
@@ -1096,7 +1125,7 @@ function parentFolderOfPath(path) {
 }
 
 async function scanPackage() {
-  if (!state.packagePath) return;
+  if (state.isBusy || !isScannablePackagePath(state.packagePath)) return;
 
   setBusy(t("busyReadTitle"), t("busyReadMessage"));
 
@@ -1135,6 +1164,16 @@ async function scanPackage() {
     });
   } finally {
     clearBusy();
+  }
+}
+
+async function revealPreviewSource() {
+  if (!state.preview || !state.packagePath) return;
+  try {
+    // A resource is embedded; reveal its physical source package, selected in Explorer.
+    await revealItemInDir(state.packagePath);
+  } catch (error) {
+    console.error(error);
   }
 }
 
@@ -1507,19 +1546,29 @@ function bindDragAndDrop() {
   });
 }
 function setupEvents() {
-  let listRenderQueued=false;
-  el.resourceList.addEventListener("scroll",()=>{
-    state.listScrollTop=el.resourceList.scrollTop;
-    if(listRenderQueued)return;
-    listRenderQueued=true;
-    requestAnimationFrame(()=>{listRenderQueued=false;renderList();});
-  },{passive:true});
+  let listRenderQueued = false;
+  el.resourceList.addEventListener("scroll", () => {
+    state.listScrollTop = el.resourceList.scrollTop;
+    if (listRenderQueued) return;
+    listRenderQueued = true;
+    requestAnimationFrame(() => {
+      listRenderQueued = false;
+      renderList();
+    });
+  }, { passive: true });
   el.modeSplitterBtn?.addEventListener("click", () => setMode("splitter"));
   el.modeMergerBtn?.addEventListener("click", () => setMode("merger"));
   el.mergerAddPackagesBtn?.addEventListener("click", pickMergerPackages);
   el.mergerRunBtn?.addEventListener("click", runMerger);
   el.mergerClearBtn?.addEventListener("click", clearMerger);
   el.restoreManifestBtn?.addEventListener("click", restoreManifestPackages);
+  el.previewThumb.addEventListener("click", () => void revealPreviewSource());
+  el.previewThumb.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (!state.preview || !state.packagePath) return;
+    event.preventDefault();
+    void revealPreviewSource();
+  });
 
   el.pickPackageBtn.addEventListener("click", pickPackage);
   el.scanBtn.addEventListener("click", scanPackage);
