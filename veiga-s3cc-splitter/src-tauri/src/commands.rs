@@ -6501,7 +6501,7 @@ pub fn scan_package_resources(app: AppHandle, payload: ScanPayload) -> Result<Sc
             manifest_package_count,
             relations,
         })
-    })
+    }))
     .map_err(|_| "Falha ao carregar a lista de recursos deste package.".to_string())?
 }
 
