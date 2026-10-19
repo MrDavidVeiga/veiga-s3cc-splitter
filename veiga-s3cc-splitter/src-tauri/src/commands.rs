@@ -6501,7 +6501,7 @@ fn scan_package_resources_inner(
             // Unit tests do not own a Tauri AppHandle; calculate this result
             // synchronously so they still cover relation-analysis behavior.
             build_resource_relations(&package, &name_map, &items)
-        };;
+        };
         check_cancelled()?;
         emit_package_progress(
             app, started, "Ready", "Resource list ready.", 5, 5, package.files.len(), mmap.len(),
