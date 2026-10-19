@@ -1,5 +1,5 @@
 name: Splitter WinUI 3 validation
-# Final theme and localization pass: icon-only selector, EA App red/white palette, and regression-tested translations.
+# Validate the visible localized theme label, Manager-matched EA App blue accent, window controls, and regressions.
 
 on:
   push:
@@ -7,6 +7,12 @@ on:
       - "build/v2.2.0-winui3-optimized-theme-20261018"
     paths:
       - ".github/workflows/splitter-winui3-validation.yml"
+      - ".github/workflows/portable.yml"
+      - "veiga-s3cc-splitter/**"
+      - "sims3-core/**"
+      - "sims3-pack/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
   workflow_dispatch:
 
 permissions:
