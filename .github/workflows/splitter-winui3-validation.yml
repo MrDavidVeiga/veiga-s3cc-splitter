@@ -104,10 +104,10 @@ jobs:
           Copy-Item -LiteralPath $exe.FullName -Destination 'portable/Veigas_S3CC_Splitter_WinUI3_Windows_x64.exe'
           $sha = (Get-FileHash -Algorithm SHA256 'portable/Veigas_S3CC_Splitter_WinUI3_Windows_x64.exe').Hash
           "Commit: ${{ github.sha }}" | Set-Content -Path 'portable/BUILD_INFO.txt'
-          "Version: 2.2.0 WinUI 3 migration beta" | Add-Content -Path 'portable/BUILD_INFO.txt'
+          "Version: 2.0.0 | Beta 3 | WinUI 3" | Add-Content -Path 'portable/BUILD_INFO.txt'
           "$sha  Veigas_S3CC_Splitter_WinUI3_Windows_x64.exe" | Set-Content -Path 'portable/SHA256SUMS.txt'
       - uses: actions/upload-artifact@v4
         with:
-          name: Veigas_S3CC_Splitter_v2.2.0_WinUI3_Windows_x64
+          name: Veigas_S3CC_Splitter_v2.0.0_Beta3_WinUI3_Windows_x64
           path: portable/
           retention-days: 14
