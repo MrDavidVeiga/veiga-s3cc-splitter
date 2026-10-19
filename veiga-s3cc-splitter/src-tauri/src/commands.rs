@@ -2858,6 +2858,7 @@ fn thumbnail_from_cache_package(path: &Path, instance: u64) -> Option<String> {
     }))
     .ok()
     .flatten()
+}
 
 fn external_thumbnail_base64_from_dir(
     thumbnails_dir: &Path,
