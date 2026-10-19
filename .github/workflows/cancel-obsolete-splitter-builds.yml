@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   cancel-obsolete-runs:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-slim
     steps:
       - name: Cancel duplicate runs while preserving the final source build and validation
         env:
