@@ -15,11 +15,11 @@ regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["image-png"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 thiserror = "2"
-zip = "0.6"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 memmap = "0.7"
 walkdir = "2.5"
 num-traits = "0.2"
@@ -30,4 +30,4 @@ sims3-core = { path = "../../sims3-core" }
 sims3-pack = { path = "../../sims3-pack" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "=0.61.3", features = ["UI", "UI_ViewManagement"] }
+windows = { version = "=0.61.3", features = ["UI", "UI_ViewManagement", "Win32_UI_Shell"] }
