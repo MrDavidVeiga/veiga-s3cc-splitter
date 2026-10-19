@@ -1441,3 +1441,24 @@ body {
     display: none;
   }
 }
+
+/* Keep same-name relation beside the resource title, inside the row band. */
+body.release-v1 .resource-heading {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  width:100%;
+  min-width:0;
+}
+body.release-v1 .resource-heading .resource-name {
+  flex:1 1 auto;
+  min-width:0;
+}
+body.release-v1 .resource-heading .same-name-badge {
+  flex:0 0 auto;
+  margin:0;
+  padding:2px 6px;
+  white-space:nowrap;
+  font-size:.66rem;
+  line-height:1.2;
+}
