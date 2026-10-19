@@ -789,6 +789,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
+name = "byteorder-lite"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f1fe948ff07f4bd06c30984e69f5b4899c516a3ef74f34df92a2df2ab535495"
+
+[[package]]
 name = "bytes"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1651,7 +1657,7 @@ dependencies = [
  "glow",
  "glutin",
  "glutin-winit",
- "image",
+ "image 0.24.9",
  "js-sys",
  "log",
  "objc",
@@ -2833,7 +2839,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3e795dff5605e0f04bff85ca41b51a96b83e80b281e96231bcaaf1ac35103371"
 dependencies = [
  "byteorder",
- "png",
+ "png 0.17.16",
 ]
 
 [[package]]
@@ -2971,7 +2977,20 @@ dependencies = [
  "byteorder",
  "color_quant",
  "num-traits",
- "png",
+ "png 0.17.16",
+]
+
+[[package]]
+name = "image"
+version = "0.25.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104"
+dependencies = [
+ "bytemuck",
+ "byteorder-lite",
+ "moxcms",
+ "num-traits",
+ "png 0.18.1",
 ]
 
 [[package]]
@@ -3536,6 +3555,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "moxcms"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb85c154ba489f01b25c0d36ae69a87e4a1c73a72631fc6c0eb6dde34a73e44b"
+dependencies = [
+ "num-traits",
+ "pxfm",
+]
+
+[[package]]
 name = "muda"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3550,7 +3579,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-foundation",
  "once_cell",
- "png",
+ "png 0.17.16",
  "serde",
  "thiserror 2.0.18",
  "windows-sys 0.60.2",
@@ -4420,6 +4449,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "png"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60769b8b31b2a9f263dae2776c37b1b28ae246943cf719eb6946a1db05128a61"
+dependencies = [
+ "bitflags 2.11.0",
+ "crc32fast",
+ "fdeflate",
+ "flate2",
+ "miniz_oxide",
+]
+
+[[package]]
 name = "polling"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4583,6 +4625,12 @@ name = "profiling"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eb8486b569e12e2c32ad3e204dbaba5e4b5b216e9367044f25f1dba42341773"
+
+[[package]]
+name = "pxfm"
+version = "0.1.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "quick-error"
@@ -5893,6 +5941,7 @@ dependencies = [
  "gtk",
  "heck 0.5.0",
  "http",
+ "image 0.25.10",
  "jni",
  "libc",
  "log",
@@ -5960,7 +6009,7 @@ dependencies = [
  "ico",
  "json-patch",
  "plist",
- "png",
+ "png 0.17.16",
  "proc-macro2 1.0.106",
  "quote 1.0.45",
  "semver 1.0.27",
@@ -6293,7 +6342,7 @@ dependencies = [
  "arrayvec",
  "bytemuck",
  "cfg-if",
- "png",
+ "png 0.17.16",
  "tiny-skia-path 0.8.4",
 ]
 
@@ -6577,7 +6626,7 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-foundation",
  "once_cell",
- "png",
+ "png 0.17.16",
  "serde",
  "thiserror 2.0.18",
  "windows-sys 0.60.2",
@@ -6763,9 +6812,8 @@ checksum = "f1bddf1187be692e79c5ffeab891132dfb0f236ed36a43c7ed39f1165ee20191"
 name = "veiga-s3cc-splitter"
 version = "2.0.0"
 dependencies = [
- "windows 0.61.3",
  "base64 0.22.1",
- "memmap 0.7.0",
+  "memmap 0.7.0",
  "num-traits",
  "rayon",
  "regex",
@@ -6779,6 +6827,7 @@ dependencies = [
  "tauri-plugin-opener",
  "thiserror 2.0.18",
  "walkdir",
+ "windows 0.61.3",
  "zip",
 ]
 
@@ -8804,3 +8853,4 @@ dependencies = [
  "syn 2.0.117",
  "winnow 0.7.15",
 ]
+
