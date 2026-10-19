@@ -3,8 +3,21 @@ on:
   push:
     branches:
       - feature/winui3-posepack-poselist-v2.4.0
+      - feature/winui3-posepack-poselist-v2.2.0
       - build/v2.2.0
+      - ui/manager-theme-icons-winui3-v2.2.0
+    paths:
+      - ".github/workflows/splitter-winui3-validation.yml"
+      - "veiga-s3cc-splitter/**"
+      - "sims3-core/**"
+      - "sims3-pack/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
