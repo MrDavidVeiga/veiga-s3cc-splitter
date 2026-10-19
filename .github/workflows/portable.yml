@@ -196,7 +196,7 @@ jobs:
         run: |
           $out = Join-Path $PWD "portable/${{ matrix.artifact_name }}"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          Copy-Item "${{ steps.locate_windows.outputs.artifact_path }}" (Join-Path $out "${{ matrix.binary_name }}")
+          Copy-Item "${{ steps.locate_windows.outputs.artifact_path }}" (Join-Path $out "Veiga's S3CC Splitter.exe")
           Copy-Item "README.txt" (Join-Path $out "README.txt")
           Copy-Item "LICENSE.txt" (Join-Path $out "LICENSE.txt")
 
