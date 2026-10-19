@@ -70,12 +70,16 @@ test("Package drop hint matches accepted file types in all languages",()=>{
  }
 });
 
-test("Theme selector geometry and EA App accent match Manager",()=>{
- assert.match(css,/\.topbar \.theme-button\s*\{[\s\S]*?width:32px;[\s\S]*?display:grid;[\s\S]*?place-items:center;/);
- assert.match(css,/#theme-button-label\s*\{\s*display:none;/);
- assert.match(engine,/const EA_APP_ACCENT = "#FF4747";/);
- assert.match(foundation,/\.ea-app-swatch\s*\{\s*background:linear-gradient\(90deg,#181B2A 0 58%,#FF4747 58% 100%\);\s*\}/);
- assert.match(foundation,/\.theme-check\s*\{[^}]*color:var\(--accent\)/);
- assert.match(css,/html\[data-theme-choice="ea-app"\] body\.release-v1 \.theme-button\s*\{[^}]*color:#FFFFFF/s);
- assert.match(css,/html\[data-theme-choice="ea-app"\] body\.release-v1 \.theme-button:hover[\s\S]*?background:#343647/);
+test("Theme selector displays the localized label and matches Manager's EA App palette",()=>{
+ assert.match(markup,/id="theme-button-label">Theme<\\/span>/);
+ assert.match(css,/Packer-compatible icon \\+ localized label in theme button/);
+ assert.match(css,/html\\[data-theme-choice\\] body\\.release-v1 \\.topbar \\.theme-button\\s*\\{[\\s\\S]*?width:auto;[\\s\\S]*?display:inline-flex;[\\s\\S]*?gap:7px;/);
+ assert.match(css,/html\\[data-theme-choice\\] body\\.release-v1 \\.topbar #theme-button-label\\s*\\{[\\s\\S]*?white-space:nowrap;/);
+ assert.match(engine,/const label = lang === "pt" \\? "Tema" : lang === "es" \\? "Tema" : "Theme";/);
+ assert.match(engine,/const EA_APP_ACCENT = "#276AFC";/);
+ assert.match(engine,/if \\(choice==="ea-app"\\) return \\{\\s*\\.\\.\\.accentRamp\\(EA_APP_ACCENT,"dark",false\\),\\s*light1: "#3978FC",\\s*dark1: "#215BD8"\\s*\\};/);
+ assert.match(foundation,/\\.ea-app-swatch\\s*\\{[^}]*#276AFC/s);
+ assert.match(foundation,/\\.theme-check\\s*\\{[^}]*color:var\\(--accent\\)/);
+ assert.match(css,/html\\[data-theme-choice="ea-app"\\] body\\.release-v1 \\.theme-button\\s*\\{[^}]*color:#FFFFFF/s);
+ assert.match(css,/html\\[data-theme-choice="ea-app"\\] body\\.release-v1 \\.theme-button:hover[\\s\\S]*?background:#343647/);
 });
