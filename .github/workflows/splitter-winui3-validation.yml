@@ -4,7 +4,7 @@ name: Splitter WinUI 3 validation
 on:
   push:
     branches:
-      - ci/build-v2.4.0-winui3-optimized-theme-20261018
+      - "build/v2.2.0-winui3-optimized-theme-20261018"
     paths:
       - ".github/workflows/splitter-winui3-validation.yml"
   workflow_dispatch:
@@ -55,7 +55,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: Splitter-v2.4.0-WinUI3-visual-audit
+          name: Splitter-v2.2.0-WinUI3-visual-audit
           path: veiga-s3cc-splitter/winui-smoke-previews/
           if-no-files-found: ignore
           retention-days: 14
