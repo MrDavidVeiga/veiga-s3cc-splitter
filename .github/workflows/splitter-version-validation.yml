@@ -5,6 +5,8 @@ on:
     branches:
       - "ui/winui3-manager-themes-v2.0.0"
       - "ui/winui3-manager-themes-v2.1.0"
+      - "build/v2.0.0"
+      - "build/v2.1.0"
     paths:
       - ".github/workflows/splitter-version-validation.yml"
       - "veiga-s3cc-splitter/**"
