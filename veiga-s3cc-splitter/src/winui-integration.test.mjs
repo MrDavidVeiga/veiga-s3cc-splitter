@@ -6,6 +6,7 @@ import vm from "node:vm";
 const source=readFileSync(new URL("./app.js",import.meta.url),"utf8");
 const markup=readFileSync(new URL("../index.html",import.meta.url),"utf8");
 const css=readFileSync(new URL("./winui-splitter.css",import.meta.url),"utf8");
+const foundation=readFileSync(new URL("./winui-foundation.css",import.meta.url),"utf8");
 const engine=readFileSync(new URL("./winui-theme.js",import.meta.url),"utf8");
 const backend=readFileSync(new URL("../src-tauri/src/lib.rs",import.meta.url),"utf8");
 const begin=source.indexOf("const translations = {");
@@ -73,4 +74,12 @@ test("Open Package tooltip matches accepted file types in all languages",()=>{
  assert.match(source,/el\.dropHint\.querySelector\("\.drop-hint-title"\)\?\.replaceChildren\(t\("dropHint"\)\)/);
  assert.match(source,/el\.mergerAddHint\.querySelector\("\.drop-hint-title"\)\?\.replaceChildren\(t\("mergerAddHint"\)\)/);
  assert.doesNotMatch(source,/el\.(?:dropHint|mergerAddHint)\.textContent\s*=/);
+});
+
+test("Theme selector geometry and EA App accent match Manager",()=>{
+ assert.match(css,/\.topbar \.theme-button\s*\{[\s\S]*?width:32px;[\s\S]*?display:grid;[\s\S]*?place-items:center;/);
+ assert.match(css,/#theme-button-label\s*\{\s*display:none;/);
+ assert.match(engine,/const EA_APP_ACCENT = "#FF4747";/);
+ assert.match(foundation,/\.ea-app-swatch\s*\{\s*background:linear-gradient\(90deg,#181B2A 0 58%,#FF4747 58% 100%\);\s*\}/);
+ assert.match(foundation,/\.theme-check\s*\{[^}]*color:var\(--accent\)/);
 });
