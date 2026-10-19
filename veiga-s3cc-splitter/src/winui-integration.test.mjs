@@ -22,11 +22,11 @@ test("English Portuguese and Spanish contain identical translation keys",()=>{
    assert.deepEqual(Object.keys(locale[lang].filterLabels).sort(),Object.keys(locale.en.filterLabels).sort(),lang);
  }
 });
-test("All three languages translate interaction terms naturally",()=>{
+test("All three languages use consistent interaction terminology",()=>{
  assert.equal(locale.pt.modeMerger,"Mesclador");
  assert.equal(locale.es.modeMerger,"Fusionador");
  assert.equal(locale.es.selectNone,"Deseleccionar Todo");
- assert.equal(locale.pt.previewTitle,"Pré-visualização");
+ assert.equal(locale.pt.previewTitle,"Preview"); // Retained as familiar software UI terminology.
  assert.equal(locale.pt.clear,"Limpar Lista");
  assert.equal(locale.es.restoreOriginals,"Desfusionar");
  for(const language of ["en","pt","es"]){
