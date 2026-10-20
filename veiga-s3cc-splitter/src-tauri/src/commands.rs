@@ -3645,7 +3645,7 @@ fn scan_existing_instances_from_bytes(
     let mut matched_indices: HashSet<usize> = HashSet::new();
     for window in data.windows(8) {
         let instance = u64::from_le_bytes(window.try_into().expect("8-byte window"));
-        for &idx in package.entries_for_instance(instance) {
+        for &idx in package.entries_for_instance(instance).iter() {
             if let Some(entry) = package.files.get(idx) {
                 if allowed.contains(&entry.resource_type) {
                     matched_indices.insert(idx);
