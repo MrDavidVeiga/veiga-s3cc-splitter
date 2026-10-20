@@ -16,13 +16,37 @@ test("Manager theme swatches show two tones for all seven options",()=>{
  }
  assert.match(theme,/applyAccent\(resolved\);\s*applyThemeSwatches\(\)/);
 });
-test("Language abbreviation and Tema have identical 14px typography",()=>{
- assert.match(css,/#theme-button-label,\s*html\[data-theme-choice\] body\.release-v1 \.topbar #lang-current-code/);
- assert.match(css,/font-size:14px;\s*line-height:20px;\s*font-weight:600/);
+test("Idioma, PT/EN/ES match only Tema SIZE; original weights are unchanged",()=>{
+ assert.ok(css.includes("#theme-button-label {"));
+ assert.ok(css.includes("#lang-label,"));
+ const start=css.lastIndexOf("body.release-v1 .topbar #lang-label,");
+ const end=css.indexOf("}",start);
+ const rule=css.slice(start,end);
+ assert.ok(rule.includes("font-size:14px;"));
+ assert.doesNotMatch(rule,/font-weight/);
 });
-test("Only a real resource thumbnail is displayed; no stock placeholder",()=>{
- assert.doesNotMatch(app,/noPreviewImage/);
- assert.match(app,/previewUnavailable/);
- assert.match(app,/previewThumb\.removeAttribute\("src"\)/);
- assert.match(app,/thumbBase64/);
+
+test("Original llama stays as fallback while real package thumbnails win",()=>{
+ assert.ok(app.includes('import noPreviewImage from "./assets/no-preview.png"'));
+ assert.ok(app.includes('if (state.preview.thumbBase64)'));
+ assert.ok(app.includes('data:image/png;base64'));
+ assert.ok(app.includes('el.previewThumb.src = noPreviewImage;'));
+ assert.equal(app.split('el.previewThumb.src = noPreviewImage;').length-1,2);
+});
+
+
+test("Centered cardless busy status and animated indeterminate progress",()=>{
+ assert.ok(css.includes("#splitter-workspace #busy-state:not(.hidden)"));
+ assert.ok(css.includes("align-items:center; justify-content:center"));
+ assert.ok(css.includes("#splitter-workspace #busy-state .progress-card"));
+ assert.ok(css.includes("background:transparent; backdrop-filter:none; text-align:center;"));
+ assert.ok(css.includes("animation:splitter-busy-marquee"));
+ assert.ok(css.includes("@keyframes splitter-busy-marquee"));
+ assert.ok(html.includes('role="progressbar"'));
+});
+test("Equal compact modal buttons for OK, Cancel and Remove",()=>{
+ assert.ok(css.includes("#app-modal .app-modal-actions"));
+ assert.ok(css.includes("flex:0 0 120px"));
+ assert.ok(css.includes("justify-content:center"));
+ assert.ok(html.includes('id="app-modal-cancel"')&&html.includes('id="app-modal-primary"'));
 });
