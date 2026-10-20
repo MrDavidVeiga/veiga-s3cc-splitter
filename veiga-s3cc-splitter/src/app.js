@@ -1484,6 +1484,38 @@ async function removeSelectionFromMerged() {
   }
 }
 
+async function exportSelection() {
+  if (!state.packagePath || !state.selectedKeys.length) return;
+
+  const destinationFolder = await chooseOutputFolder();
+  if (!destinationFolder) return;
+
+  const payload = {
+    packagePath: state.packagePath,
+    destinationFolder,
+    selectedKeys: state.selectedKeys,
+    includeThumbnails: el.optThumbs.checked,
+    enableCompression: el.optCompression.checked,
+    createClonePackage: el.optClone.checked,
+  };
+
+  setBusy(t("busyExportTitle"), t("busyExportMessage"));
+
+  try {
+    const outputPath = await invoke("export_selected_resources", { payload });
+    await revealItemInDir(outputPath);
+  } catch (error) {
+    console.error(error);
+    await appModal.showError({
+      titleText: t("modalErrorTitle"),
+      messageText: `${t("splittError")}\n${error}`,
+      primaryLabel: t("modalClose"),
+    });
+  } finally {
+    clearBusy();
+  }
+}
+
 function clearAll() {
   state.packagePath = "";
   state.resources = [];
