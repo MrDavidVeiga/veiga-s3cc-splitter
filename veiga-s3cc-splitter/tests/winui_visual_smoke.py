@@ -87,10 +87,20 @@ def run():
                         iconWidth:document.querySelector('.winui-app-icon').getBoundingClientRect().width,
                         socialWidths:links.map(e=>e.getBoundingClientRect().width),
                         extraWidth:document.documentElement.scrollWidth>innerWidth+1,
-                        buttonColor:getComputedStyle(document.querySelector('#pick-package-btn')).color
+                        buttonColor:getComputedStyle(document.querySelector('#pick-package-btn')).color,
+                        themeLabelSize:getComputedStyle(document.querySelector('#theme-button-label')).fontSize,
+                        languageCodeSize:getComputedStyle(document.querySelector('#lang-current-code')).fontSize,
+                        samples:Array.from(document.querySelectorAll('.theme-option .theme-swatch'))
+                          .map(s=>getComputedStyle(s).backgroundImage)
                       };
                     }""")
                     assert state["theme"]==theme,(width,theme,state)
+                    assert state["themeLabelSize"]=="14px" and state["languageCodeSize"]=="14px",(width,theme,state)
+                    assert len(state["samples"])==7 and all(s.startswith("linear-gradient(") for s in state["samples"]),(width,theme,state)
+                    if width==1280 and theme in ("veiga-dark","mean-girls"):
+                        page.locator("#theme-button").click()
+                        page.screenshot(path=str(image_dir / f"theme-menu-{width}-{theme}.png"))
+                        page.locator("#theme-button").click()
                     assert state["foreground"].lower()==FOREGROUNDS[theme],(width,theme,state)
                     assert state["customForeground"]=="",(width,theme,state)
                     for key in ["ctaHeight","loadHeight"]:
