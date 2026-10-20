@@ -131,10 +131,18 @@
             </div>
 
 <div class="results-grid">
+                <div class="results-list-column">
   <section class="list-card">
     <div class="list-header"><span></span></div>
     <div id="resource-list" class="resource-list"></div>
   </section>
+                  <div class="footer-actions results-footer-actions results-footer-actions--three">
+              <button id="export-btn" class="primary-btn">Export selection</button>
+              <button id="remove-merged-btn" class="danger-btn">Remove from merged</button>
+              <button id="clear-btn" class="secondary-btn">Clear</button>
+              <button id="zip-btn" class="primary-btn hidden-action" aria-hidden="true" tabindex="-1">Compress selection</button>
+            </div>
+                </div>
               <aside class="preview-card">
                 <div class="preview-title">Preview</div>
                 <div class="preview-thumb-wrap">
@@ -146,12 +154,7 @@
                 <div id="preview-key" class="preview-path"></div>
               </aside>
             </div>
-            <div class="footer-actions">
-              <button id="export-btn" class="primary-btn">Export selection</button>
-              <button id="remove-merged-btn" class="danger-btn">Remove from merged</button>
-              <button id="clear-btn" class="secondary-btn">Clear</button>
-              <button id="zip-btn" class="primary-btn hidden-action" aria-hidden="true" tabindex="-1">Compress selection</button>
-            </div>
+            
           </div>
         </section>
       </main>
