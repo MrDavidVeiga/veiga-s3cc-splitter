@@ -3348,10 +3348,15 @@ fn same_instance_companions(
         _ => {}
     }
 
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    // The DBPF instance index avoids rescanning every file for each resource
+    // in the generic removal graph (quadratic on large CC collections).
     package
-        .files
+        .entries_for_instance(parts.instance)
         .iter()
-        .filter(|entry| entry.instance == parts.instance)
+        .filter_map(|&index| package.files.get(index))
         .filter(|entry| {
             !(entry.resource_type == parts.resource_type
                 && entry.resource_group == parts.resource_group)
@@ -3369,10 +3374,13 @@ fn add_key(
     resolved: &mut HashSet<String>,
     queue: &mut VecDeque<ResourceKeyParts>,
     parts: ResourceKeyParts,
-) {
+) -> bool {
     let key = key_string_from_parts(parts);
     if resolved.insert(key) {
         queue.push_back(parts);
+        true
+    } else {
+        false
     }
 }
 
@@ -3383,7 +3391,10 @@ fn enqueue_key(
     queue: &mut VecDeque<ResourceKeyParts>,
     parts: ResourceKeyParts,
 ) {
-    add_key(resolved, queue, parts);
+    if !add_key(resolved, queue, parts) {
+        // Avoid repeatedly scanning companion metadata for the same key.
+        return;
+    }
     for companion in same_instance_companions(package, parts, include_thumbnails) {
         add_key(resolved, queue, companion);
     }
@@ -3622,29 +3633,43 @@ fn scan_existing_instances_from_bytes(
     data: &[u8],
     allowed: &[u32],
 ) -> Vec<ResourceKeyParts> {
-    let allowed_set: HashSet<u32> = allowed.iter().copied().collect();
-    let mut found = Vec::new();
-    let mut seen: HashSet<ResourceKeyParts> = HashSet::new();
+    if data.len() < 8 || allowed.is_empty() {
+        return Vec::new();
+    }
 
-    for entry in package
+    // Previous implementation searched every byte of the payload separately
+    // for each resource in the merged: O(resources * payload_length).
+    // Look up each 8-byte window in the indexed DBPF instances instead.
+    // Only actual matches are stored, so random binary data cannot trigger
+    // an unbounded allocation.
+    let mut matched_indices: HashSet<usize> = HashSet::new();
+    for window in data.windows(8) {
+        let instance = u64::from_le_bytes(window.try_into().expect("8-byte window"));
+        for &idx in package.entries_for_instance(instance) {
+            if let Some(entry) = package.files.get(idx) {
+                if allowed.contains(&entry.resource_type) {
+                    matched_indices.insert(idx);
+                }
+            }
+        }
+    }
+
+    // Preserve the original resource ordering and duplicate-TGI handling.
+    let mut seen: HashSet<ResourceKeyParts> = HashSet::new();
+    package
         .files
         .iter()
-        .filter(|e| allowed_set.contains(&e.resource_type))
-    {
-        let le = entry.instance.to_le_bytes();
-        if data.windows(8).any(|w| w == le) {
+        .enumerate()
+        .filter(|(idx, _)| matched_indices.contains(idx))
+        .filter_map(|(_, entry)| {
             let parts = ResourceKeyParts {
                 resource_type: entry.resource_type,
                 resource_group: entry.resource_group,
                 instance: entry.instance,
             };
-            if seen.insert(parts) {
-                found.push(parts);
-            }
-        }
-    }
-
-    found
+            seen.insert(parts).then_some(parts)
+        })
+        .collect()
 }
 
 fn objd_direct_refs(package: &DBPF<'_>, objd: ResourceKeyParts) -> Vec<ResourceKeyParts> {
@@ -4515,18 +4540,13 @@ fn build_remove_selection_plan(
     let (selected_resources, shared_preserved, resources_to_remove) =
         removal_plan_sets(package, selected_keys, name_map)?;
 
+    // The generic removal closure is partitioned into removable and shared
+    // preserved resources. Their disjoint union is the exact candidate set;
+    // recalculating the entire dependency graph here doubled planning time.
     let candidate_resources = if manifest_backed {
         selected_resources.len()
     } else {
-        let selected_compound: HashSet<String> = selected_keys.iter().cloned().collect();
-        expand_selection_for_export(package, &selected_compound, true, name_map)?
-            .into_iter()
-            .filter(|key| {
-                parse_key(key)
-                    .map(|parts| parts.resource_type != TYPE_KEY)
-                    .unwrap_or(false)
-            })
-            .count()
+        resources_to_remove.len() + shared_preserved.len()
     };
     let selected_resources_preserved = selected_resources.intersection(&shared_preserved).count();
 
@@ -6676,6 +6696,7 @@ fn analyze_remove_selection_inner(
     payload: RemoveSelectionPayload,
 ) -> Result<RemoveSelectionPlan, String> {
     let started = Instant::now();
+    trace_removal_stage("Análise iniciada", started, 2);
     emit_package_progress(
         app, started, "Analisando seleção",
         "Abrindo o merged sem bloquear a interface.",
@@ -6684,13 +6705,23 @@ fn analyze_remove_selection_inner(
     validate_package_extension(&payload.package_path)?;
     let mmap = open_package(&payload.package_path)?;
     let package = parse_package(&mmap)?;
+    trace_removal_stage("Leitura de nomes iniciada", started, 35);
     emit_package_progress(
-        app, started, "Analisando dependências",
-        "Lendo nomes e identificando recursos compartilhados.",
+        app, started, "Lendo nomes",
+        "Identificando metadados antes da análise de dependências.",
         35, 100, package.files.len(), mmap.len(),
     );
     let name_map = removal_name_map(&package, &payload.selected_keys);
+    trace_removal_stage("Leitura de nomes concluída", started, 45);
+    emit_package_progress(
+        app, started, "Analisando dependências",
+        "Verificando recursos compartilhados e seus vínculos.",
+        45, 100, package.files.len(), mmap.len(),
+    );
+    trace_removal_stage("Grafo de dependências iniciado", started, 45);
     let plan = build_remove_selection_plan(&package, &payload.selected_keys, &name_map)?;
+    trace_removal_stage("Grafo de dependências concluído", started, 95);
+    trace_removal_stage("Análise concluída", started, 100);
     emit_package_progress(
         app, started, "Análise concluída",
         "Plano de remoção pronto para confirmação.",
