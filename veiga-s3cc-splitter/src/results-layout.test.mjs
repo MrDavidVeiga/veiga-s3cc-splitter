@@ -20,7 +20,7 @@ test("List-only actions appear below the CC list, not below the preview", () => 
     const matches = [...results.matchAll(new RegExp('id="' + id + '"', "g"))];
     assert.equal(matches.length, 1, id);
     assert.ok(matches[0].index > footer && matches[0].index < preview, id);
-    assert.ok(source.includes('"' + id + '"'), "existing event binding " + id);
+    assert.ok(source.includes('"#' + id + '"'), "existing event binding " + id);
   }
   if (html.includes('id="restore-manifest-btn"')) {
     const undo = results.indexOf('id="restore-manifest-btn"');
