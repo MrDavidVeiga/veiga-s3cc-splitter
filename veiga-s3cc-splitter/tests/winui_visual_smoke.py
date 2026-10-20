@@ -151,6 +151,12 @@ def run():
                         list.appendChild(row);
                       }
                     }""")
+                    # A valid merged shows all four actions. Force only CSS
+                    # visibility in this browser-only geometry fixture.
+                    page.evaluate("""() => {
+                      document.getElementById('remove-merged-btn').classList.remove('hidden');
+                      document.getElementById('restore-manifest-btn').classList.remove('hidden');
+                    }""")
                     controls=page.evaluate("""() => {
                       const rect=id=>document.getElementById(id).getBoundingClientRect();
                       const list=document.getElementById('resource-list');
@@ -195,6 +201,7 @@ def run():
                       const footer=document.querySelector('.results-footer-actions').getBoundingClientRect();
                       return {buttons,listWidth:list.width,footerWidth:footer.width,footerTop:footer.top};
                     }""")
+                    assert len(positions["buttons"])==4,(width,theme,positions)
                     if positions["listWidth"]>=520:
                         assert max(b["top"] for b in positions["buttons"])-min(b["top"] for b in positions["buttons"])<2,(width,theme,positions)
                     assert positions["footerWidth"]<=positions["listWidth"]+1,(width,theme,positions)
