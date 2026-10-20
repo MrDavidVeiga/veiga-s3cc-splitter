@@ -557,7 +557,8 @@ fn expand_compound_keys(keys: &HashSet<String>) -> HashSet<String> {
 }
 
 fn normalized_tone_name(name: &str) -> String {
-    let re = Regex::new(r"(?i)_custom_\d+$").unwrap();
+    static TONE_RE: OnceLock<Regex> = OnceLock::new();
+    let re = TONE_RE.get_or_init(|| Regex::new(r"(?i)_custom_\d+$").unwrap());
     re.replace(name.trim(), "").to_string()
 }
 
@@ -3262,7 +3263,10 @@ fn textual_key_refs_from_text(
     text: &str,
     allowed: &[u32],
 ) -> Vec<ResourceKeyParts> {
-    let re = Regex::new(r"(?i)key:([0-9a-f]{8}):([0-9a-f]{8}):([0-9a-f]{16})").unwrap();
+    static TEXTUAL_KEY_RE: OnceLock<Regex> = OnceLock::new();
+    let re = TEXTUAL_KEY_RE.get_or_init(|| {
+        Regex::new(r"(?i)key:([0-9a-f]{8}):([0-9a-f]{8}):([0-9a-f]{16})").unwrap()
+    });
     let mut found = HashSet::new();
 
     for captures in re.captures_iter(text) {
