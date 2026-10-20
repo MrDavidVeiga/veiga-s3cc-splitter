@@ -1,3 +1,4 @@
+import noPreviewImage from "./assets/no-preview.png";
 import "@fortawesome/fontawesome-free/css/all.min.css";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -1087,10 +1088,9 @@ function renderPreview() {
   el.previewThumb.setAttribute("aria-label", canRevealSource ? t("revealSourcePackage") : "");
   el.previewThumb.title = canRevealSource ? state.packagePath : "";
   if (!state.preview) {
-    el.previewThumb.removeAttribute("src");
-    el.previewThumb.classList.add("hidden");
-    el.previewEmpty.textContent = t("previewEmpty");
-    el.previewEmpty.classList.remove("hidden");
+    el.previewThumb.src = noPreviewImage;
+    el.previewThumb.classList.remove("hidden");
+    el.previewEmpty.classList.add("hidden");
     el.previewName.textContent = "";
     el.previewKind.textContent = "";
     el.previewKey.textContent = "";
@@ -1102,10 +1102,10 @@ function renderPreview() {
     el.previewThumb.classList.remove("hidden");
     el.previewEmpty.classList.add("hidden");
   } else {
-    el.previewThumb.removeAttribute("src");
-    el.previewThumb.classList.add("hidden");
-    el.previewEmpty.textContent = t("previewUnavailable");
-    el.previewEmpty.classList.remove("hidden");
+    // Real linked resource thumbs win; the original llama is the fallback.
+    el.previewThumb.src = noPreviewImage;
+    el.previewThumb.classList.remove("hidden");
+    el.previewEmpty.classList.add("hidden");
   }
 
   const displayType = getDisplayType(state.preview);
