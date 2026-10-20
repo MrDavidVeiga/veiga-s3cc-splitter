@@ -724,3 +724,26 @@ html[data-theme-choice] body.release-v1 #app-modal .app-modal-actions > :is(.pri
     animation:none; transform:translate3d(105%,0,0); will-change:auto;
   }
 }
+
+/* Center the Merger's no-packages state exactly like Splitter's empty state.
+   :empty is evaluated after renderMergerSources clears the list; when files
+   are added, the normal top-aligned results header and scrolling list return. */
+html[data-theme-choice] body.release-v1 #merger-workspace:not(.hidden):has(#merger-source-list:empty) > .results-header {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  align-content: center;
+  gap: 0;
+  text-align: center;
+  padding: 24px;
+}
+html[data-theme-choice] body.release-v1 #merger-workspace:not(.hidden):has(#merger-source-list:empty) > .results-header > div {
+  width: 100%;
+  text-align: center;
+}
+html[data-theme-choice] body.release-v1 #merger-workspace:not(.hidden):has(#merger-source-list:empty) #merger-source-list {
+  display: none;
+}
