@@ -7991,6 +7991,91 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn removing_five_sources_streams_multi_chunk_merged_and_preserves_backup() {
+        let root = test_dir("five-sources-large-merged");
+        let destination = root.join("merged");
+        std::fs::create_dir_all(&destination).unwrap();
+
+        // Normal CI exercises the 4 MiB streaming boundary with 60 MiB.
+        // Set S3CC_SPLITTER_TEST_1GB=1 to exercise the same flow with a
+        // synthetic merged larger than 1 GiB (requires ~3 GiB free disk).
+        let payload_size = if std::env::var_os("S3CC_SPLITTER_TEST_1GB").is_some() {
+            105 * 1024 * 1024
+        } else {
+            6 * 1024 * 1024
+        };
+        let mut sources = Vec::new();
+        let mut keys = Vec::new();
+
+        for index in 0..10u64 {
+            let path = root.join(format!("Source_{index:02}.package"));
+            let instance = 0x7700_0000_0000_0000u64 + index;
+            write_test_package(
+                &path,
+                &[(TYPE_IMG, 0, instance, vec![index as u8 + 1; payload_size])],
+            );
+            sources.push(path.display().to_string());
+            keys.push(test_resource_key(TYPE_IMG, 0, instance));
+        }
+
+        let merged = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: sources,
+            destination_folder: destination.display().to_string(),
+            output_name: "Merged.package".to_string(),
+        })
+        .unwrap();
+        let original_size = std::fs::metadata(&merged.output_path).unwrap().len();
+        let selected_keys: Vec<String> = keys[..5].to_vec();
+
+        let plan = analyze_remove_selection_inner(
+            None,
+            RemoveSelectionPayload {
+                package_path: merged.output_path.clone(),
+                selected_keys: selected_keys.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(plan.manifest_package_total, 10);
+        assert_eq!(plan.manifest_packages_to_remove, 5);
+
+        let removal = remove_selected_from_merged_inner(
+            None,
+            RemoveSelectionApplyPayload {
+                package_path: merged.output_path.clone(),
+                destination_folder: destination.display().to_string(),
+                selected_keys,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(removal.removed_manifest_packages, 5);
+        assert_eq!(removal.removed_resources, 5);
+        assert_eq!(std::fs::metadata(&removal.backup_path).unwrap().len(), original_size);
+
+        let rebuilt = WritablePackage::load(&removal.output_path).unwrap();
+        let manifest = read_merge_manifest_from_writable(&rebuilt)
+            .unwrap()
+            .unwrap();
+        assert_eq!(manifest.packages.len(), 5);
+        for index in 0..10 {
+            let present = rebuilt.entries.iter().any(|entry| {
+                key_string_from_writable(entry) == keys[index]
+            });
+            assert_eq!(present, index >= 5, "Unexpected resource from source {index}");
+        }
+
+        let original_backup = WritablePackage::load(&removal.backup_path).unwrap();
+        let backup_manifest = read_merge_manifest_from_writable(&original_backup)
+            .unwrap()
+            .unwrap();
+        assert_eq!(backup_manifest.packages.len(), 10);
+
+        drop(rebuilt);
+        drop(original_backup);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn remove_selection_plan_reports_original_manifest_package_ratio() {
         let root = test_dir("manifest-removal-ratio");
         let source_dir = root.join("sources");
