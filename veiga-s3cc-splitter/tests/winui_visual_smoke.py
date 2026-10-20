@@ -155,8 +155,17 @@ def run():
                       const rect=id=>document.getElementById(id).getBoundingClientRect();
                       const list=document.getElementById('resource-list');
                       const all=rect('select-all-btn'),none=rect('select-none-btn');
+                      const filter=rect('content-filter-toggle-btn'),search=rect('search-input');
+                      const previewCard=document.querySelector('#results-state .preview-card').getBoundingClientRect();
+                      const listCard=document.querySelector('#results-state .list-card').getBoundingClientRect();
+                      const footer=document.querySelector('#results-state .results-footer-actions').getBoundingClientRect();
                       const exportBtn=rect('export-btn'),clear=rect('clear-btn');
                       return {allH:all.height,noneH:none.height,allW:all.width,noneW:none.width,
+                        allTop:all.top,noneTop:none.top,allLeft:all.left,allBottom:all.bottom,
+                        filterTop:filter.top,filterH:filter.height,searchTop:search.top,searchH:search.height,
+                        previewTop:previewCard.top,previewLeft:previewCard.left,
+                        previewRight:previewCard.right,listBottom:listCard.bottom,
+                        footerTop:footer.top,footerRight:footer.right,
                         exportH:exportBtn.height,clearH:clear.height,
                         exportW:exportBtn.width,clearW:clear.width,
                         scroll:list.scrollHeight>list.clientHeight,
@@ -164,7 +173,14 @@ def run():
                     }""")
                     assert controls["allH"]==36 and controls["noneH"]==36,(width,theme,controls)
                     assert abs(controls["allW"]-controls["noneW"])<1,(width,theme,controls)
-                    assert controls["exportH"]==36 and controls["clearH"]==36,(width,theme,controls)
+                    assert controls["filterH"]==36 and controls["searchH"]==36,(width,theme,controls)
+                    assert abs(controls["allTop"]-controls["filterTop"])<1,(width,theme,controls)
+                    assert abs(controls["noneTop"]-controls["searchTop"])<1,(width,theme,controls)
+                    assert controls["allBottom"]<=controls["previewTop"]+1,(width,theme,controls)
+                    assert abs(controls["allLeft"]-controls["previewLeft"])<2,(width,theme,controls)
+                    assert controls["footerTop"]>=controls["listBottom"]-1,(width,theme,controls)
+                    assert controls["footerRight"]<=controls["previewLeft"],(width,theme,controls)
+                    assert controls["exportH"]>=36 and controls["clearH"]>=36,(width,theme,controls)
                     assert abs(controls["exportW"]-controls["clearW"])<1,(width,theme,controls)
                     assert controls["listWidth"]>0 and controls["scroll"],(width,theme,controls)
                     assert controls["outerWidth"]<=width+1,(width,theme,controls)
