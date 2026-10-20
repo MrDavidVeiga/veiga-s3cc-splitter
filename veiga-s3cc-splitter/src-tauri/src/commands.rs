@@ -128,6 +128,22 @@ fn emit_package_progress(
     }
 }
 
+fn trace_removal_stage(stage: &str, started: Instant, percent: u32) {
+    // A portable GUI has no visible console. Keep a minimal stage trace under
+    // %TEMP% to diagnose stalls without recording package paths or CC names.
+    let path = std::env::temp_dir().join("Veigas-S3CC-Splitter-Beta3-removal.log");
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(
+            file,
+            "pid={} elapsed_ms={} percent={} stage={}",
+            std::process::id(),
+            started.elapsed().as_millis(),
+            percent,
+            stage,
+        );
+    }
+}
+
 fn check_cancelled() -> Result<(), String> {
     if CANCEL_REQUESTED.load(Ordering::Acquire) {
         Err("Operação cancelada com segurança.".to_string())
@@ -5779,38 +5795,34 @@ fn validate_removed_package(
 fn replace_source_with_rollback(
     source_path: &Path,
     temp_path: &Path,
-    output_path: &Path,
+    backup_path: &Path,
 ) -> Result<(), String> {
-    let file_name = source_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("merged.package");
-    let rollback = source_path.with_file_name(format!(
-        ".{file_name}.remove-original-{}",
-        std::process::id()
-    ));
-
-    if rollback.exists() {
+    // Same-volume rename preserves the original bytes without copying 1+ GiB
+    // or comparing that data again. The source is only moved after the rebuilt
+    // package passed structural and manifest validation.
+    if backup_path.exists() {
         return Err(format!(
-            "Arquivo temporário de rollback já existe: {}",
-            rollback.display()
+            "O caminho do backup já existe: {}",
+            backup_path.display()
         ));
     }
 
-    rename(source_path, &rollback)
-        .map_err(|e| format!("Não foi possível preparar a substituição segura do original: {e}"))?;
-
-    if let Err(error) = rename(temp_path, output_path) {
-        let _ = rename(&rollback, source_path);
+    rename(source_path, backup_path).map_err(|e| {
+        format!(
+            "Não foi possível mover o merged original para o backup; nenhum arquivo foi substituído: {e}"
+        )
+    })?;
+    if let Err(error) = rename(temp_path, source_path) {
+        if let Err(rollback_error) = rename(backup_path, source_path) {
+            return Err(format!(
+                "Falha ao substituir o merged ({error}) e ao restaurá-lo ({rollback_error}). O original permanece no backup em {}.",
+                backup_path.display()
+            ));
+        }
         return Err(format!(
-            "Não foi possível colocar o package reconstruído no destino; o original foi restaurado: {error}"
+            "Não foi possível instalar o merged reconstruído; o original foi restaurado sem alterações: {error}"
         ));
     }
-
-    // The validated output and verified backup are already safe at this point.
-    // Failure to delete the rollback copy is non-fatal; keep the extra original
-    // rather than reporting the completed replacement as a failure.
-    let _ = remove_file(&rollback);
     Ok(())
 }
 
@@ -6577,7 +6589,15 @@ fn scan_package_resources_inner(
             app, started, "Preparing relationship metadata",
             "Keeping large-package loading responsive.", 3, 5, package.files.len(), mmap.len(),
         );
-        let relations = if mmap.len() <= MAX_RELATION_ANALYSIS_PACKAGE_BYTES {
+        let relations = if merge_manifest.is_some()
+            && mmap.len() > MAX_RELATION_ANALYSIS_PACKAGE_BYTES
+        {
+            // A manifest-backed 1 GiB merge already has authoritative source
+            // ownership. Do not launch an uncancellable 1 GiB hashing and
+            // decompression thread that competes with removal for CPU/RAM/I/O.
+            eprintln!("[package-relations] skip optional large manifest analysis");
+            BTreeMap::new()
+        } else if mmap.len() <= MAX_RELATION_ANALYSIS_PACKAGE_BYTES {
             let relations = build_resource_relations(&package, &name_map, &items);
             check_cancelled()?;
             relations
@@ -6700,6 +6720,7 @@ fn remove_selected_from_merged_inner(
 
     let started = Instant::now();
     let progress = |stage: &str, message: &str, percent: u32| {
+        trace_removal_stage(stage, started, percent);
         emit_package_progress(app, started, stage, message, percent, 100, 0, 0);
     };
     progress("Analisando merged", "Preparando o arquivo e verificando os recursos.", 2);
@@ -6786,47 +6807,13 @@ fn remove_selected_from_merged_inner(
         return Err(error);
     }
 
-    progress("Criando backup", "Copiando o merged original antes de substituí-lo.", 75);
-    let backup_dir = unique_backup_directory(&destination, stem);
-    create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
-    let backup_path = backup_dir.join(file_name);
-    copy_backup_with_progress(app, started, &source_path, &backup_path).map_err(|e| {
-        let _ = remove_file(&temp_path);
-        let _ = remove_file(&backup_path);
-        format!("Não foi possível criar o backup do original: {e}")
-    })?;
-
-    progress("Verificando backup", "Comparando a cópia com o arquivo original.", 88);
-    match files_are_identical(app, started, &source_path, &backup_path) {
-        Ok(true) => {}
-        Ok(false) => {
-            let _ = remove_file(&temp_path);
-            let _ = remove_file(&backup_path);
-            return Err(
-                "A verificação bit-for-bit do backup falhou. O original não foi alterado."
-                    .to_string(),
-            );
-        }
-        Err(error) => {
-            let _ = remove_file(&temp_path);
-            let _ = remove_file(&backup_path);
-            return Err(format!(
-                "Não foi possível verificar o backup bit a bit. O original não foi alterado: {error}"
-            ));
-        }
-    }
-
-    // Close every handle backed by the original package before replacing it.
-    // On Windows an open memory map/file handle can prevent rename/delete of
-    // the source even though the rebuilt output and backup have already passed
-    // validation.
+    // Release every source-file handle BEFORE attempting the same-volume
+    // rename. A lingering Windows memory map can hold the original open.
     drop(source_file);
     drop(source_package);
     drop(package);
     drop(mmap);
 
-    // A preview can retain its own memory map after the command's map is
-    // dropped. Release it before renaming the original file on Windows.
     if output_is_source {
         let mut cache = preview_cache()
             .lock()
@@ -6836,18 +6823,56 @@ fn remove_selected_from_merged_inner(
         }
     }
 
-    progress("Finalizando remoção", "Substituindo o merged e preservando o backup validado.", 96);
+    let backup_dir = unique_backup_directory(&destination, stem);
+    create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
+    let backup_path = backup_dir.join(file_name);
+
     if output_is_source {
-        if let Err(error) = replace_source_with_rollback(&source_path, &temp_path, &output_path) {
+        // Rename the unmodified file into the backup directory on the same
+        // volume. No 1 GiB backup copy, extra read or second original exists.
+        // If installation fails, restore that very same original by rename.
+        progress("Preservando original", "Movendo o merged intacto para backup no mesmo disco.", 88);
+        if let Err(error) =
+            replace_source_with_rollback(&source_path, &temp_path, &backup_path)
+        {
             let _ = remove_file(&temp_path);
             return Err(error);
         }
     } else {
+        // When the output is in another folder, preserve previous semantics:
+        // the original stays in place and its copy is verified byte for byte.
+        progress("Criando backup", "Copiando o original para o destino.", 75);
+        copy_backup_with_progress(app, started, &source_path, &backup_path).map_err(|e| {
+            let _ = remove_file(&temp_path);
+            let _ = remove_file(&backup_path);
+            format!("Não foi possível criar o backup do original: {e}")
+        })?;
+        progress("Verificando backup", "Conferindo o backup byte por byte.", 88);
+        match files_are_identical(app, started, &source_path, &backup_path) {
+            Ok(true) => {}
+            Ok(false) => {
+                let _ = remove_file(&temp_path);
+                let _ = remove_file(&backup_path);
+                return Err(
+                    "A verificação bit-for-bit do backup falhou. O original não foi alterado."
+                        .to_string(),
+                );
+            }
+            Err(error) => {
+                let _ = remove_file(&temp_path);
+                let _ = remove_file(&backup_path);
+                return Err(format!(
+                    "Não foi possível verificar o backup bit a bit. O original não foi alterado: {error}"
+                ));
+            }
+        }
+
         rename(&temp_path, &output_path).map_err(|e| {
             let _ = remove_file(&temp_path);
             format!("Não foi possível finalizar o novo merged: {e}")
         })?;
     }
+    progress("Finalizando remoção", "Merged reconstruído e original preservado em backup.", 96);
 
     progress("Remoção concluída", "Merged atualizado com sucesso.", 100);
     Ok(RemoveSelectionResult {
