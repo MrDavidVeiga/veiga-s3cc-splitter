@@ -640,9 +640,8 @@ body.release-v1 #results-state .results-list-column .results-footer-actions.resu
     grid-template-columns:repeat(2,minmax(0,1fr));
   }
 }
-/* Text parity with Manager: language abbreviation and Tema are the same font. */
-html[data-theme-choice] body.release-v1 .topbar #theme-button-label,
-html[data-theme-choice] body.release-v1 .topbar #lang-current-code {
+/* Font SIZE only for Idioma and PT/EN/ES; keep their existing weights. */
+html[data-theme-choice] body.release-v1 .topbar #theme-button-label {
   font-family:"Segoe UI Variable Text","Segoe UI",sans-serif;
   font-size:14px;
   line-height:20px;
@@ -650,10 +649,78 @@ html[data-theme-choice] body.release-v1 .topbar #lang-current-code {
   letter-spacing:normal;
   white-space:nowrap;
 }
+html[data-theme-choice] body.release-v1 .topbar #lang-label,
+html[data-theme-choice] body.release-v1 .topbar #lang-current-code {
+  font-size:14px;
+}
 html[data-theme-choice] body.release-v1 .topbar #lang-toggle-btn {
   box-sizing:border-box;
   width:76px;
   min-width:76px;
   height:32px;
   padding:0 10px;
+}
+/* The status belongs to the work surface. No background card around text or progress. */
+html[data-theme-choice] body.release-v1 #splitter-workspace #busy-state:not(.hidden) {
+  box-sizing:border-box; display:flex; align-items:center; justify-content:center;
+  width:100%; height:100%; min-height:0; padding:clamp(12px,3vw,32px);
+}
+html[data-theme-choice] body.release-v1 #splitter-workspace #busy-state .progress-card {
+  box-sizing:border-box; display:flex; flex-direction:column; align-items:center;
+  justify-content:center; width:min(100%,540px); max-width:540px;
+  margin:0; padding:0; border:0; border-radius:0; box-shadow:none;
+  background:transparent; backdrop-filter:none; text-align:center;
+}
+html[data-theme-choice] body.release-v1 #busy-state :is(.state-title,.state-subtitle) {
+  text-align:center; margin-left:auto; margin-right:auto; width:100%; overflow-wrap:anywhere;
+}
+html[data-theme-choice] body.release-v1 #busy-state .state-subtitle {
+  margin-top:8px; max-width:500px;
+}
+html[data-theme-choice] body.release-v1 #busy-state .progress-track {
+  position:relative; box-sizing:border-box; flex:0 0 auto;
+  width:min(100%,460px); max-width:460px; height:8px;
+  margin:24px auto 0; overflow:hidden;
+  background:var(--winui-control-fill-pressed);
+  border:1px solid var(--winui-control-stroke); border-radius:999px;
+}
+/* Backend percentages are milestones, NOT a fraction of total work. Keep the
+   marquee moving independently of stage events, including during long reads. */
+html[data-theme-choice] body.release-v1 #busy-state .progress-fill {
+  width:32% !important; height:100%; border-radius:999px;
+  background:linear-gradient(90deg,transparent,var(--accent) 48%,transparent);
+  animation:splitter-busy-marquee 1.55s ease-in-out infinite;
+  will-change:transform;
+}
+@keyframes splitter-busy-marquee {
+  from {transform:translate3d(-115%,0,0);}
+  to   {transform:translate3d(435%,0,0);}
+}
+html[data-theme-choice] body.release-v1 #busy-state .operation-cancel {
+  align-self:center; margin-top:20px; width:120px; max-width:100%;
+}
+/* Keep OK, Cancel, Remove: same compact button width, centered in modal. */
+html[data-theme-choice] body.release-v1 #app-modal .app-modal-actions {
+  display:flex; flex-direction:row; flex-wrap:wrap; justify-content:center;
+  align-items:center; gap:10px;
+}
+html[data-theme-choice] body.release-v1 #app-modal .app-modal-actions > :is(.primary-btn,.secondary-btn,.danger-btn) {
+  display:inline-flex; box-sizing:border-box; flex:0 0 120px;
+  width:120px; min-width:0; max-width:120px;
+  min-height:36px; height:auto; padding:8px 10px; margin:0;
+  align-items:center; justify-content:center; text-align:center;
+  white-space:normal; overflow-wrap:anywhere;
+}
+@media (max-width:360px) {
+  html[data-theme-choice] body.release-v1 #app-modal .app-modal-actions {
+    gap:8px; padding-left:8px; padding-right:8px;
+  }
+  html[data-theme-choice] body.release-v1 #app-modal .app-modal-actions > :is(.primary-btn,.secondary-btn,.danger-btn) {
+    flex-basis:min(120px,42%); width:min(120px,42%); max-width:none;
+  }
+}
+@media (prefers-reduced-motion:reduce) {
+  html[data-theme-choice] body.release-v1 #busy-state .progress-fill {
+    animation:none; transform:translate3d(105%,0,0); will-change:auto;
+  }
 }
