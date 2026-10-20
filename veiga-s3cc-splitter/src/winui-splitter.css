@@ -640,3 +640,20 @@ body.release-v1 #results-state .results-list-column .results-footer-actions.resu
     grid-template-columns:repeat(2,minmax(0,1fr));
   }
 }
+/* Text parity with Manager: language abbreviation and Tema are the same font. */
+html[data-theme-choice] body.release-v1 .topbar #theme-button-label,
+html[data-theme-choice] body.release-v1 .topbar #lang-current-code {
+  font-family:"Segoe UI Variable Text","Segoe UI",sans-serif;
+  font-size:14px;
+  line-height:20px;
+  font-weight:600;
+  letter-spacing:normal;
+  white-space:nowrap;
+}
+html[data-theme-choice] body.release-v1 .topbar #lang-toggle-btn {
+  box-sizing:border-box;
+  width:76px;
+  min-width:76px;
+  height:32px;
+  padding:0 10px;
+}

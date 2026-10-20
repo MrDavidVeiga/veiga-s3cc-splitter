@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import noPreviewImage from "./assets/no-preview.png";
 import { canUseReversibleMergeActions, formatRemoveConfirm } from "./remove-confirm.js";
 import { createModalController, runConfirmedAction } from "./modal.js";
 import {
@@ -144,6 +143,7 @@ const translations = {
     emptySubtitle: "The list, preview and actions will appear here.",
     previewTitle: "Preview",
     previewEmpty: "Select a resource to see the preview.",
+    previewUnavailable: "No thumbnail found in this package.",
     exportSelection: "Export Selection",
     removeFromMerged: "Remove from Merged",
     removeSelectedFiles: "Remove Selected Files",
@@ -275,6 +275,7 @@ const translations = {
     emptySubtitle: "A lista, preview e ações aparecem aqui.",
     previewTitle: "Preview",
     previewEmpty: "Selecione um recurso para ver o preview.",
+    previewUnavailable: "Nenhuma miniatura encontrada neste package.",
     exportSelection: "Exportar Seleção",
     removeFromMerged: "Remover do Mesclado",
     removeSelectedFiles: "Remover arquivos selecionados",
@@ -406,6 +407,7 @@ const translations = {
     emptySubtitle: "La lista, la vista previa y las acciones aparecerán aquí.",
     previewTitle: "Vista previa",
     previewEmpty: "Selecciona un recurso para ver la vista previa.",
+    previewUnavailable: "No se encontró miniatura en este package.",
     exportSelection: "Exportar Selección",
     removeFromMerged: "Eliminar del Fusionado",
   removeSelectedFiles: "Eliminar archivos seleccionados",
@@ -988,9 +990,10 @@ function renderList() {
 
 function renderPreview() {
   if (!state.preview) {
-    el.previewThumb.src = noPreviewImage;
-    el.previewThumb.classList.remove("hidden");
-    el.previewEmpty.classList.add("hidden");
+    el.previewThumb.removeAttribute("src");
+    el.previewThumb.classList.add("hidden");
+    el.previewEmpty.textContent = t("previewEmpty");
+    el.previewEmpty.classList.remove("hidden");
     el.previewName.textContent = "";
     el.previewKind.textContent = "";
     el.previewKey.textContent = "";
@@ -1002,9 +1005,10 @@ function renderPreview() {
     el.previewThumb.classList.remove("hidden");
     el.previewEmpty.classList.add("hidden");
   } else {
-    el.previewThumb.src = noPreviewImage;
-    el.previewThumb.classList.remove("hidden");
-    el.previewEmpty.classList.add("hidden");
+    el.previewThumb.removeAttribute("src");
+    el.previewThumb.classList.add("hidden");
+    el.previewEmpty.textContent = t("previewUnavailable");
+    el.previewEmpty.classList.remove("hidden");
   }
 
   const displayType = getDisplayType(state.preview);

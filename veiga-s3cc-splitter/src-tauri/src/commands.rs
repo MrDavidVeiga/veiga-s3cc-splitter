@@ -2225,6 +2225,44 @@ fn object_manifest_icon_ref(package: &DBPF<'_>, key: ResourceKeyParts) -> Option
     None
 }
 
+// Resolve thumbnail references within this package's resource metadata,
+// rather than borrowing an unrelated thumbnail or showing a stock preview.
+fn linked_embedded_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> Option<String> {
+    if !matches!(
+        key.resource_type,
+        TYPE_CASP | TYPE_FACE | TYPE_SKINTONE | TYPE_PATTERN | TYPE_XML
+            | TYPE_OBJD | TYPE_OBJK | TYPE_VPXY | TYPE_MODL | TYPE_MLOD
+            | TYPE_TXTC | TYPE_FTPT
+    ) { return None; }
+
+    let index = package.entry_index(key.resource_type, key.resource_group, key.instance)?;
+    let data = package.files.get(index)?.data();
+    if data.len() < 8 || data.len() > 1024 * 1024 { return None; }
+
+    let mut seen = HashSet::new();
+    let mut thumbs = Vec::new();
+    let mut images = Vec::new();
+    for window in data.windows(8) {
+        let instance = u64::from_le_bytes(window.try_into().ok()?);
+        if !seen.insert(instance) { continue; }
+        for &candidate_index in package.entries_for_instance(instance) {
+            let Some(entry) = package.files.get(candidate_index) else { continue };
+            let is_thumb = matches!(
+                entry.resource_type, TYPE_THUM_SMALL | TYPE_THUM_MED | TYPE_THUM_LARGE
+                    | 0x0580A2B4 | 0x0580A2B5 | 0x0580A2B6 | TYPE_ICON
+            );
+            let is_image = matches!(entry.resource_type, TYPE_IMG | TYPE_IMAG_PNG);
+            if !(is_thumb || is_image) || !is_valid_png(entry.data()) { continue; }
+            let bytes = entry.data().to_vec();
+            if is_thumb { thumbs.push((bytes.len(), bytes)); }
+            else { images.push((bytes.len(), bytes)); }
+        }
+        if thumbs.len() >= 16 || images.len() >= 16 { break; }
+    }
+    encode_best_preview(thumbs.into_iter())
+        .or_else(|| encode_best_preview(images.into_iter()))
+}
+
 fn find_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> Option<String> {
     let thum_types = [
         TYPE_THUM_SMALL,
@@ -2296,7 +2334,7 @@ fn find_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> Option<Stri
                 )
             })
             .map(|entry| (entry.data().len(), entry.data().to_vec())),
-    )
+    ).or_else(|| linked_embedded_preview_base64(package, key))
 }
 
 fn selected_entry_indices(package: &DBPF<'_>, keys: &HashSet<String>) -> Vec<usize> {
@@ -5745,6 +5783,53 @@ mod remove_selected_tests {
 
     fn test_resource_key(resource_type: u32, group: u32, instance: u64) -> String {
         format!("0x{resource_type:08X}-0x{group:08X}-0x{instance:016X}")
+    }
+
+    #[test]
+    fn uses_thumbnail_referenced_by_resource_in_same_package() {
+        let path = test_path("embedded-casp-thumb");
+        let casp_id = 0x1000_1234_5678_0001u64;
+        let thumb_id = 0x9000_AAAA_BBBB_CCCCu64;
+        let mut metadata = vec![42; 19];
+        metadata.extend_from_slice(&thumb_id.to_le_bytes());
+        metadata.extend_from_slice(&[1; 24]);
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        png.extend_from_slice(&[7; 45]);
+        write_test_package(&path, &[
+            (TYPE_CASP, 0, casp_id, metadata),
+            (TYPE_THUM_LARGE, 0, thumb_id, png.clone()),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let key = ResourceKeyParts {
+            resource_type: TYPE_CASP, resource_group: 0, instance: casp_id,
+        };
+        assert_eq!(STANDARD.decode(find_preview_base64(&package, key).unwrap()).unwrap(), png);
+        drop(package);
+        drop(mmap);
+        let _ = remove_file(&path);
+    }
+
+    #[test]
+    fn unrelated_thumbnail_is_never_used_as_resource_preview() {
+        let path = test_path("unlinked-casp-thumb");
+        let casp_id = 0x1111_1234_5678_0001u64;
+        let thumb_id = 0xAAAA_1234_5678_0001u64;
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        png.extend_from_slice(&[7; 35]);
+        write_test_package(&path, &[
+            (TYPE_CASP, 0, casp_id, vec![1; 64]),
+            (TYPE_THUM_LARGE, 0, thumb_id, png),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let key = ResourceKeyParts {
+            resource_type: TYPE_CASP, resource_group: 0, instance: casp_id,
+        };
+        assert!(find_preview_base64(&package, key).is_none());
+        drop(package);
+        drop(mmap);
+        let _ = remove_file(&path);
     }
 
     #[test]
