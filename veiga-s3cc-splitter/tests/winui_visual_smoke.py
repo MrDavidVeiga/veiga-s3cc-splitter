@@ -184,6 +184,23 @@ def run():
                     assert abs(controls["exportW"]-controls["clearW"])<1,(width,theme,controls)
                     assert controls["listWidth"]>0 and controls["scroll"],(width,theme,controls)
                     assert controls["outerWidth"]<=width+1,(width,theme,controls)
+                    # Screenshot the populated CC results, not just the empty
+                    # welcome screen. Assert action alignment in the rendered UI.
+                    positions=page.evaluate("""() => {
+                      const rect=id=>document.getElementById(id).getBoundingClientRect();
+                      const buttons=['export-btn','remove-merged-btn','restore-manifest-btn','clear-btn']
+                        .filter(id=>getComputedStyle(document.getElementById(id)).display!=='none')
+                        .map(id=>({id,top:rect(id).top,height:rect(id).height}));
+                      const list=document.querySelector('.results-list-column').getBoundingClientRect();
+                      const footer=document.querySelector('.results-footer-actions').getBoundingClientRect();
+                      return {buttons,listWidth:list.width,footerWidth:footer.width,footerTop:footer.top};
+                    }""")
+                    if positions["listWidth"]>=520:
+                        assert max(b["top"] for b in positions["buttons"])-min(b["top"] for b in positions["buttons"])<2,(width,theme,positions)
+                    assert positions["footerWidth"]<=positions["listWidth"]+1,(width,theme,positions)
+                    if theme=="veiga-dark":
+                        page.screenshot(path=str(image_dir / f"results-{width}-{theme}.png"))
+
                     # All modals keep theme surface/text and remain in viewport.
                     modal=page.evaluate("""() => {
                       const overlay=document.getElementById('app-modal');
