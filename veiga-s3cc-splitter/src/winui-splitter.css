@@ -626,7 +626,8 @@ body.release-v1 #results-state .results-list-column {
 }
 body.release-v1 #results-state .results-list-column .results-footer-actions,
 body.release-v1 #results-state .results-list-column .results-footer-actions.results-footer-actions--three {
-  grid-template-columns:repeat(4,minmax(0,1fr));
+  /* auto-fit distributes 2, 3 or 4 visible actions evenly, without empty slots. */
+  grid-template-columns:repeat(auto-fit,minmax(min(100%,120px),1fr));
   gap:8px;
   align-content:start;
 }
