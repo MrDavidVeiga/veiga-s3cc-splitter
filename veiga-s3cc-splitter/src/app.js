@@ -977,8 +977,10 @@ function render() {
   }
 
   renderContentFilter();
-  renderList();
-  renderPreview();
+  if (!state.isBusy) {
+    renderList();
+    renderPreview();
+  }
   renderMergerSources();
 }
 
@@ -1725,7 +1727,13 @@ async function setupProgressEvents() {
       state.progress = Math.max(0, Math.min(100, Number(payload.percent) || 0));
       state.busyTitle = payload.stage || state.busyTitle;
       state.busyMessage = payload.message || state.busyMessage;
-      render();
+      // Progress events can arrive every few hundred milliseconds while
+      // rebuilding a gigabyte-sized package. Re-rendering the entire CC
+      // list and preview here competes with the file operation and can
+      // make the window appear frozen. Update the visible indicators only.
+      el.busyTitle.textContent = state.busyTitle;
+      el.busyMessage.textContent = state.busyMessage;
+      el.progressBar.style.width = `${state.progress}%`;
     });
     await listen("package-relations", (event) => {
       const payload = event.payload || {};
