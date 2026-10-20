@@ -2163,8 +2163,11 @@ fn linked_embedded_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> 
     let mut images = Vec::new();
     for window in data.windows(8) {
         let instance = u64::from_le_bytes(window.try_into().ok()?);
-        if !seen.insert(instance) { continue; }
-        for &candidate_index in package.entries_for_instance(instance) {
+        let matches = package.entries_for_instance(instance);
+        // Most sliding 8-byte windows do not identify any real resource:
+        // don't allocate an entry in the set for those false candidates.
+        if matches.is_empty() || !seen.insert(instance) { continue; }
+        for &candidate_index in matches {
             let Some(entry) = package.files.get(candidate_index) else { continue };
             let is_thumb = matches!(
                 entry.resource_type, TYPE_THUM_SMALL | TYPE_THUM_MED | TYPE_THUM_LARGE
