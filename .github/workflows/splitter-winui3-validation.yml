@@ -127,6 +127,14 @@ jobs:
           } | ForEach-Object { Write-Host $_ }
 
           cargo test --locked --workspace
+          if ($LASTEXITCODE -ne 0) { throw 'Standard Rust tests failed' }
+
+          # Execute the exact five-from-ten removal path on a synthetic merged
+          # larger than 1 GiB. Verify backup + remaining resources on Windows.
+          $env:S3CC_SPLITTER_TEST_1GB = '1'
+          cargo test --locked --workspace removing_five_sources_streams_multi_chunk_merged_and_preserves_backup -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw '1 GiB merged-removal regression failed' }
+          Remove-Item Env:S3CC_SPLITTER_TEST_1GB
 
   portable-windows-x64:
     runs-on: windows-2022
