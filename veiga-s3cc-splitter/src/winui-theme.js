@@ -88,6 +88,35 @@ function applyAccent(ramp) {
   root.style.setProperty("--accent-low",alpha(ramp.base,ramp.mode==="dark"?.12:.09));
   root.style.setProperty("--accent-outline",alpha(ramp.base,ramp.mode==="dark"?.44:.34));
 }
+// Manager reference dfc0dbe: show accent and actual theme surface in each sample.
+function applyThemeSwatches() {
+  const surfaceFor = (choice, mode) => {
+    if (choice === "mean-girls") return "#FEF9FD";
+    if (choice === "ea-app") return "#1D2030";
+    return mode === "dark" ? "#202020" : "#F3F3F3";
+  };
+  const palettes = [
+    [".system-swatch", "system"],
+    [".veiga-light-swatch", "veiga-light"],
+    [".veiga-dark-swatch", "veiga-dark"],
+    [".mean-girls-swatch", "mean-girls"],
+    [".ea-app-swatch", "ea-app"],
+    [".winui-light-swatch", "winui-light"],
+    [".winui-dark-swatch", "winui-dark"],
+  ];
+  const setSwatch = (selector, choice) => {
+    const palette = resolvedTheme(choice);
+    const surface = surfaceFor(choice, palette.mode);
+    const background = `linear-gradient(135deg, ${palette.base} 0 50%, ${surface} 50% 100%)`;
+    document.querySelectorAll(selector).forEach((swatch) => {
+      swatch.style.background = background;
+      swatch.style.setProperty("--swatch-light", palette.base);
+      swatch.style.setProperty("--swatch-dark", surface);
+    });
+  };
+  palettes.forEach(([selector, choice]) => setSwatch(selector, choice));
+}
+
 function applyTheme(choice,{persist=true}={}) {
   if (!VALID_THEMES.has(choice)) choice="system";
   const resolved=resolvedTheme(choice);
@@ -95,11 +124,11 @@ function applyTheme(choice,{persist=true}={}) {
   root.dataset.themeChoice=choice;
   root.dataset.resolvedMode=resolved.mode;
   applyAccent(resolved);
+  applyThemeSwatches();
   // Manager parity: all theme-specific button foreground colors must come
   // from the shared Fluent tokens, never a Packer-only native accent heuristic.
   root.style.removeProperty("--fluent-accent-foreground");
   document.querySelectorAll(".theme-option").forEach(option=>option.setAttribute("aria-checked",String(option.dataset.theme===choice)));
-  document.querySelectorAll(".system-swatch").forEach(swatch=>{ swatch.style.background=systemAccent(); });
   if (persist) try { localStorage.setItem(THEME_KEY,choice); } catch {}
 }
 function currentChoice() {
