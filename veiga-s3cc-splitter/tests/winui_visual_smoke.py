@@ -218,6 +218,46 @@ def run():
                     if theme=="veiga-dark":
                         page.screenshot(path=str(image_dir / f"results-{width}-{theme}.png"))
 
+                    # Actual busy state: centered, no card background, always moving.
+                    page.evaluate("""() => {
+                      document.getElementById('results-state').classList.add('hidden');
+                      document.getElementById('busy-state').classList.remove('hidden');
+                      document.getElementById('busy-title').textContent='Analisando dependências';
+                      document.getElementById('busy-message').textContent='Verificando recursos';
+                      document.getElementById('progress-bar').style.width='35%';
+                    }""")
+                    page.wait_for_timeout(120)
+                    b=page.evaluate("""() => {
+                      const work=document.getElementById('splitter-workspace').getBoundingClientRect();
+                      const card=document.querySelector('#busy-state .progress-card');
+                      const r=card.getBoundingClientRect(),s=getComputedStyle(card);
+                      const bar=document.getElementById('progress-bar');
+                      return {dx:Math.abs((r.left+r.width/2)-(work.left+work.width/2)),
+                        dy:Math.abs((r.top+r.height/2)-(work.top+work.height/2)),
+                        bg:s.backgroundColor,border:s.borderTopWidth,shadow:s.boxShadow,
+                        name:getComputedStyle(bar).animationName,x:bar.getBoundingClientRect().x};
+                    }""")
+                    assert b["dx"]<3 and b["dy"]<3,(width,theme,b)
+                    assert b["bg"] in ("transparent","rgba(0, 0, 0, 0)") and b["border"]=="0px" and b["shadow"]=="none",(width,theme,b)
+                    assert b["name"]=="splitter-busy-marquee",(width,theme,b)
+                    page.wait_for_timeout(350)
+                    x=page.evaluate("document.getElementById('progress-bar').getBoundingClientRect().x")
+                    assert abs(x-b["x"])>3,(width,theme,b,x)
+                    if theme=="veiga-dark" and width==1280:
+                        page.screenshot(path=str(image_dir / f"busy-1280-{theme}.png"))
+                    font=page.evaluate("""() => ({
+                      tema:getComputedStyle(document.getElementById('theme-button-label')).fontSize,
+                      idioma:getComputedStyle(document.getElementById('lang-label')).fontSize,
+                      code:getComputedStyle(document.getElementById('lang-current-code')).fontSize,
+                      themeWeight:getComputedStyle(document.getElementById('theme-button-label')).fontWeight,
+                      langWeight:getComputedStyle(document.getElementById('lang-label')).fontWeight
+                    })""")
+                    assert font["tema"]==font["idioma"]==font["code"]=="14px",(width,theme,font)
+                    assert font["themeWeight"]!=font["langWeight"],(width,theme,font)
+                    page.evaluate("""() => {
+                      document.getElementById('busy-state').classList.add('hidden');
+                      document.getElementById('results-state').classList.remove('hidden');
+                    }""")
                     # All modals keep theme surface/text and remain in viewport.
                     modal=page.evaluate("""() => {
                       const overlay=document.getElementById('app-modal');
@@ -233,6 +273,29 @@ def run():
                     assert modal["background"] not in ("transparent","rgba(0, 0, 0, 0)"),(width,theme,modal)
                     assert modal["x"]>=0 and modal["right"]<=width+1,(width,theme,modal)
                     assert modal["y"]>=0 and modal["bottom"]<=height+1,(width,theme,modal)
+                    # Cancel and Remove: equal, narrow and centered.
+                    pair=page.evaluate("""() => {
+                      const c=document.getElementById('app-modal-cancel'),
+                        p=document.getElementById('app-modal-primary');
+                      c.classList.remove('hidden');c.textContent='Cancelar';p.textContent='Remover';
+                      const a=document.querySelector('.app-modal-actions').getBoundingClientRect(),
+                        cr=c.getBoundingClientRect(),pr=p.getBoundingClientRect();
+                      return {cw:cr.width,pw:pr.width,center:(cr.left+pr.right)/2,
+                        target:a.left+a.width/2,dy:Math.abs(cr.top-pr.top)};
+                    }""")
+                    assert abs(pair["cw"]-120)<1 and abs(pair["pw"]-120)<1,(width,theme,pair)
+                    assert abs(pair["center"]-pair["target"])<2 and pair["dy"]<2,(width,theme,pair)
+                    if width==1280 and theme=="veiga-dark":
+                        page.screenshot(path=str(image_dir / f"modal-pair-1280-{theme}.png"))
+                    ok=page.evaluate("""() => {
+                      document.getElementById('app-modal-cancel').classList.add('hidden');
+                      const p=document.getElementById('app-modal-primary');p.textContent='OK';
+                      const pr=p.getBoundingClientRect(),a=document.querySelector('.app-modal-actions').getBoundingClientRect();
+                      return {width:pr.width,offset:Math.abs(pr.left+pr.width/2-a.left-a.width/2)};
+                    }""")
+                    assert abs(ok["width"]-120)<1 and ok["offset"]<2,(width,theme,ok)
+                    if width==1280 and theme=="veiga-dark":
+                        page.screenshot(path=str(image_dir / f"modal-ok-1280-{theme}.png"))
                     page.evaluate("""() => {
                       document.getElementById('app-modal').classList.add('hidden');
                       document.getElementById('results-state').classList.add('hidden');
