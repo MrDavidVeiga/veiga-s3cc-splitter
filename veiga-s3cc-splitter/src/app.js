@@ -159,6 +159,8 @@ const translations = {
     exportSelection: "Export Selection",
     removeFromMerged: "Remove from Merged",
     removeSelectedFiles: "Remove Selected Files",
+    removeAnalyzeTitle: "Analyzing selected packages...",
+    removeAnalyzeMessage: "Checking dependencies and preparing a safe removal plan.",
     removeBusyTitle: "Rebuilding merged package...",
     removeBusyMessage: "Preserving shared resources and validating the new package.",
     removeDestinationRequired: "Choose a destination folder first.",
@@ -301,6 +303,8 @@ const translations = {
     exportSelection: "Exportar Seleção",
     removeFromMerged: "Remover do Mesclado",
     removeSelectedFiles: "Remover Arquivos Selecionados",
+    removeAnalyzeTitle: "Analisando os packages selecionados...",
+    removeAnalyzeMessage: "Verificando dependências e preparando um plano de remoção seguro.",
     removeBusyTitle: "Reconstruindo package mesclado...",
     removeBusyMessage: "Preservando recursos compartilhados e validando o novo package.",
     removeDestinationRequired: "Escolha primeiro uma pasta de destino.",
@@ -443,6 +447,8 @@ const translations = {
     exportSelection: "Exportar Selección",
     removeFromMerged: "Eliminar del Fusionado",
   removeSelectedFiles: "Eliminar Archivos Seleccionados",
+    removeAnalyzeTitle: "Analizando los packages seleccionados...",
+    removeAnalyzeMessage: "Verificando dependencias y preparando un plan de eliminación seguro.",
     removeBusyTitle: "Reconstruyendo package fusionado...",
     removeBusyMessage: "Conservando recursos compartidos y validando el nuevo package.",
     removeDestinationRequired: "Elige primero una carpeta de destino.",
@@ -467,6 +473,7 @@ const state = {
   selectionAnchorKey: null,
   preview: null,
   isBusy: false,
+  removalPending: false,
   busyTitle: "",
   busyMessage: "",
   progress: 0,
@@ -962,7 +969,7 @@ function render() {
   }
   if (el.removeMergedBtn) {
     el.removeMergedBtn.classList.remove("hidden");
-    el.removeMergedBtn.disabled = state.selectedKeys.length === 0;
+    el.removeMergedBtn.disabled = state.isBusy || state.removalPending || state.selectedKeys.length === 0;
     const removalLabel = t("removeFromMerged");
     el.removeMergedBtn.innerHTML = `${buttonIcons.remove}<span>${removalLabel}</span>`;
     el.removeMergedBtn.title = removalLabel;
@@ -1400,17 +1407,21 @@ function normalizeLocalPath(path) {
 }
 
 async function removeSelectionFromMerged() {
-  if (!state.packagePath || !state.selectedKeys.length) return;
+  if (!state.packagePath || !state.selectedKeys.length || state.isBusy || state.removalPending) return;
 
-  const destinationFolder = parentFolderOfPath(state.packagePath);
+  // Snapshot the selection and reject reentrant clicks while preparing the plan,
+  // confirming it or rebuilding a large merged package.
+  const packagePath = state.packagePath;
+  const selectedKeys = [...state.selectedKeys];
+  const destinationFolder = parentFolderOfPath(packagePath);
+  state.removalPending = true;
+  setBusy(t("removeAnalyzeTitle"), t("removeAnalyzeMessage"));
 
   try {
     const plan = await invoke("analyze_remove_selection", {
-      payload: {
-        packagePath: state.packagePath,
-        selectedKeys: state.selectedKeys,
-      },
+      payload: { packagePath, selectedKeys },
     });
+    clearBusy();
 
     if (!plan.resourcesToRemove && !plan.manifestPackagesToRemove) {
       await appModal.showWarning({
@@ -1433,20 +1444,14 @@ async function removeSelectionFromMerged() {
       async () => {
         setBusy(t("removeBusyTitle"), t("removeBusyMessage"));
         return invoke("remove_selected_from_merged", {
-          payload: {
-            packagePath: state.packagePath,
-            destinationFolder,
-            selectedKeys: state.selectedKeys,
-          },
+          payload: { packagePath, destinationFolder, selectedKeys },
         });
       },
     );
-
-    if (!removal.confirmed) {
-      return;
-    }
+    if (!removal.confirmed) return;
 
     const result = removal.result;
+    clearBusy();
     await appModal.showSuccess({
       titleText: t("modalSuccessTitle"),
       messageText: t("removeSuccess", result),
@@ -1454,7 +1459,7 @@ async function removeSelectionFromMerged() {
     });
     await revealItemInDir(result.outputPath);
 
-    if (normalizeLocalPath(result.outputPath) === normalizeLocalPath(state.packagePath)) {
+    if (normalizeLocalPath(result.outputPath) === normalizeLocalPath(packagePath)) {
       state.resources = [];
       state.selectedKeys = [];
       state.selectionInitialized = false;
@@ -1462,54 +1467,20 @@ async function removeSelectionFromMerged() {
       state.isContentFilterOpen = false;
       state.selectionAnchorKey = null;
       state.preview = null;
-      // The successful removal owns the busy state; release it so the scan
-      // does not return early with an empty resource list.
-      clearBusy();
       await scanPackage();
     }
   } catch (error) {
     console.error(error);
+    if (state.isBusy) clearBusy();
     await appModal.showError({
       titleText: t("modalErrorTitle"),
       messageText: `${t("removeError")}\n${error}`,
       primaryLabel: t("modalClose"),
     });
   } finally {
-    if (state.isBusy) {
-      clearBusy();
-    }
-  }
-}
-
-async function exportSelection() {
-  if (!state.packagePath || !state.selectedKeys.length) return;
-
-  const destinationFolder = await chooseOutputFolder();
-  if (!destinationFolder) return;
-
-  const payload = {
-    packagePath: state.packagePath,
-    destinationFolder,
-    selectedKeys: state.selectedKeys,
-    includeThumbnails: el.optThumbs.checked,
-    enableCompression: el.optCompression.checked,
-    createClonePackage: el.optClone.checked,
-  };
-
-  setBusy(t("busyExportTitle"), t("busyExportMessage"));
-
-  try {
-    const outputPath = await invoke("export_selected_resources", { payload });
-    await revealItemInDir(outputPath);
-  } catch (error) {
-    console.error(error);
-    await appModal.showError({
-      titleText: t("modalErrorTitle"),
-      messageText: `${t("splittError")}\n${error}`,
-      primaryLabel: t("modalClose"),
-    });
-  } finally {
-    clearBusy();
+    if (state.isBusy) clearBusy();
+    state.removalPending = false;
+    render();
   }
 }
 
