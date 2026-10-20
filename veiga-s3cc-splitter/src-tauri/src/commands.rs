@@ -8016,6 +8016,60 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn atomic_merged_swap_moves_exact_original_to_backup() {
+        let root = test_dir("atomic-merged-backup");
+        let source = root.join("Merged.package");
+        let temp = root.join(".Merged.remove-temp.package");
+        let backup = root.join("Merged_backup").join("Merged.package");
+        std::fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        let original = b"intact-original-merged".to_vec();
+        let rebuilt = b"validated-rebuilt-merged".to_vec();
+        std::fs::write(&source, &original).unwrap();
+        std::fs::write(&temp, &rebuilt).unwrap();
+
+        replace_source_with_rollback(&source, &temp, &backup).unwrap();
+        assert_eq!(std::fs::read(&source).unwrap(), rebuilt);
+        assert_eq!(std::fs::read(&backup).unwrap(), original);
+        assert!(!temp.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn atomic_merged_swap_restores_original_when_rebuilt_missing() {
+        let root = test_dir("atomic-merged-rollback");
+        let source = root.join("Merged.package");
+        let temp = root.join(".nonexistent.remove-temp.package");
+        let backup = root.join("Merged_backup").join("Merged.package");
+        std::fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        let original = b"untouched-original".to_vec();
+        std::fs::write(&source, &original).unwrap();
+
+        let error = replace_source_with_rollback(&source, &temp, &backup).unwrap_err();
+        assert!(error.contains("restaurado"), "{error}");
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        assert!(!backup.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn atomic_merged_swap_does_not_overwrite_existing_backup() {
+        let root = test_dir("atomic-merged-existing-backup");
+        let source = root.join("Merged.package");
+        let temp = root.join(".Merged.remove-temp.package");
+        let backup = root.join("Merged_backup").join("Merged.package");
+        std::fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"original").unwrap();
+        std::fs::write(&temp, b"rebuilt").unwrap();
+        std::fs::write(&backup, b"prior-backup").unwrap();
+
+        assert!(replace_source_with_rollback(&source, &temp, &backup).is_err());
+        assert_eq!(std::fs::read(&source).unwrap(), b"original");
+        assert_eq!(std::fs::read(&temp).unwrap(), b"rebuilt");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"prior-backup");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn removing_five_sources_streams_multi_chunk_merged_and_preserves_backup() {
         let root = test_dir("five-sources-large-merged");
         let destination = root.join("merged");
