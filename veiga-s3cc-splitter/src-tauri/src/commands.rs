@@ -4465,6 +4465,22 @@ fn removal_plan_sets(
     Ok((selected_resources, shared_preserved, resources_to_remove))
 }
 
+// A valid Veiga Merge Manifest already identifies which source owns every
+// selected package and resource. Decoding every CASP/OBJD name in a 1 GiB
+// merged is unnecessary for this path; retain the full map for selections
+// that need generic dependency analysis (including derived resources).
+fn removal_name_map(
+    package: &DBPF<'_>,
+    selected_keys: &[String],
+) -> BTreeMap<u64, String> {
+    if let Some(manifest) = read_valid_merge_manifest_from_dbpf(package) {
+        if manifest_removal_plan_sets(package, &manifest, selected_keys).is_some() {
+            return BTreeMap::new();
+        }
+    }
+    package_resource_names(package)
+}
+
 fn build_remove_selection_plan(
     package: &DBPF<'_>,
     selected_keys: &[String],
@@ -6653,7 +6669,7 @@ fn analyze_remove_selection_inner(
         "Lendo nomes e identificando recursos compartilhados.",
         35, 100, package.files.len(), mmap.len(),
     );
-    let name_map = package_resource_names(&package);
+    let name_map = removal_name_map(&package, &payload.selected_keys);
     let plan = build_remove_selection_plan(&package, &payload.selected_keys, &name_map)?;
     emit_package_progress(
         app, started, "Análise concluída",
@@ -6719,7 +6735,7 @@ fn remove_selected_from_merged_inner(
 
     let mmap = open_package(&payload.package_path)?;
     let package = parse_package(&mmap)?;
-    let name_map = package_resource_names(&package);
+    let name_map = removal_name_map(&package, &payload.selected_keys);
     let plan = build_remove_selection_plan(&package, &payload.selected_keys, &name_map)?;
     if plan.resources_to_remove == 0 && plan.manifest_packages_to_remove == 0 {
         return Err(
@@ -7938,7 +7954,8 @@ mod remove_selected_tests {
         let source_package = WritablePackage::load(&merged.output_path).unwrap();
         let mut source_file = File::open(&merged.output_path).unwrap();
         let selected_key = format!("0x{TYPE_CASP:08X}-0x00000000-0x{casp_a:016X}");
-        let name_map = package_resource_names(&dbpf);
+        let name_map = removal_name_map(&dbpf, &[selected_key.clone()]);
+        assert!(name_map.is_empty(), "manifest removal must not decode all resource names");
         let (_selected_resources, shared_resources, removed) =
             removal_plan_sets(&dbpf, &[selected_key.clone()], &name_map).unwrap();
         let shared_key = format!("0x{TYPE_IMG:08X}-0x00000000-0x{shared:016X}");
