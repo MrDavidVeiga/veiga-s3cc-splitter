@@ -7244,6 +7244,108 @@ mod remove_selected_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+
+    #[test]
+    fn indexed_instance_binary_scan_matches_brute_force_reference() {
+        let source = test_path("indexed-instance-scan");
+        let instances = [
+            0x1234_5678_ABC0_0001u64,
+            0x1234_5678_ABC0_0002u64,
+            0x1234_5678_ABC0_0003u64,
+        ];
+        write_test_package(
+            &source,
+            &[
+                (TYPE_IMG, 0, instances[0], vec![5; 20]),
+                (TYPE_IMG, 1, instances[0], vec![6; 20]),
+                (TYPE_IMG, 0, instances[1], vec![7; 20]),
+                (TYPE_XML, 0, instances[1], vec![8; 20]),
+                (TYPE_IMG, 0, instances[2], vec![9; 20]),
+            ],
+        );
+        let mmap = open_package(&source.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let mut bytes = vec![0xA5; 33];
+        bytes.extend_from_slice(&instances[0].to_le_bytes());
+        bytes.extend_from_slice(&[0x4D; 3]);
+        bytes.extend_from_slice(&instances[1].to_le_bytes());
+        bytes.extend_from_slice(&instances[0].to_le_bytes());
+        bytes.extend_from_slice(&[0x81; 17]);
+
+        let mut expected = Vec::new();
+        let mut seen = HashSet::new();
+        for entry in package.files.iter().filter(|e| e.resource_type == TYPE_IMG) {
+            if bytes.windows(8).any(|w| w == entry.instance.to_le_bytes()) {
+                let parts = ResourceKeyParts {
+                    resource_type: entry.resource_type,
+                    resource_group: entry.resource_group,
+                    instance: entry.instance,
+                };
+                if seen.insert(parts) {
+                    expected.push(parts);
+                }
+            }
+        }
+        let actual = scan_existing_instances_from_bytes(&package, &bytes, &[TYPE_IMG]);
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), 3, "Both groups and both instance matches must survive");
+        let _ = remove_file(&source);
+    }
+
+    #[test]
+    fn non_manifest_large_index_removes_five_but_retains_shared_dependencies() {
+        let source = test_path("generic-large-index");
+        let selected_base = 0x0001_0000_0000_1000u64;
+        let shared = 0xF123_0000_0000_1111u64;
+        let reference = format!("key:{TYPE_IMG:08X}:00000000:{shared:016X}");
+        let mut resources = Vec::new();
+
+        // Many independent logical resources, without any Veiga manifest.
+        // Previous O(N²) companion/byte scans stalled before confirmation.
+        for i in 0..2400u64 {
+            let payload = if i == 0 || i == 5 {
+                format!("<entry>{reference}</entry>").into_bytes()
+            } else {
+                format!("<entry index=\"{i}\"/>").into_bytes()
+            };
+            resources.push((TYPE_XML, 0, selected_base + i, payload));
+        }
+        resources.push((TYPE_IMG, 0, shared, vec![22; 64]));
+        write_test_package(&source, &resources);
+        let selected_keys: Vec<String> = (0..5u64)
+            .map(|i| test_resource_key(TYPE_XML, 0, selected_base + i))
+            .collect();
+        let plan = analyze_remove_selection_inner(
+            None,
+            RemoveSelectionPayload {
+                package_path: source.display().to_string(),
+                selected_keys: selected_keys.clone(),
+            },
+        ).unwrap();
+
+        assert_eq!(plan.manifest_package_total, 0);
+        assert_eq!(plan.resources_to_remove, 5);
+        assert_eq!(plan.shared_resources_preserved, 1);
+        let removed = remove_selected_from_merged_inner(
+            None,
+            RemoveSelectionApplyPayload {
+                package_path: source.display().to_string(),
+                destination_folder: source.parent().unwrap().display().to_string(),
+                selected_keys: selected_keys.clone(),
+            },
+        ).unwrap();
+        assert_eq!(removed.removed_resources, 5);
+        let rebuilt = WritablePackage::load(&removed.output_path).unwrap();
+        assert_eq!(rebuilt.entries.len(), 2396);
+        assert!(rebuilt.entries.iter().any(|e| e.type_id == TYPE_IMG && e.instance == shared));
+        assert!(std::fs::metadata(&removed.backup_path).unwrap().len() > 0);
+        drop(rebuilt);
+        let _ = remove_file(&source);
+        let _ = remove_file(&removed.output_path);
+        let _ = remove_file(&removed.backup_path);
+        let _ = std::fs::remove_dir_all(Path::new(&removed.backup_path).parent().unwrap());
+    }
+
     #[test]
     fn preserves_shared_dependency_and_rebuilds_valid_package() {
         let source = test_path("remove-source");
