@@ -619,3 +619,23 @@ body.release-v1 #results-state .results-footer-actions > button {
   body.release-v1 #results-state .results-list-column {grid-column:1;}
   body.release-v1 #results-state .preview-card {display:none;}
 }
+
+/* Beta layout correction: keep action buttons on one row under the CC list. */
+body.release-v1 #results-state .results-list-column {
+  container-type:inline-size;
+}
+body.release-v1 #results-state .results-list-column .results-footer-actions,
+body.release-v1 #results-state .results-list-column .results-footer-actions.results-footer-actions--three {
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:8px;
+  align-content:start;
+}
+body.release-v1 #results-state .results-list-column .results-footer-actions.results-footer-actions--three {
+  grid-template-columns:repeat(3,minmax(0,1fr));
+}
+@container (max-width:520px) {
+  body.release-v1 #results-state .results-list-column .results-footer-actions,
+  body.release-v1 #results-state .results-list-column .results-footer-actions.results-footer-actions--three {
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+}
