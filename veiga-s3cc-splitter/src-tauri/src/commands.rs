@@ -4560,11 +4560,62 @@ fn unique_backup_directory(destination: &Path, stem: &str) -> PathBuf {
     }
 }
 
-fn files_are_identical(left: &Path, right: &Path) -> Result<bool, String> {
+fn copy_backup_with_progress(
+    app: Option<&AppHandle>,
+    started: Instant,
+    source_path: &Path,
+    backup_path: &Path,
+) -> Result<(), String> {
+    let total_bytes = std::fs::metadata(source_path)
+        .map_err(|e| e.to_string())?
+        .len();
+    let mut original = File::open(source_path).map_err(|e| e.to_string())?;
+    let mut backup = File::create(backup_path).map_err(|e| e.to_string())?;
+    let mut buffer = vec![0u8; 4 * 1024 * 1024];
+    let mut copied = 0u64;
+    let mut last_progress = Instant::now();
+
+    loop {
+        let count = original.read(&mut buffer).map_err(|e| e.to_string())?;
+        if count == 0 {
+            break;
+        }
+        backup.write_all(&buffer[..count]).map_err(|e| e.to_string())?;
+        copied += count as u64;
+        if last_progress.elapsed() >= Duration::from_millis(400) {
+            let percent = 75 + (copied.saturating_mul(12) / total_bytes.max(1)) as u32;
+            let message = format!(
+                "Criando backup: {} de {} MiB.",
+                copied / (1024 * 1024),
+                total_bytes / (1024 * 1024),
+            );
+            emit_package_progress(
+                app, started, "Criando backup", &message,
+                percent.min(87), 100, 0, 0,
+            );
+            last_progress = Instant::now();
+        }
+    }
+    backup.flush().map_err(|e| e.to_string())?;
+    if copied != total_bytes {
+        return Err("O tamanho do original mudou durante o backup.".to_string());
+    }
+    Ok(())
+}
+
+fn files_are_identical(
+    app: Option<&AppHandle>,
+    started: Instant,
+    left: &Path,
+    right: &Path,
+) -> Result<bool, String> {
+    let total_bytes = std::fs::metadata(left).map_err(|e| e.to_string())?.len();
     let mut a = File::open(left).map_err(|e| e.to_string())?;
     let mut b = File::open(right).map_err(|e| e.to_string())?;
-    let mut a_buf = [0u8; 64 * 1024];
-    let mut b_buf = [0u8; 64 * 1024];
+    let mut a_buf = vec![0u8; 4 * 1024 * 1024];
+    let mut b_buf = vec![0u8; 4 * 1024 * 1024];
+    let mut compared = 0u64;
+    let mut last_progress = Instant::now();
 
     loop {
         let a_len = a.read(&mut a_buf).map_err(|e| e.to_string())?;
@@ -4573,10 +4624,24 @@ fn files_are_identical(left: &Path, right: &Path) -> Result<bool, String> {
             return Ok(false);
         }
         if a_len == 0 {
-            return Ok(true);
+            return Ok(compared == total_bytes);
         }
         if a_buf[..a_len] != b_buf[..b_len] {
             return Ok(false);
+        }
+        compared += a_len as u64;
+        if last_progress.elapsed() >= Duration::from_millis(400) {
+            let percent = 88 + (compared.saturating_mul(7) / total_bytes.max(1)) as u32;
+            let message = format!(
+                "Verificando backup: {} de {} MiB.",
+                compared / (1024 * 1024),
+                total_bytes / (1024 * 1024),
+            );
+            emit_package_progress(
+                app, started, "Verificando backup", &message,
+                percent.min(95), 100, 0, 0,
+            );
+            last_progress = Instant::now();
         }
     }
 }
@@ -6557,14 +6622,45 @@ fn scan_package_resources_inner(
 }
 
 #[tauri::command]
-pub fn analyze_remove_selection(
+pub async fn analyze_remove_selection(
+    app: AppHandle,
     payload: RemoveSelectionPayload,
 ) -> Result<RemoveSelectionPlan, String> {
+    // Large-merged planning decodes metadata and traverses many resources.
+    // Keep it off the Tauri command thread so the interface remains responsive.
+    tauri::async_runtime::spawn_blocking(move || {
+        analyze_remove_selection_inner(Some(&app), payload)
+    })
+    .await
+    .map_err(|error| format!("Falha interna ao analisar a remoção: {error}"))?
+}
+
+fn analyze_remove_selection_inner(
+    app: Option<&AppHandle>,
+    payload: RemoveSelectionPayload,
+) -> Result<RemoveSelectionPlan, String> {
+    let started = Instant::now();
+    emit_package_progress(
+        app, started, "Analisando seleção",
+        "Abrindo o merged sem bloquear a interface.",
+        2, 100, 0, 0,
+    );
     validate_package_extension(&payload.package_path)?;
     let mmap = open_package(&payload.package_path)?;
     let package = parse_package(&mmap)?;
+    emit_package_progress(
+        app, started, "Analisando dependências",
+        "Lendo nomes e identificando recursos compartilhados.",
+        35, 100, package.files.len(), mmap.len(),
+    );
     let name_map = package_resource_names(&package);
-    build_remove_selection_plan(&package, &payload.selected_keys, &name_map)
+    let plan = build_remove_selection_plan(&package, &payload.selected_keys, &name_map)?;
+    emit_package_progress(
+        app, started, "Análise concluída",
+        "Plano de remoção pronto para confirmação.",
+        100, 100, package.files.len(), mmap.len(),
+    );
+    Ok(plan)
 }
 
 #[tauri::command]
@@ -6678,13 +6774,14 @@ fn remove_selected_from_merged_inner(
     let backup_dir = unique_backup_directory(&destination, stem);
     create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
     let backup_path = backup_dir.join(file_name);
-    copy(&source_path, &backup_path).map_err(|e| {
+    copy_backup_with_progress(app, started, &source_path, &backup_path).map_err(|e| {
         let _ = remove_file(&temp_path);
+        let _ = remove_file(&backup_path);
         format!("Não foi possível criar o backup do original: {e}")
     })?;
 
     progress("Verificando backup", "Comparando a cópia com o arquivo original.", 88);
-    match files_are_identical(&source_path, &backup_path) {
+    match files_are_identical(app, started, &source_path, &backup_path) {
         Ok(true) => {}
         Ok(false) => {
             let _ = remove_file(&temp_path);
@@ -7504,7 +7601,7 @@ mod remove_selected_tests {
             assert_eq!(scan.manifest_package_count, expected_count);
         }
 
-        let valid_plan = analyze_remove_selection(RemoveSelectionPayload {
+        let valid_plan = analyze_remove_selection_inner(None, RemoveSelectionPayload {
             package_path: valid.display().to_string(),
             selected_keys: vec![casp_key.clone()],
         })
@@ -7513,7 +7610,7 @@ mod remove_selected_tests {
         assert_eq!(valid_plan.manifest_packages_to_remove, 1);
 
         for path in [&common, &other_tool, &corrupt] {
-            let generic_plan = analyze_remove_selection(RemoveSelectionPayload {
+            let generic_plan = analyze_remove_selection_inner(None, RemoveSelectionPayload {
                 package_path: path.display().to_string(),
                 selected_keys: vec![casp_key.clone()],
             })
