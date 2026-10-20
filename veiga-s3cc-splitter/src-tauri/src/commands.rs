@@ -3374,13 +3374,10 @@ fn add_key(
     resolved: &mut HashSet<String>,
     queue: &mut VecDeque<ResourceKeyParts>,
     parts: ResourceKeyParts,
-) -> bool {
+) {
     let key = key_string_from_parts(parts);
     if resolved.insert(key) {
         queue.push_back(parts);
-        true
-    } else {
-        false
     }
 }
 
@@ -3391,10 +3388,9 @@ fn enqueue_key(
     queue: &mut VecDeque<ResourceKeyParts>,
     parts: ResourceKeyParts,
 ) {
-    if !add_key(resolved, queue, parts) {
-        // Avoid repeatedly scanning companion metadata for the same key.
-        return;
-    }
+    add_key(resolved, queue, parts);
+    // Preserve the original dependency-closure semantics, including cases
+    // where a key was first queued as another resource's companion.
     for companion in same_instance_companions(package, parts, include_thumbnails) {
         add_key(resolved, queue, companion);
     }
