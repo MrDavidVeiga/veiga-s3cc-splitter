@@ -7127,6 +7127,8 @@ mod remove_selected_tests {
         let source_package = WritablePackage::load(&source).unwrap();
         let mut source_file = File::open(&source).unwrap();
         write_removed_package(
+            None,
+            Instant::now(),
             &package,
             &source_package,
             &mut source_file,
@@ -7848,6 +7850,8 @@ mod remove_selected_tests {
         assert!(shared_resources.contains(&shared_key));
 
         write_removed_package(
+            None,
+            Instant::now(),
             &dbpf,
             &source_package,
             &mut source_file,
