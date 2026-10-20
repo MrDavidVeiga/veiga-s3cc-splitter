@@ -73,6 +73,96 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check workspace
         run: cargo check --locked --workspace
+      - name: Embed Common Controls v6 in Tauri unit-test executables
+        shell: pwsh
+        run: |
+          # Tauri embeds its Common Controls v6 manifest in the app exe, but
+          # cargo's library test harness is a separate exe without that manifest.
+          # Without it, a test harness importing TaskDialogIndirect from comctl32
+          # exits before any tests run (0xC0000139). Keep the tests enabled.
+          cargo test --locked --workspace --no-run
+          if ($LASTEXITCODE -ne 0) { throw 'Rust tests did not compile' }
+
+          $sdkBin = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+          $mt = Get-ChildItem -LiteralPath $sdkBin -Filter mt.exe -File -Recurse |
+            Where-Object { $_.DirectoryName -match '\\x64        run: |
+          # GitHub's windows-2022 image can put a Service Fabric DLL directory
+          # ahead of the app's intended native dependencies, causing 0xC0000139.
+          $serviceFabric = 'C:\Program Files\Microsoft Service Fabric\bin\Fabric\Fabric.Code'
+          $env:PATH = (($env:PATH -split ';') | Where-Object {
+            $_.TrimEnd('\') -ine $serviceFabric.TrimEnd('\')
+          }) -join ';'
+
+          Write-Host 'Checking for conflicting Service Fabric path entries:'
+          $env:PATH -split ';' | Where-Object {
+            $_ -match 'Microsoft Service Fabric\\bin\\Fabric\\Fabric.Code'
+          } | ForEach-Object { Write-Host $_ }
+
+          cargo test --locked --workspace
+
+  portable-windows-x64:
+    runs-on: windows-2022
+    # Build the test portable after frontend and theme checks; Rust regression
+    # suite runs independently and remains required for final acceptance.
+    needs: [frontend,winui-browser]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: veiga-s3cc-splitter/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+        working-directory: veiga-s3cc-splitter
+      - name: Build portable executable without publishing
+        run: npm run tauri build -- --no-bundle
+        working-directory: veiga-s3cc-splitter
+      - name: Collect build with provenance
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path 'target' -Filter 'veiga-s3cc-splitter.exe' -Recurse -File |
+            Where-Object { $_.FullName -match '\\release\\' } |
+            Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+          if (-not $exe) { throw 'Portable Splitter exe was not generated' }
+          New-Item -ItemType Directory -Path 'portable' -Force | Out-Null
+          Copy-Item -LiteralPath $exe.FullName -Destination 'portable/Veigas_S3CC_Splitter_WinUI3_Windows_x64.exe'
+          $sha = (Get-FileHash -Algorithm SHA256 'portable/Veigas_S3CC_Splitter_WinUI3_Windows_x64.exe').Hash
+          "Commit: ${{ github.sha }}" | Set-Content -Path 'portable/BUILD_INFO.txt'
+          "Version: 2.0.0 | Beta 3 | WinUI 3" | Add-Content -Path 'portable/BUILD_INFO.txt'
+          "$sha  Veigas_S3CC_Splitter_WinUI3_Windows_x64.exe" | Set-Content -Path 'portable/SHA256SUMS.txt'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Veigas_S3CC_Splitter_v2.0.0_Beta3_WinUI3_Windows_x64
+          path: portable/
+          retention-days: 14
+ } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $mt) { throw 'Windows SDK x64 mt.exe was not found' }
+
+          $manifestPath = Join-Path $env:RUNNER_TEMP 'splitter-rust-tests.manifest'
+          @'
+          <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+            <assemblyIdentity type="win32" name="Veiga.S3CC.Splitter.RustTests" version="1.0.0.0" processorArchitecture="*" />
+            <dependency>
+              <dependentAssembly>
+                <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*" />
+              </dependentAssembly>
+            </dependency>
+          </assembly>
+          '@ | Set-Content -LiteralPath $manifestPath -Encoding utf8
+
+          $testExecutables = @(Get-ChildItem -LiteralPath 'target\debug\deps' -Filter 'veiga_s3cc_splitter*.exe' -File)
+          if ($testExecutables.Count -eq 0) { throw 'Splitter Rust test executables were not found' }
+          foreach ($testExe in $testExecutables) {
+            Write-Host "Embedding Common Controls v6 manifest: $($testExe.Name)"
+            & $mt.FullName '-nologo' '-manifest' $manifestPath "-outputresource:$($testExe.FullName);#1"
+            if ($LASTEXITCODE -ne 0) { throw "Failed to embed manifest into $($testExe.FullName)" }
+          }
+
       - name: Run workspace tests
         shell: pwsh
         run: |
