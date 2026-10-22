@@ -1,12 +1,20 @@
 # Changelog — Veiga's S3CC Splitter
 
-## Beta 2 — Versão Beta Final 2.1 (v2.1.0)
+## Beta 2 — Veiga's S3CC Splitter v2.0.0
 
-**Canonical development branch:** beta-final/v2.1.0  
+**Current development branch:** beta/v2.0.0-beta2  
+**Previous historical branch:** beta-final/v2.1.0  
 **Lineage:** former Beta 3 (previously labeled 2.2.0 / “Beta 3”), now officially **Beta 2 v2.1.0**.  
 **Documentation consolidated:** 2026-10-22 (this is NOT an invented release date).
 
 This retrospective changelog covers features present in the canonical branch at documentation time. It does not imply that the code changes were all made on this date, that all platforms have passed final acceptance, or that experimental changes proposed in other branches were released. “Beta Final” is the name of the active beta line, not a claim of production readiness.
+
+### Beta naming and file chooser (2026-10-22)
+
+- User-facing title standardized to **Veiga's S3CC Splitter v2.0.0 | Beta 2**, with no former "Versão Beta Final" suffix. Both betas target the same future integrated **v2.0.0** release.
+- Canonical development branch is now `beta/v2.0.0-beta2`, while older beta-final/build branches are retained for historical reference.
+- Native Splitter and Merger **Open** file dialog filter label changed from **Package** to **`*.package`**. Supported extensions remain `.package` and `.dbc`; source selection capabilities are otherwise unchanged.
+- Application metadata and test expectations use v2.0.0 in this Beta 2 branch, including npm, Tauri and Cargo. Builds must identify **Beta 2** to avoid confusion with the other beta until the final merge.
 
 ### Improved — Manager WinUI 3 layout parity (2026-10-22)
 
