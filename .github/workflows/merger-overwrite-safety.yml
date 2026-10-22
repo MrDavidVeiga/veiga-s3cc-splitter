@@ -46,8 +46,7 @@ jobs:
 
           $sdkBin = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
           $mt = Get-ChildItem -LiteralPath $sdkBin -Filter mt.exe -File -Recurse |
-            Where-Object { $_.DirectoryName -match '\\x64
- } |
+            Where-Object { $_.DirectoryName -match '\\x64$' } |
             Sort-Object FullName -Descending |
             Select-Object -First 1
           if (-not $mt) { throw 'Windows SDK x64 mt.exe was not found' }
