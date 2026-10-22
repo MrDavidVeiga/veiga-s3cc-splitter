@@ -403,3 +403,157 @@ html[data-theme-choice] body.release-v1 #app-modal .app-modal-actions > :is(.pri
     color:CanvasText;
   }
 }
+
+/* Manager 2026-10-19: welcome-state headline uses the same foreground and
+   typography as the Merger's Packages heading, not the muted empty-state ink. */
+html[data-theme-choice] body.release-v1 #splitter-workspace #empty-state .state-title,
+html[data-theme-choice] body.release-v1 #merger-workspace #merger-title {
+  color:var(--winui-text-primary);
+  font-size:1rem;
+  font-weight:800;
+  line-height:1.35;
+}
+
+/* Exact centerline rules for the two Manager NavigationView commands:
+   EN/PT/ES and Theme. 16px Theme glyph, 14px captions, 12px flyout options. */
+html[data-theme-choice] body.release-v1 .topbar.winui-navview {
+  column-gap:12px;
+}
+html[data-theme-choice] body.release-v1 .topbar .language-switcher {
+  display:inline-flex;
+  flex:0 0 auto;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  min-height:32px;
+}
+html[data-theme-choice] body.release-v1 .topbar #lang-label {
+  display:inline-flex;
+  align-items:center;
+  margin:0;
+  padding:0;
+  font:400 14px/20px var(--fluent-body-font);
+  white-space:nowrap;
+}
+html[data-theme-choice] body.release-v1 .topbar #lang-toggle-btn {
+  width:76px;
+  min-width:76px;
+  height:32px;
+  padding:0 10px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  font:600 14px/20px var(--fluent-body-font);
+  vertical-align:middle;
+}
+html[data-theme-choice] body.release-v1 .topbar #lang-current-code {
+  display:inline-flex;
+  align-items:center;
+  font:600 14px/20px var(--fluent-body-font);
+}
+html[data-theme-choice] body.release-v1 .topbar #lang-toggle-icon {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  flex:0 0 12px;
+  width:12px;
+  height:14px;
+  font-size:12px;
+  line-height:14px;
+}
+html[data-theme-choice] body.release-v1 .topbar .theme-control {
+  display:inline-flex;
+  position:relative;
+  flex:0 0 auto;
+  align-items:center;
+  justify-content:center;
+  height:32px;
+  margin:0;
+  padding:0;
+}
+html[data-theme-choice] body.release-v1 .topbar #theme-button {
+  box-sizing:border-box;
+  display:inline-flex;
+  flex:0 0 auto;
+  align-items:center;
+  justify-content:center;
+  vertical-align:middle;
+  width:max-content;
+  min-width:32px;
+  max-width:none;
+  height:32px;
+  min-height:32px;
+  margin:0;
+  padding:0 10px;
+  gap:8px;
+  font:600 14px/20px var(--fluent-body-font);
+  text-align:center;
+  white-space:nowrap;
+}
+html[data-theme-choice] body.release-v1 .topbar #theme-button > svg {
+  display:block;
+  width:16px;
+  height:16px;
+  min-width:16px;
+  min-height:16px;
+  flex:0 0 16px;
+  fill:currentColor;
+  margin:0;
+}
+html[data-theme-choice] body.release-v1 .topbar #theme-button-label {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  height:20px;
+  margin:0;
+  padding:0;
+  font:600 14px/20px var(--fluent-body-font);
+  white-space:nowrap;
+}
+
+/* Language options: use Manager's 12px regular text instead of inheriting
+   Splitter's bold 14px control-label styling. Keep native listbox roles. */
+html[data-theme-choice] body.release-v1 .topbar #lang-menu {
+  min-width:76px;
+  width:76px;
+  padding:6px;
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+html[data-theme-choice] body.release-v1 .topbar #lang-menu .lang-menu-item {
+  box-sizing:border-box;
+  display:inline-flex;
+  align-items:center;
+  justify-content:flex-start;
+  width:100%;
+  min-height:30px;
+  padding:6px 8px;
+  margin:0;
+  border:0;
+  border-radius:var(--winui-control-radius);
+  background:transparent;
+  color:var(--winui-text-primary);
+  text-align:left;
+  font:400 12px/18px var(--fluent-body-font);
+}
+html[data-theme-choice] body.release-v1 .topbar #lang-menu .lang-menu-item:not(:disabled):hover,
+html[data-theme-choice] body.release-v1 .topbar #lang-menu .lang-menu-item:focus-visible {
+  background:var(--winui-control-fill-hover);
+}
+html[data-theme-choice] body.release-v1 .topbar #lang-menu .lang-menu-item.hidden {
+  display:none !important;
+}
+@media(max-width:700px) {
+  html[data-theme-choice] body.release-v1 .topbar #lang-label {display:none;}
+  html[data-theme-choice] body.release-v1 .topbar #theme-button-label {display:inline-flex;}
+}
+@media(max-width:450px) {
+  html[data-theme-choice] body.release-v1 .topbar #theme-button-label {display:none;}
+  html[data-theme-choice] body.release-v1 .topbar #theme-button {
+    width:32px;
+    min-width:32px;
+    padding:0;
+  }
+}
