@@ -121,4 +121,4 @@ Thank you to everyone who tests the tool, reports problems, and helps improve co
 
 
 Historical prior branch: beta-final/v2.0.0. Current: beta/v2.0.0-beta1
-The former Beta 1 and Beta 2 histories are preserved; always use the canonical branch for current 2.0 beta-final work.
+The former Beta 1/Beta 2 histories are preserved. For active development use `beta/v2.0.0-beta1`, not the older `beta-final/v2.0.0` branch.
