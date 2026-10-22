@@ -9,6 +9,14 @@
 
 This retrospective changelog covers features present in the canonical branch at documentation time. It does not imply that the code changes were all made on this date, that all platforms have passed final acceptance, or that experimental changes proposed in other branches were released. “Beta Final” is the name of the active beta line, not a claim of production readiness.
 
+### Drop-zone instruction copy (2026-10-22)
+
+- **Splitter:** "Selecione ou arraste um arquivo aqui".
+- **Merger:** "Selecione ou arraste pastas ou arquivos aqui".
+- Preserve the icon and the separate **`.package • .dbc`** format line under both instructions, including when switching between Portuguese, English, and Spanish.
+- Beta 2 keeps its established drop behavior; this is a wording/layout consistency change only, with no changes to package parsing or merging.
+- Added regression coverage for all three language strings and the format-line DOM structure.
+
 ### Beta naming and file chooser (2026-10-22)
 
 - User-facing title standardized to **Veiga's S3CC Splitter v2.0.0 | Beta 2**, with no former "Versão Beta Final" suffix. Both betas target the same future integrated **v2.0.0** release.
