@@ -5,6 +5,7 @@ on:
     branches:
       - "beta-final/v2.0.0"
       - "ui/beta-final-2.0-manager-layout-20261022"
+      - "ui/beta-final-2.0-title-language-theme-20261022"
     paths:
       - ".github/workflows/splitter-version-validation.yml"
       - "BETA_FINAL.md"
