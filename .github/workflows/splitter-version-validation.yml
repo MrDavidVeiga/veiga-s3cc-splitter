@@ -1,14 +1,12 @@
-name: Splitter version validation
+name: Versão Beta Final 2.0 - validation
 
 on:
   push:
     branches:
-      - "ui/winui3-manager-themes-v2.0.0"
-      - "ui/winui3-manager-themes-v2.1.0"
-      - "build/v2.0.0"
-      - "build/v2.1.0"
+      - "beta-final/v2.0.0"
     paths:
       - ".github/workflows/splitter-version-validation.yml"
+      - "BETA_FINAL.md"
       - "veiga-s3cc-splitter/**"
       - "sims3-core/**"
       - "sims3-pack/**"
