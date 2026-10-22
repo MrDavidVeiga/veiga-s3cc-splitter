@@ -2,12 +2,10 @@ name: Versão Beta Final 2.1 - WinUI3 validation
 on:
   push:
     branches:
-      - feature/winui3-posepack-poselist-v2.4.0
-      - feature/winui3-posepack-poselist-v2.2.0
       - beta-final/v2.1.0
-      - ui/manager-theme-icons-winui3-v2.2.0
     paths:
       - ".github/workflows/splitter-winui3-validation.yml"
+      - "BETA_FINAL.md"
       - "veiga-s3cc-splitter/**"
       - "sims3-core/**"
       - "sims3-pack/**"
