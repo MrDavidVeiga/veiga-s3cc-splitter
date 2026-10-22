@@ -1,7 +1,7 @@
 {
   "$schema": "../src-tauri/gen/schemas/desktop-schema.json",
   "productName": "Veiga´s S3CC Splitter",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "identifier": "com.veiga.s3ccsplitter",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Veiga's S3CC Splitter v2.0.0 | Beta 3",
+        "title": "Veiga's S3CC Splitter v2.1.0 | Beta 2 — Versão Beta Final 2.1",
         "width": 1280,
         "height": 800,
         "minWidth": 820,
@@ -27,12 +27,16 @@
     ],
     "security": {
       "csp": null,
-      "capabilities": ["default"]
+      "capabilities": [
+        "default"
+      ]
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["msi"],
+    "targets": [
+      "msi"
+    ],
     "icon": [
       "../../sims3-cli/assets/icons/32x32.png",
       "../../sims3-cli/assets/icons/128x128.png",
