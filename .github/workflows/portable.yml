@@ -1,6 +1,6 @@
 name: Portable Builds
 
-run-name: Portable builds by @${{ github.actor }}
+run-name: Beta 1 v2.0.0 portable builds by @${{ github.actor }}
 
 on:
   workflow_dispatch:
@@ -17,49 +17,49 @@ jobs:
             target: ""
             build_args: --no-bundle
             binary_name: veiga-s3cc-splitter.exe
-            artifact_name: S3CC-Splitter-Windows-x64
+            artifact_name: S3CC-Splitter-v2.0.0-Beta1-Windows-x64
 
           - platform: windows-2022
             target: i686-pc-windows-msvc
             build_args: --target i686-pc-windows-msvc --no-bundle
             binary_name: veiga-s3cc-splitter.exe
-            artifact_name: S3CC-Splitter-Windows-x86
+            artifact_name: S3CC-Splitter-v2.0.0-Beta1-Windows-x86
 
           - platform: windows-11-arm
             target: aarch64-pc-windows-msvc
             build_args: --target aarch64-pc-windows-msvc --no-bundle
             binary_name: veiga-s3cc-splitter.exe
-            artifact_name: S3CC-Splitter-Windows-ARM64
+            artifact_name: S3CC-Splitter-v2.0.0-Beta1-Windows-ARM64
 
           - platform: ubuntu-22.04
             target: ""
             build_args: --no-bundle
             binary_name: veiga-s3cc-splitter
-            artifact_name: S3CC-Splitter-Linux-x64
+            artifact_name: S3CC-Splitter-v2.0.0-Beta1-Linux-x64
 
           - platform: ubuntu-22.04
             target: i686-unknown-linux-gnu
             build_args: --target i686-unknown-linux-gnu --no-bundle
             binary_name: veiga-s3cc-splitter
-            artifact_name: S3CC-Splitter-Linux-x86
+            artifact_name: S3CC-Splitter-v2.0.0-Beta1-Linux-x86
 
           - platform: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             build_args: --target aarch64-unknown-linux-gnu --no-bundle
             binary_name: veiga-s3cc-splitter
-            artifact_name: S3CC-Splitter-Linux-ARM64
+            artifact_name: S3CC-Splitter-v2.0.0-Beta1-Linux-ARM64
 
           - platform: macos-15-intel
             target: x86_64-apple-darwin
             build_args: --target x86_64-apple-darwin --no-bundle
             binary_name: veiga-s3cc-splitter
-            artifact_name: S3CC-Splitter-macOS-Intel
+            artifact_name: S3CC-Splitter-v2.0.0-Beta1-macOS-Intel
 
           - platform: macos-15
             target: aarch64-apple-darwin
             build_args: --target aarch64-apple-darwin --no-bundle
             binary_name: veiga-s3cc-splitter
-            artifact_name: S3CC-Splitter-macOS-Apple-Silicon
+            artifact_name: S3CC-Splitter-v2.0.0-Beta1-macOS-Apple-Silicon
 
     runs-on: ${{ matrix.platform }}
 
