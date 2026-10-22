@@ -1,6 +1,6 @@
-S3CC Splitter v2.2.0
+Veiga's S3CC Splitter v2.1.0 | Beta 2 — Versão Beta Final 2.1
 
-What's new in v2.2.0
+What's included in Beta Final 2.1 (former Beta 3)
 
 - Splitter and Merger modes are available in the same application.
 - Results can be filtered and searched, with zero preselection, multiple selection, Shift + click, and Select All / Select None limited to the visible result set.
@@ -132,3 +132,7 @@ Special thanks to:
 Thank you
 
 Thank you to everyone who tests the tool, reports problems, and helps improve compatibility with real The Sims 3 custom-content collections.
+
+
+Canonical working branch: beta-final/v2.1.0
+This supersedes the older Beta 3 naming and keeps all former Beta 3 features. Do not use the legacy build/v2.2.0 branch for current Beta Final 2.1 work.
