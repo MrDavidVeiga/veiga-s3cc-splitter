@@ -48,8 +48,5 @@ test("Equal compact modal buttons for OK, Cancel and Remove",()=>{
  assert.ok(css.includes("#app-modal .app-modal-actions"));
  assert.ok(css.includes("flex:0 0 120px"));
  assert.ok(css.includes("justify-content:center"));
- // Beta 1 uses its original dialog implementation (no custom modal DOM).
- if (html.includes('class="app-modal-actions"')) {
-   assert.ok(html.includes('id="app-modal-cancel"')&&html.includes('id="app-modal-primary"'));
- }
+ assert.ok(html.includes('id="app-modal-cancel"')&&html.includes('id="app-modal-primary"'));
 });
