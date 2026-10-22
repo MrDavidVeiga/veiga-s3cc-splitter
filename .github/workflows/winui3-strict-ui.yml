@@ -1,0 +1,36 @@
+name: WinUI 3 strict visual-contract regression
+on:
+  push:
+    paths:
+      - "**/src/winui3-strict.css"
+      - "**/src/winui3-strict.test.mjs"
+      - "**/index.html"
+      - ".github/workflows/winui3-strict-ui.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  geometry-and-load-order:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check common WinUI 3 geometry, semantics and stylesheet precedence
+        shell: bash
+        run: |
+          if test -f "veiga-s3cc-splitter/src/winui3-strict.test.mjs"; then
+            node --test veiga-s3cc-splitter/src/winui3-strict.test.mjs
+          elif test -f "veiga-s3cc-packer/src/winui3-strict.test.mjs"; then
+            node --test veiga-s3cc-packer/src/winui3-strict.test.mjs
+          elif test -f "src/winui3-strict.test.mjs"; then
+            node --test src/winui3-strict.test.mjs
+          else
+            echo "WinUI 3 strict regression test was not found"
+            exit 1
+          fi
