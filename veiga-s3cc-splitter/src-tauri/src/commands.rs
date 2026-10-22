@@ -5400,6 +5400,9 @@ pub fn merge_packages_with_manifest(
         0,
     )?;
 
+    // Keep the resource index deterministic and ordered by Type/Group/Instance.
+    // Payloads and their original offsets are unchanged; only index entries move.
+    out_pkg.entries.sort_by_key(|entry| (entry.type_id, entry.group, entry.instance));
     out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
     out_pkg
         .write_index_and_header()
@@ -5768,6 +5771,9 @@ fn write_removed_package(
         }
     }
 
+    // Keep the resource index deterministic and ordered by Type/Group/Instance.
+    // Payloads and their original offsets are unchanged; only index entries move.
+    out_pkg.entries.sort_by_key(|entry| (entry.type_id, entry.group, entry.instance));
     out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
     out_pkg
         .write_index_and_header()
@@ -7895,6 +7901,64 @@ mod remove_selected_tests {
         assert!(Path::new(&external_result.backup_path).is_file());
         assert!(Path::new(&external_result.output_path).is_file());
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn game_compatible_merger_uses_opaque_manifest_and_sorted_index() {
+        let root = test_dir("merger-game-compat");
+        let a = root.join("A.package");
+        let b = root.join("B.package");
+        let out = root.join("merged");
+        std::fs::create_dir_all(&out).unwrap();
+
+        // Deliberately unsorted TGI order in source packages.
+        let xml_instance = 0xF100_0000_0000_0001u64;
+        let objd_instance = 0xF200_0000_0000_0002u64;
+        let casp_instance = 0xF300_0000_0000_0003u64;
+        let xml_data = b"<complate name=\"OriginalPattern\" />".to_vec();
+        let objd_data = vec![0x10, 0x20, 0x30];
+        let casp_data = vec![0x05, 0x08, 0x0D];
+
+        write_test_package(
+            &a,
+            &[
+                (TYPE_OBJD, 0, objd_instance, objd_data.clone()),
+                (TYPE_XML, 0, xml_instance, xml_data.clone()),
+            ],
+        );
+        write_test_package(&b, &[(TYPE_CASP, 0, casp_instance, casp_data.clone())]);
+
+        let result = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![a.display().to_string(), b.display().to_string()],
+            destination_folder: out.display().to_string(),
+            output_name: "Merged.package".to_string(),
+        }).unwrap();
+        let merged = WritablePackage::load(&result.output_path).unwrap();
+        assert_eq!(merged.entries.iter().filter(|entry| {
+            is_manifest_tgi(entry.type_id, entry.group, entry.instance)
+        }).count(), 1);
+        let manifest_entry = merged.entries.iter()
+            .find(|entry| is_manifest_tgi(entry.type_id, entry.group, entry.instance))
+            .unwrap();
+        assert_eq!(manifest_entry.type_id, MANIFEST_TYPE);
+        assert_ne!(manifest_entry.type_id, TYPE_XML);
+        assert!(merged.entries.windows(2).all(|pair| {
+            (pair[0].type_id, pair[0].group, pair[0].instance)
+                <= (pair[1].type_id, pair[1].group, pair[1].instance)
+        }));
+
+        for (type_id, instance, expected) in [
+            (TYPE_XML, xml_instance, xml_data),
+            (TYPE_OBJD, objd_instance, objd_data),
+            (TYPE_CASP, casp_instance, casp_data),
+        ] {
+            let entry = merged.entries.iter()
+                .find(|e| e.type_id == type_id && e.instance == instance).unwrap();
+            assert_eq!(merged.get_uncompressed_data(entry).unwrap(), expected);
+        }
+        let manifest = read_merge_manifest_from_writable(&merged).unwrap().unwrap();
+        assert_eq!(manifest.packages.len(), 2);
         let _ = std::fs::remove_dir_all(&root);
     }
 
