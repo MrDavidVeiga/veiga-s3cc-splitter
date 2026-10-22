@@ -39,3 +39,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Cargo workspace check failed' }
           cargo check --locked --workspace --tests
           if ($LASTEXITCODE -ne 0) { throw 'Cargo tests failed to compile' }
+      - name: Run isolated TONE parser regression tests
+        shell: pwsh
+        run: |
+          rustc --edition=2021 --test veiga-s3cc-splitter/src-tauri/src/tone_dependencies.rs -o "$env:RUNNER_TEMP\\tone-dependencies-tests.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'TONE parser tests failed to compile' }
+          & "$env:RUNNER_TEMP\\tone-dependencies-tests.exe" --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'TONE parser tests failed' }
