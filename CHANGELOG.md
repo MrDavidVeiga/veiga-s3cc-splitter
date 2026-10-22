@@ -48,7 +48,7 @@ This retrospective changelog describes the capabilities in the canonical branch,
 
 ### Known issues and limitations (not claims of a fix)
 
-- **Merger game performance:** a community tester reported serious in-game lag from a package merged with this tool compared with s3pe. Which historical/current beta is affected, and the exact cause, have not yet been established by a controlled same-input game test. Treat Merger output as experimental for large CC libraries.
+- **Merger game performance — OPEN:** a community tester reported serious in-game lag from a package merged with this tool compared with s3pe. Which historical/current beta is affected, and the exact cause, have not yet been established by a controlled same-input game test. Treat Merger output as experimental for large CC libraries.
 - **Build/Buy names:** a tester observed missing catalog names or source filenames in some items after a Splitter + s3pe workflow; it is not established whether the tool, original CC metadata, or the test workflow caused it.
 - Unmerge requires a valid Veiga Merge Manifest. **Remove from Merged** without such a manifest cannot promise lossless reconstruction of the original component packages.
 - A valid DBPF parse or an automated build does **not** prove gameplay stability. Retain original CC packages, keep backups, and test new merges separately.
