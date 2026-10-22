@@ -4167,7 +4167,7 @@ pub fn merge_packages_with_manifest(
     }
     // Never unlink an existing path just because it resembles our former
     // process-ID temp filename: it might belong to the user or another job.
-    let stamp = SystemTime::now()
+    let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_nanos();
@@ -4327,7 +4327,7 @@ pub fn merge_packages_with_manifest(
         let backup_dir = destination.join("Merged_backups");
         create_dir_all(&backup_dir)
             .map_err(|e| format!("Não foi possível criar a pasta de backups do Merger: {e}"))?;
-        let stamp = SystemTime::now()
+        let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|e| e.to_string())?
             .as_nanos();
