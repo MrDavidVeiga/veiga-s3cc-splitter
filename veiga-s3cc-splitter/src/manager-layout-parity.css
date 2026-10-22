@@ -364,8 +364,8 @@ html[data-theme-choice] body.release-v1 #app-modal .app-modal-actions {
 }
 html[data-theme-choice] body.release-v1 #app-modal .app-modal-actions > :is(.primary-btn,.secondary-btn,.danger-btn) {
   box-sizing:border-box;
-  flex:0 1 140px;
-  width:140px;
+  flex:0 1 120px;
+  width:120px;
   min-width:120px;
   max-width:100%;
   height:36px;
