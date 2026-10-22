@@ -1,0 +1,210 @@
+/*
+ * Veiga WinUI 3 STRICT GEOMETRY — shared across Manager, Packer & Splitter.
+ * Source of truth: Microsoft Windows 11 Geometry / WinUI ControlCornerRadius (4px)
+ * and OverlayCornerRadius (8px). Adaptation for Tauri/WebView; not native WinUI.
+ * Applied LAST so historical 11–24px styling cannot silently override tokens.
+ * Non-geometric functionality, visual assets, application data and themes
+ * intentionally remain owned by each application and release branch.
+ */
+:root {
+  --veiga-winui-control-radius: 4px;
+  --veiga-winui-overlay-radius: 8px;
+  --veiga-winui-joined-radius: 0px;
+  --veiga-winui-gap-xs: 4px;
+  --veiga-winui-gap-sm: 8px;
+  --veiga-winui-gap-md: 12px;
+  --winui-control-radius: var(--veiga-winui-control-radius);
+  --winui-overlay-radius: var(--veiga-winui-overlay-radius);
+  --fluent-radius-control: var(--veiga-winui-control-radius);
+  --fluent-radius-overlay: var(--veiga-winui-overlay-radius);
+}
+html, body {
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+}
+/* Windows NavigationView: no artificial gap or rounded sidebar; the content
+   host has one 8px corner where it leaves the navigation rail. */
+body.release-v1 .layout,
+body.release-v1 .app-shell .layout {
+  gap: 0;
+}
+body :is(.left-panel, .sidebar).card,
+body :is(.left-panel, .sidebar) {
+  border-radius: var(--veiga-winui-joined-radius) !important;
+}
+body.release-v1 :is(.left-panel, .sidebar) {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+body.release-v1 :is(.right-panel.card, .right-panel) {
+  border: 1px solid var(--winui-control-stroke, var(--fluent-control-stroke, rgba(128,128,128,.2)));
+  border-right: 0;
+  border-bottom: 0;
+  border-radius: var(--veiga-winui-overlay-radius) 0 0 0 !important;
+  box-shadow: none;
+  background: var(--winui-layer-fill, var(--panel, transparent));
+}
+body:not(.release-v1) .right-panel {
+  border-radius: var(--veiga-winui-overlay-radius) 0 0 0 !important;
+}
+
+/* In-page surfaces (ListView, cards, result rows and preview backplates)
+   use WinUI 3 ControlCornerRadius, not legacy 18px+ rounded rectangles. */
+body :is(
+  .list-card, .manager-list-card, .preview-card, .package-card,
+  .resource-row, .package-row, .merger-source-row, .list-row,
+  .sidebar-note, .sidebar-utility, .sidebar-diagnostics,
+  .results-card, .progress-card, .stats article, .resource-item,
+  .package-list-item, .preview-thumb-wrap, .thumbnail-card,
+  .content-filter-toggle-btn, .filter-btn, .tool-card,
+  .type-pill, .preview-kind, .drag-zone > .drop-hint
+) {
+  border-radius: var(--veiga-winui-control-radius) !important;
+}
+body :is(.list-card, .manager-list-card, .preview-card) {
+  border-color: var(--winui-control-stroke, var(--fluent-control-stroke, rgba(128,128,128,.2)));
+}
+/* The listheader is joined to its list backplate. No doubled corner shape. */
+body :is(.manager-list-card, .list-card) > :is(.list-header, .list-toolbar),
+body :is(.package-list, .resource-list) {
+  border-radius: var(--veiga-winui-joined-radius) !important;
+}
+body :is(.package-list, .resource-list) {
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+
+/* Buttons, fields, selection controls, checkboxes, navigation items. */
+body :is(
+  .primary-btn, .secondary-btn, .danger-btn, .compact-btn, .filter-btn,
+  .action-btn, .mode-btn, .tools-subtab, .theme-button, .lang-toggle-btn,
+  .content-filter-toggle-btn, .lang-menu-item, .content-filter-menu-item,
+  .theme-option, .nav-item, .text-input, .search-input, .results-search-input,
+  .modal-close, .app-modal-close, .icon-button, .sidebar-utility-action,
+  .sidebar-utility-actions > button, .confirm-actions > button,
+  input[type="search"], input[type="text"], input[type="number"],
+  input[type="password"], select, textarea,
+  button:not(.winui-caption-close):not(.winui-caption-buttons button)
+) {
+  border-radius: var(--veiga-winui-control-radius) !important;
+}
+body :is(button, input, select, textarea, [role="button"], [role="option"]):focus-visible {
+  outline: 2px solid var(--fluent-focus-outer, var(--accent, Highlight));
+  outline-offset: 2px;
+}
+/* Native circular glyphs, loading spinners, avatars and swatches remain round. */
+body :is(.loading-sim-spinner, .theme-swatch, .status-dot, .avatar,
+  .checkbox-indicator, .radio-indicator) {
+  border-radius: 50% !important;
+}
+/* Menus and dialogs float over the app. They use OverlayCornerRadius. */
+body :is(
+  .lang-menu, .theme-flyout, .content-filter-menu, .popover,
+  .menu-flyout, .tooltip-panel, .flyout, .dropdown-menu,
+  .confirm-modal, .modal-content, .modal-panel, .modal-dialog,
+  .loading-dialog, .app-modal, #app-modal, #app-modal-panel,
+  .analysis-results-dialog, .analysis-results-panel,
+  .catalog-import-modal, .collision-review-modal, .structure-modal,
+  .duplicate-details-modal, .conflict-details-modal, .plan-modal,
+  .context-menu, .picker-menu
+) {
+  border-radius: var(--veiga-winui-overlay-radius) !important;
+}
+body :is(.modal-overlay, .modal-backdrop, #app-modal-overlay) {
+  border-radius: 0 !important;
+}
+body :is(.lang-menu, .theme-flyout, .content-filter-menu,
+  .menu-flyout, .dropdown-menu, .context-menu) {
+  border-color: var(--winui-control-stroke, var(--fluent-control-stroke, rgba(128,128,128,.2)));
+}
+/* Restoring native WinUI geometry on bars; sliders and indeterminate progress
+   retain their animation logic and current percentage calculations. */
+body :is(.progress-track, .progress-fill, .progress-bar,
+  .loading-progress-track, .loading-progress-track > *,
+  progress, input[type="range"], .slider-track, .slider-thumb,
+  .progress-line, .busy-progress) {
+  border-radius: var(--veiga-winui-control-radius) !important;
+}
+/* WebView2 scrollbar adaptation: 12px stable channel; narrower resting thumb.
+   Use separate visual states instead of changing scrollbar width (no reflow). */
+body :is(
+  .package-list, .resource-list, #package-list, #resource-list,
+  #merger-source-list, .merger-source-list, .preview-card,
+  #preview-card, .content-filter-menu, #content-filter-menu,
+  .lang-menu, .sidebar, .left-panel, .right-panel, .results-grid
+) {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+body :is(
+  .package-list, .resource-list, #package-list, #resource-list,
+  #merger-source-list, .merger-source-list, .preview-card,
+  #preview-card, .content-filter-menu, #content-filter-menu,
+  .lang-menu, .sidebar, .left-panel, .right-panel, .results-grid
+)::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+body :is(
+  .package-list, .resource-list, #package-list, #resource-list,
+  #merger-source-list, .merger-source-list, .preview-card,
+  #preview-card, .content-filter-menu, #content-filter-menu,
+  .lang-menu, .sidebar, .left-panel, .right-panel, .results-grid
+)::-webkit-scrollbar-track {
+  background: var(--fluent-scrollbar-track, transparent);
+}
+body :is(
+  .package-list, .resource-list, #package-list, #resource-list,
+  #merger-source-list, .merger-source-list, .preview-card,
+  #preview-card, .content-filter-menu, #content-filter-menu,
+  .lang-menu, .sidebar, .left-panel, .right-panel, .results-grid
+)::-webkit-scrollbar-thumb {
+  border: 4px solid transparent;
+  border-radius: var(--veiga-winui-control-radius) !important;
+  background: var(--fluent-scrollbar-thumb, var(--winui-text-tertiary, rgba(128,128,128,.5)));
+  background-clip: padding-box;
+}
+body :is(
+  .package-list, .resource-list, #package-list, #resource-list,
+  #merger-source-list, .merger-source-list, .preview-card,
+  #preview-card, .content-filter-menu, #content-filter-menu,
+  .lang-menu, .sidebar, .left-panel, .right-panel, .results-grid
+):hover::-webkit-scrollbar-thumb,
+body :is(
+  .package-list, .resource-list, #package-list, #resource-list,
+  #merger-source-list, .merger-source-list, .preview-card,
+  #preview-card, .content-filter-menu, #content-filter-menu,
+  .lang-menu, .sidebar, .left-panel, .right-panel, .results-grid
+)::-webkit-scrollbar-thumb:hover {
+  border-width: 2px;
+  background: var(--fluent-scrollbar-thumb-hover, var(--winui-text-secondary, rgba(128,128,128,.7)));
+  background-clip: padding-box;
+}
+body :is(
+  .package-list, .resource-list, #package-list, #resource-list,
+  #merger-source-list, .merger-source-list, .preview-card,
+  #preview-card, .content-filter-menu, #content-filter-menu,
+  .lang-menu, .sidebar, .left-panel, .right-panel, .results-grid
+)::-webkit-scrollbar-thumb:active {
+  border-width: 1px;
+  background: var(--fluent-scrollbar-thumb-pressed, var(--winui-text-primary, rgba(128,128,128,.9)));
+  background-clip: padding-box;
+}
+/* Respect system preferences. Avoid forced colors and hover-only focus. */
+@media (forced-colors: active) {
+  body :is(.list-card, .preview-card, .manager-list-card,
+    .modal-panel, .confirm-modal, #app-modal-panel) {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+  body :is(button, input, select, textarea):focus-visible {
+    outline-color: Highlight;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  body :is(.primary-btn, .secondary-btn, .compact-btn, .theme-option,
+    .lang-menu-item, .filter-btn) {
+    transition-duration: 0.01ms;
+  }
+}
