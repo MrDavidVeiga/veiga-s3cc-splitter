@@ -1066,7 +1066,7 @@ function handleSelectionClick(key, event) {
 }
 
 async function pickPackage() {
-  const result = await open({ multiple: false, filters: [{ name: "Package", extensions: ["package", "dbc"] }] });
+  const result = await open({ multiple: false, filters: [{ name: "*.package", extensions: ["package", "dbc"] }] });
   if (typeof result === "string") {
     state.packagePath = result;
     state.resources = [];
@@ -1197,7 +1197,7 @@ async function collectMergerDroppedPaths(paths) {
 async function pickMergerPackages() {
   const result = await open({
     multiple: true,
-    filters: [{ name: "Package", extensions: ["package", "dbc"] }],
+    filters: [{ name: "*.package", extensions: ["package", "dbc"] }],
   });
   const paths = Array.isArray(result) ? result : typeof result === "string" ? [result] : [];
   addMergerSources(paths);
