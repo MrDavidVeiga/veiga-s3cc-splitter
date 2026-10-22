@@ -5174,14 +5174,22 @@ pub fn merge_packages_with_manifest(
             }
         }
     }
-    let temp_path = destination.join(format!(
-        ".{}.merge-temp-{}.package",
-        output_name.trim_end_matches(".package"),
-        std::process::id()
-    ));
-    if temp_path.exists() {
-        remove_file(&temp_path).map_err(|e| e.to_string())?;
-    }
+    // Never unlink an existing path just because it resembles our former
+    // process-ID temp filename: it might belong to the user or another job.
+    let stamp = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let temp_path = (0..128)
+        .map(|counter| {
+            destination.join(format!(
+                ".{}.merge-temp-{}-{stamp}-{counter}.package",
+                output_name.trim_end_matches(".package"),
+                std::process::id()
+            ))
+        })
+        .find(|candidate| !candidate.exists())
+        .ok_or_else(|| "Não foi possível reservar um nome temporário seguro para a mesclagem.".to_string())?;
 
     let mut sources = Vec::new();
     let mut source_paths = Vec::new();
@@ -8328,6 +8336,10 @@ mod remove_selected_tests {
 
         let original_a = std::fs::read(&source_a).unwrap();
         let original_b = std::fs::read(&source_b).unwrap();
+        // A legacy temp path may be a legitimate user file. It must survive.
+        let existing_legacy_temp =
+            destination.join(format!(".Merged.merge-temp-{}.package", std::process::id()));
+        std::fs::write(&existing_legacy_temp, b"legacy-temp-must-not-be-deleted").unwrap();
         let output = destination.join("Merged.package");
         std::fs::write(&output, b"old-merged-kept-exactly").unwrap();
 
@@ -8358,6 +8370,10 @@ mod remove_selected_tests {
         assert_eq!(std::fs::read(&backup_again).unwrap(), first_merged);
         assert_eq!(std::fs::read(&source_a).unwrap(), original_a);
         assert_eq!(std::fs::read(&source_b).unwrap(), original_b);
+        assert_eq!(
+            std::fs::read(&existing_legacy_temp).unwrap(),
+            b"legacy-temp-must-not-be-deleted"
+        );
 
         // No replacement of an original source is allowed, even with consent.
         let protected = merge_packages_with_manifest(MergePackagesPayload {
