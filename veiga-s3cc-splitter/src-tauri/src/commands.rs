@@ -131,7 +131,7 @@ fn emit_package_progress(
 fn trace_removal_stage(stage: &str, started: Instant, percent: u32) {
     // A portable GUI has no visible console. Keep a minimal stage trace under
     // %TEMP% to diagnose stalls without recording package paths or CC names.
-    let path = std::env::temp_dir().join("Veigas-S3CC-Splitter-Beta3-removal.log");
+    let path = std::env::temp_dir().join("Veigas-S3CC-Splitter-BetaFinal2.1-removal.log");
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(
             file,
