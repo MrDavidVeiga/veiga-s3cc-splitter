@@ -20,8 +20,8 @@ test("unified Beta 1 is consistently versioned 2.0.0", () => {
   assert.match(cargoLock, /name = "veiga-s3cc-splitter"\r?\nversion = "2\.0\.0"/);
   assert.match(html, /Veiga's S3CC Splitter v2\.0\.0 \| Beta 1/);
   assert.doesNotMatch(html, /Beta 2/);
-  assert.match(html, /Versão Beta Final 2\.0/);
-  assert.match(tauri.app.windows[0].title, /Versão Beta Final 2\.0/);
+  assert.match(html, /<title>Veiga's S3CC Splitter v2\\.0\\.0 \\| Beta 1<\\/title>/);
+  assert.equal(tauri.app.windows[0].title, "Veiga's S3CC Splitter v2.0.0 | Beta 1");
 });
 
 test("unified Beta 1 retains Splitter and Merger entry points", () => {
