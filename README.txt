@@ -1,5 +1,7 @@
 Veiga's S3CC Splitter v2.1.0 | Beta 2 — Versão Beta Final 2.1
 
+Detailed change history, known issues and contributor credits: see CHANGELOG.md in this branch.
+
 What's included in Beta Final 2.1 (former Beta 3)
 
 - Splitter and Merger modes are available in the same application.
@@ -24,9 +26,11 @@ What's included in Beta Final 2.1 (former Beta 3)
   - quietlyshout reported excessive RAM usage during large exports, duplicate-name export issues, and suggested improvements for a more compact/resizable interface and clearer duplicate handling.
 - The portable build workflow covers Windows x64, Windows x86, Windows ARM64, Linux x64, Linux x86, Linux ARM64, macOS Intel, and macOS Apple Silicon.
 
-Current main-branch additions (not yet assigned a new release version)
+Additional capabilities included in Beta Final 2.1
 
 CLIP and Pose List support
+
+- The original suggestion to support poses came from **GreatDaySimmer**. The project separately credits contributions to implementation and testing where independently documented.
 
 - Ordinary CLIP resources appear in the Clip category by default.
 - A CLIP is categorized as Pose only when a PoseList XML explicitly references its CLIP key and the matching CLIP resource is present. Unreferenced CLIPs in a mixed package remain Clip.
@@ -126,7 +130,7 @@ Special thanks to:
 
 - Jacinda — Shift + click range-selection suggestion and large Select All/export crash report.
 - quietlyshout — large-export RAM feedback, duplicate-name export issues, and interface/duplicate-handling suggestions.
-- greatdaysimmer — merged/unmerged naming feedback, real-world Merger/Unmerge testing, and duplicate-detection test cases.
+- GreatDaySimmer (greatdaysimmer) — suggested adding pose support (CLIP/PoseList), contributed merged/unmerged naming feedback, real-world Merger/Unmerge testing and duplicate-detection cases, and reported game lag with this Merger compared to s3pe (still under investigation).
 - starshiphelix — Instance ID search suggestion.
 
 Thank you
