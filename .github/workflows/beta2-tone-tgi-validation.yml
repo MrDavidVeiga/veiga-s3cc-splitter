@@ -1,0 +1,41 @@
+name: Beta 2 - TONE TGI experimental validation
+
+on:
+  pull_request:
+    branches:
+      - beta/v2.0.0-beta2
+    paths:
+      - "veiga-s3cc-splitter/src-tauri/**"
+      - "sims3-core/**"
+      - "sims3-pack/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/beta2-tone-tgi-validation.yml"
+  push:
+    branches:
+      - fix/beta2-tone-tgi-dependency-parser-20261022
+    paths:
+      - "veiga-s3cc-splitter/src-tauri/**"
+      - "sims3-core/**"
+      - "sims3-pack/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/beta2-tone-tgi-validation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  rust-compile:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check workspace and test code without executing Windows GUI harness
+        shell: pwsh
+        run: |
+          cargo check --locked --workspace
+          if ($LASTEXITCODE -ne 0) { throw 'Cargo workspace check failed' }
+          cargo check --locked --workspace --tests
+          if ($LASTEXITCODE -ne 0) { throw 'Cargo tests failed to compile' }
