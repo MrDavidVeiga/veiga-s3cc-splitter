@@ -1,4 +1,4 @@
-Veiga's S3CC Splitter v2.0.0 | Beta 1 (unified)
+Veiga's S3CC Splitter v2.0.0 | Beta 1 — Versão Beta Final 2.0
 
 What's included in the unified Beta 1 v2.0.0
 
@@ -114,3 +114,7 @@ Special thanks to:
 Thank you
 
 Thank you to everyone who tests the tool, reports problems, and helps improve compatibility with real The Sims 3 custom-content collections.
+
+
+Canonical working branch: beta-final/v2.0.0
+The former Beta 1 and Beta 2 histories are preserved; always use the canonical branch for current 2.0 beta-final work.
