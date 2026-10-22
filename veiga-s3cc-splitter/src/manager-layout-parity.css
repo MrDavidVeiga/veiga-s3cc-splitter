@@ -1,0 +1,405 @@
+/*
+ * Visual parity with S3CC Manager (source:
+ * MrDavidVeiga/S3CC-Manager, fix/canonical-category-folders-20261019,
+ * src/style.css, src/winui.css and src/ui/fluent/scrollbars.css).
+ *
+ * This intentionally loads AFTER winui-splitter.css, preserving Splitter/Merger
+ * command IDs, virtualized list mechanics and each application's own features.
+ */
+html[data-theme-choice] body.release-v1 .topbar.winui-navview {
+  gap:12px;
+  padding:6px 10px 8px;
+  align-items:center;
+}
+html[data-theme-choice] body.release-v1 .topbar .language-switcher {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin-left:auto;
+  color:var(--winui-text-secondary);
+  font:400 14px/20px var(--fluent-body-font);
+  white-space:nowrap;
+}
+html[data-theme-choice] body.release-v1 .topbar #lang-label {
+  font:400 14px/20px var(--fluent-body-font);
+}
+html[data-theme-choice] body.release-v1 .topbar #lang-toggle-btn {
+  box-sizing:border-box;
+  width:76px;
+  min-width:76px;
+  height:32px;
+  padding:0 10px;
+  justify-content:space-between;
+  gap:8px;
+  font:600 14px/20px var(--fluent-body-font);
+  border-radius:var(--fluent-radius-control);
+  background:var(--fluent-control-fill);
+  color:var(--fluent-text-primary);
+  border:1px solid var(--fluent-control-stroke);
+  border-bottom-color:var(--fluent-control-stroke-strong);
+}
+html[data-theme-choice] body.release-v1 .topbar #lang-current-code {
+  font:600 14px/20px var(--fluent-body-font);
+  letter-spacing:normal;
+}
+html[data-theme-choice] body.release-v1 .topbar #lang-toggle-icon {
+  font-size:12px;
+  line-height:1;
+  color:var(--fluent-text-secondary);
+}
+html[data-theme-choice] body.release-v1 .topbar .theme-control { margin-left:0; }
+html[data-theme-choice] body.release-v1 .topbar #theme-button {
+  box-sizing:border-box;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:7px;
+  min-height:32px;
+  height:32px;
+  padding:0 10px;
+  border-radius:var(--fluent-radius-control);
+  background:var(--fluent-control-fill);
+  border:1px solid var(--fluent-control-stroke);
+  border-bottom-color:var(--fluent-control-stroke-strong);
+  color:var(--fluent-text-primary);
+}
+html[data-theme-choice] body.release-v1 .topbar #theme-button svg {
+  width:16px;
+  height:16px;
+  min-width:16px;
+  fill:currentColor;
+}
+html[data-theme-choice] body.release-v1 .topbar #theme-button-label {
+  font:600 14px/20px var(--fluent-body-font);
+  white-space:nowrap;
+}
+html[data-theme-choice] body.release-v1 :is(#lang-menu,#content-filter-menu,#theme-flyout) {
+  background:var(--winui-popup);
+  color:var(--fluent-text-primary);
+  border:1px solid var(--fluent-control-stroke);
+  border-radius:var(--winui-overlay-radius);
+  box-shadow:0 12px 30px var(--winui-shadow);
+}
+html[data-theme-choice] body.release-v1 .topbar .lang-menu-item {
+  font:400 12px/18px var(--fluent-body-font);
+  border-radius:var(--fluent-radius-control);
+}
+
+/* Manager's WinUI NavigationView outer panel beside the sidebar. */
+html[data-theme-choice] body.release-v1 .right-panel.card {
+  box-sizing:border-box;
+  padding:clamp(18px,1.5vw,26px);
+  border:1px solid var(--winui-control-stroke);
+  border-right:0;
+  border-bottom:0;
+  border-radius:var(--winui-overlay-radius) 0 0 0;
+  background:var(--winui-layer-fill);
+  box-shadow:none;
+  min-height:0;
+  overflow:hidden;
+}
+/* Preserve Splitter selection over Preview, using Manager ComboBox/SearchBox controls. */
+html[data-theme-choice] body.release-v1 #results-state .results-actions {
+  margin:12px 0 10px;
+  column-gap:clamp(8px,1.1vw,16px);
+}
+html[data-theme-choice] body.release-v1 #results-state .results-query-controls {
+  gap:10px;
+}
+html[data-theme-choice] body.release-v1 #results-state .content-filter {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:nowrap;
+}
+html[data-theme-choice] body.release-v1 #results-state .content-filter-label {
+  color:var(--winui-text-secondary);
+  font:600 14px/20px var(--fluent-body-font);
+}
+html[data-theme-choice] body.release-v1 #results-state .content-filter-dropdown {
+  flex:0 1 auto;
+  width:clamp(145px,18vw,210px);
+  max-width:210px;
+  min-width:145px;
+}
+html[data-theme-choice] body.release-v1 #content-filter-toggle-btn {
+  width:100%;
+  min-width:0;
+  height:36px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  padding:6px 10px;
+  font:600 13px/20px var(--fluent-body-font);
+  border:1px solid var(--fluent-control-stroke);
+  border-bottom-color:var(--fluent-control-stroke-strong);
+  border-radius:var(--fluent-radius-control);
+  background:var(--fluent-control-fill);
+  color:var(--fluent-text-primary);
+}
+html[data-theme-choice] body.release-v1 #content-filter-current {
+  min-width:0;
+  flex:1 1 auto;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  text-align:left;
+  font:400 13px/20px var(--fluent-body-font);
+}
+html[data-theme-choice] body.release-v1 #content-filter-menu {
+  width:max(100%,210px);
+  min-width:100%;
+  max-height:min(58vh,520px);
+  overflow:auto;
+}
+html[data-theme-choice] body.release-v1 #results-state #search-input {
+  box-sizing:border-box;
+  height:36px;
+  min-height:36px;
+  max-height:36px;
+  padding:6px 10px;
+  font:400 13px/20px var(--fluent-body-font);
+  border:1px solid var(--fluent-control-stroke);
+  border-bottom-color:var(--fluent-control-stroke-strong);
+  border-radius:var(--fluent-radius-control);
+  color:var(--fluent-text-primary);
+  background:var(--fluent-control-fill);
+  outline:none;
+}
+html[data-theme-choice] body.release-v1 #results-state #search-input::placeholder {
+  color:var(--winui-text-tertiary);
+  opacity:1;
+}
+html[data-theme-choice] body.release-v1 #results-state #search-input:focus {
+  background:var(--fluent-control-hover);
+  border-bottom:2px solid var(--accent);
+}
+html[data-theme-choice] body.release-v1 #results-state #search-input::-webkit-search-cancel-button {
+  cursor:pointer;
+}
+html[data-theme-choice] body.release-v1 #results-state .results-selection-controls > button {
+  font:600 13px/20px var(--fluent-body-font);
+}
+
+/* Exact Manager list-card outer shell / fixed 28px header-to-list rhythm. */
+html[data-theme-choice] body.release-v1 #results-state .manager-list-card,
+html[data-theme-choice] body.release-v1 #results-state .preview-card {
+  height:100%;
+  min-height:0;
+  border-radius:18px;
+  border:1px solid var(--winui-control-stroke);
+  background:var(--winui-card-fill-alt);
+}
+html[data-theme-choice] body.release-v1 #results-state .manager-list-card {
+  --list-end-gap:28px;
+  display:flex;
+  flex-direction:column;
+  padding:0 0 var(--list-end-gap);
+  overflow:hidden;
+}
+html[data-theme-choice] body.release-v1 #results-state .manager-list-card .list-header {
+  display:grid;
+  grid-template-columns:48px 1fr;
+  min-height:var(--list-end-gap);
+  height:var(--list-end-gap);
+  flex:0 0 var(--list-end-gap);
+  padding:14px 14px 10px;
+  border:0;
+  background:transparent;
+  color:var(--winui-text-secondary);
+  font:600 12px/16px var(--fluent-body-font);
+}
+html[data-theme-choice] body.release-v1 #results-state .manager-list-card .resource-list {
+  box-sizing:border-box;
+  flex:1 1 auto;
+  min-height:0;
+  height:auto;
+  max-height:none;
+  padding:8px;
+  overflow-x:hidden;
+  overflow-y:auto;
+  background:transparent;
+  border:0;
+  border-radius:0;
+  /* Existing virtualizer owns display:block and row offsets. Do not alter it. */
+}
+
+/* Manager Fluent 12px scrollbar channel: slim idle thumb, thicker on hover.
+   scrollbar-width:auto overrides old Splitter thin and avoids CSS/WebView2 conflicts. */
+html[data-theme-choice] body.release-v1 :is(
+  #resource-list,#merger-source-list,#content-filter-menu,.preview-card
+) {
+  scrollbar-width:auto;
+  scrollbar-color:auto;
+  overscroll-behavior:contain;
+}
+html[data-theme-choice] body.release-v1 :is(#resource-list,#merger-source-list,#content-filter-menu,.preview-card)::-webkit-scrollbar {
+  width:12px;
+  height:12px;
+}
+html[data-theme-choice] body.release-v1 :is(#resource-list,#merger-source-list,#content-filter-menu,.preview-card)::-webkit-scrollbar-track {
+  background:var(--fluent-scrollbar-track);
+}
+html[data-theme-choice] body.release-v1 :is(#resource-list,#merger-source-list,#content-filter-menu,.preview-card)::-webkit-scrollbar-thumb {
+  min-height:28px;
+  min-width:28px;
+  border-radius:99px;
+  border:4px solid transparent;
+  background:var(--fluent-scrollbar-thumb);
+  background-clip:padding-box;
+}
+html[data-theme-choice] body.release-v1 :is(#resource-list,#merger-source-list,#content-filter-menu,.preview-card):hover::-webkit-scrollbar-thumb,
+html[data-theme-choice] body.release-v1 :is(#resource-list,#merger-source-list,#content-filter-menu,.preview-card)::-webkit-scrollbar-thumb:hover {
+  border-width:2px;
+  background:var(--fluent-scrollbar-thumb-hover);
+  background-clip:padding-box;
+}
+html[data-theme-choice] body.release-v1 :is(#resource-list,#merger-source-list,#content-filter-menu,.preview-card)::-webkit-scrollbar-thumb:active {
+  border-width:1px;
+  background:var(--fluent-scrollbar-thumb-pressed);
+  background-clip:padding-box;
+}
+
+/* Manager ContentDialog: symbol, typography, overlay, aligned actions. */
+html[data-theme-choice] body.release-v1 #app-modal {
+  background:rgba(0,0,0,.48);
+  backdrop-filter:blur(1.5px);
+}
+html[data-resolved-mode="light"] body.release-v1 #app-modal {background:rgba(0,0,0,.28);}
+html[data-theme-choice] body.release-v1 #app-modal-panel {
+  box-sizing:border-box;
+  position:relative;
+  width:min(460px,92vw);
+  max-width:460px;
+  padding:24px;
+  text-align:center;
+  border:1px solid var(--winui-control-stroke);
+  border-radius:var(--winui-overlay-radius);
+  background:var(--winui-popup);
+  box-shadow:0 22px 56px var(--winui-shadow);
+  color:var(--fluent-text-primary);
+}
+html[data-theme-choice] body.release-v1 #app-modal .app-modal-header {
+  display:block;
+  position:static;
+  padding:0;
+  margin:0 0 8px;
+  text-align:center;
+  border:0;
+}
+html[data-theme-choice] body.release-v1 #app-modal .app-modal-title {
+  margin:0;
+  text-align:center;
+  font:600 17px/24px var(--fluent-body-font);
+  color:var(--fluent-text-primary);
+}
+html[data-theme-choice] body.release-v1 #app-modal #app-modal-close {
+  position:absolute;
+  right:10px;
+  top:10px;
+  display:grid;
+  place-items:center;
+  width:30px;
+  height:30px;
+  border:0;
+  border-radius:var(--fluent-radius-control);
+  background:transparent;
+  color:var(--winui-text-secondary);
+}
+html[data-theme-choice] body.release-v1 #app-modal #app-modal-close:hover {
+  background:var(--fluent-control-hover);
+  color:var(--fluent-text-primary);
+}
+html[data-theme-choice] body.release-v1 #app-modal .app-modal-message {
+  margin:0;
+  padding:0;
+  text-align:center;
+  font:400 13px/20px var(--fluent-body-font);
+  color:var(--winui-text-secondary);
+  white-space:pre-line;
+  overflow-wrap:anywhere;
+}
+html[data-theme-choice] body.release-v1 #app-modal .app-modal-icon {
+  display:grid;
+  place-items:center;
+  width:52px;
+  height:52px;
+  margin:0 auto 12px;
+  border:1px solid color-mix(in srgb,var(--fluent-state-info,#60a5fa) 38%,transparent);
+  border-radius:50%;
+  background:color-mix(in srgb,var(--fluent-state-info,#60a5fa) 14%,transparent);
+  color:var(--fluent-state-info,#60a5fa);
+  font:900 20px/1 "Font Awesome 6 Free";
+}
+html[data-theme-choice] body.release-v1 #app-modal .app-modal-icon::before {content:"\f05a";}
+html[data-theme-choice] body.release-v1 #app-modal[data-modal-kind="success"] .app-modal-icon {
+  color:var(--fluent-state-success,#68be7c);
+  background:color-mix(in srgb,var(--fluent-state-success,#68be7c) 14%,transparent);
+  border-color:color-mix(in srgb,var(--fluent-state-success,#68be7c) 38%,transparent);
+}
+html[data-theme-choice] body.release-v1 #app-modal[data-modal-kind="success"] .app-modal-icon::before {content:"\f058";}
+html[data-theme-choice] body.release-v1 #app-modal[data-modal-kind="warning"] .app-modal-icon,
+html[data-theme-choice] body.release-v1 #app-modal[data-modal-kind="confirm"] .app-modal-icon {
+  color:var(--fluent-state-warning,#e2aa40);
+  background:color-mix(in srgb,var(--fluent-state-warning,#e2aa40) 14%,transparent);
+  border-color:color-mix(in srgb,var(--fluent-state-warning,#e2aa40) 38%,transparent);
+}
+html[data-theme-choice] body.release-v1 #app-modal[data-modal-kind="warning"] .app-modal-icon::before,
+html[data-theme-choice] body.release-v1 #app-modal[data-modal-kind="confirm"] .app-modal-icon::before {content:"\f071";}
+html[data-theme-choice] body.release-v1 #app-modal[data-modal-kind="error"] .app-modal-icon {
+  color:var(--fluent-state-error,#ef8585);
+  background:color-mix(in srgb,var(--fluent-state-error,#ef8585) 14%,transparent);
+  border-color:color-mix(in srgb,var(--fluent-state-error,#ef8585) 38%,transparent);
+}
+html[data-theme-choice] body.release-v1 #app-modal[data-modal-kind="error"] .app-modal-icon::before {content:"\f06a";}
+html[data-theme-choice] body.release-v1 #app-modal .app-modal-actions {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex-wrap:wrap;
+  gap:9px;
+  width:100%;
+  margin:20px 0 0;
+}
+html[data-theme-choice] body.release-v1 #app-modal .app-modal-actions > :is(.primary-btn,.secondary-btn,.danger-btn) {
+  box-sizing:border-box;
+  flex:0 1 120px;
+  width:120px;
+  min-width:120px;
+  max-width:100%;
+  height:36px;
+  min-height:36px;
+  margin:0;
+  padding:7px 12px;
+  font:600 13px/20px var(--fluent-body-font);
+  white-space:normal;
+}
+@media(max-width:1050px) {
+  html[data-theme-choice] body.release-v1 #results-state .results-query-controls {
+    gap:7px;
+  }
+  html[data-theme-choice] body.release-v1 #results-state .content-filter {
+    gap:7px;
+  }
+  html[data-theme-choice] body.release-v1 #results-state .content-filter-dropdown {
+    min-width:120px;
+    width:clamp(120px,15vw,175px);
+  }
+}
+@media(max-width:700px) {
+  html[data-theme-choice] body.release-v1 .topbar.winui-navview {gap:6px;padding-inline:6px;}
+  html[data-theme-choice] body.release-v1 #lang-label {display:none;}
+  html[data-theme-choice] body.release-v1 #theme-button-label {display:none;}
+  html[data-theme-choice] body.release-v1 #results-state .results-query-controls,
+  html[data-theme-choice] body.release-v1 #results-state .content-filter {flex-wrap:wrap;}
+  html[data-theme-choice] body.release-v1 #results-state .content-filter-dropdown {width:100%;max-width:none;}
+  html[data-theme-choice] body.release-v1 .right-panel.card {padding:12px;}
+}
+@media(forced-colors:active) {
+  html[data-theme-choice] body.release-v1 .app-modal-icon {
+    border:1px solid ButtonText;
+    background:Canvas;
+    color:CanvasText;
+  }
+}
