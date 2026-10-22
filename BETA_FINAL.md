@@ -14,4 +14,6 @@ Use **somente** `beta-final/v2.0.0` para o ramo 2.0 e `beta-final/v2.1.0` para o
 - Preservar o historico das antigas branches. Nunca sobrescrever uma branch historica para atualizar a branch canonica.
 - Nome 'Beta Final' identifica a linha de desenvolvimento atual. Nao significa compilacao ou testes finais aprovados ate que o CI valide a branch correspondente.
 
-Veja o README de cada branch para os recursos tecnicos e os testes especificos.
+Consulte tambem o `CHANGELOG.md` de **cada branch canonica** para o historico de funcionalidades, otimizacoes, correcoes, problemas conhecidos e creditos por sugestoes, relatos e testes. O `README.txt` descreve o uso e o contexto tecnico.
+
+Credito confirmado: **GreatDaySimmer sugeriu o suporte a poses/CLIP/PoseList**, documentado na **Versao Beta Final 2.1**. Problemas do Merger relatados por GreatDaySimmer ainda estao sob investigacao, nao marcados como resolvidos.
