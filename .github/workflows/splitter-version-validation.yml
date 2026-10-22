@@ -1,13 +1,12 @@
-name: Versão Beta Final 2.0 - validation
+name: Beta 1 v2.0.0 - validation
 
 on:
   push:
     branches:
-      - "beta-final/v2.0.0"
-      - "ui/beta-final-2.0-manager-layout-20261022"
-      - "ui/beta-final-2.0-title-language-theme-20261022"
+      - "beta/v2.0.0-beta1"
     paths:
       - ".github/workflows/splitter-version-validation.yml"
+      - "BETAS_ATUAIS.md"
       - "BETA_FINAL.md"
       - "veiga-s3cc-splitter/**"
       - "sims3-core/**"
