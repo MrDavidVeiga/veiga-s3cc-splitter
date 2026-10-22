@@ -208,3 +208,79 @@ body :is(
     transition-duration: 0.01ms;
   }
 }
+
+/* WinUI 3 typography and density, inherited across apps without overriding
+   localized label content, keyboard events, selected rows or responsive display. */
+body :is(.topbar, .winui-navview) :is(.language-switcher, .theme-control) {
+  align-items: center;
+  gap: var(--veiga-winui-gap-sm);
+}
+body :is(.topbar, .winui-navview) :is(.lang-toggle-btn, .theme-button, #language-button, #lang-toggle-btn) {
+  min-height: 32px;
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+body :is(.topbar, .winui-navview) :is(.theme-button svg, #theme-button svg) {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  flex: 0 0 16px;
+}
+body :is(.topbar, .winui-navview) :is(#theme-button-label, #lang-current-code, .lang-current-code) {
+  font-size: 14px;
+  line-height: 20px;
+}
+body :is(.lang-menu-item, .content-filter-menu-item, .theme-option, .menu-item) {
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 12px;
+  line-height: 18px;
+}
+body :is(.list-header, .package-list-header, .results-header-label) {
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  color: var(--winui-text-secondary, var(--muted, inherit));
+}
+body :is(.results-search-input, .text-input, .search-input,
+  input[type="search"], input[type="text"], select) {
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+}
+body :is(.primary-btn, .secondary-btn, .danger-btn, .compact-btn,
+  .filter-btn, .content-filter-toggle-btn) {
+  min-height: 32px;
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+}
+body :is(.modal-title, .app-modal-title, .confirm-modal h2,
+  .loading-dialog h2) {
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 600;
+}
+body :is(.modal-message, .app-modal-message, .confirm-modal p,
+  .loading-dialog p) {
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+}
+body :is(.secondary-btn, .compact-btn, .lang-toggle-btn,
+  .content-filter-toggle-btn, .filter-btn):hover:not(:disabled) {
+  background-color: var(--winui-control-fill-hover, var(--fluent-control-hover, transparent));
+}
+body :is(input[type="search"], input[type="text"], .text-input, select):focus {
+  border-bottom: 2px solid var(--accent, Highlight);
+}
+@media (forced-colors: active) {
+  body :is(input, select, textarea, button) {
+    forced-color-adjust: auto;
+  }
+}
