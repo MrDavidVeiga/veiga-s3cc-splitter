@@ -46,6 +46,7 @@ const translations = {
     mergerCount: (count) => `${count} package${count === 1 ? "" : "s"} selected.`,
     mergerBusy: "Merging packages...",
     mergerSuccess: (result) => `Merge completed: ${result.packageCount} ${countForm(result.packageCount, "original package", "original packages")}, ${result.resourceCount} ${countForm(result.resourceCount, "unique resource", "unique resources")}, ${result.sharedResources} ${countForm(result.sharedResources, "shared resource", "shared resources")}.`,
+    mergerBackup: (path) => `Original merged package preserved as backup: ${path}`,
     mergerError: "Merge failed:",
     restoreOriginals: "Unmerge",
     restoreBusyTitle: "Unmerging...",
@@ -191,6 +192,7 @@ const translations = {
     mergerCount: (count) => `${count} package${count === 1 ? "" : "s"} selecionado${count === 1 ? "" : "s"}.`,
     mergerBusy: "Mesclando packages...",
     mergerSuccess: (result) => `Mesclagem concluída: ${result.packageCount} ${countForm(result.packageCount, "package original", "packages originais")}, ${result.resourceCount} ${countForm(result.resourceCount, "recurso único", "recursos únicos")}, ${result.sharedResources} ${countForm(result.sharedResources, "recurso compartilhado", "recursos compartilhados")}.`,
+    mergerBackup: (path) => `Package anterior preservado em backup: ${path}`,
     mergerError: "Falha ao mesclar:",
     restoreOriginals: "Desmesclar",
     restoreBusyTitle: "Desmesclando...",
@@ -336,6 +338,7 @@ const translations = {
     mergerCount: (count) => `${count} package${count === 1 ? "" : "s"} seleccionado${count === 1 ? "" : "s"}.`,
     mergerBusy: "Fusionando packages...",
     mergerSuccess: (result) => `Fusión completada: ${result.packageCount} ${countForm(result.packageCount, "package original", "packages originales")}, ${result.resourceCount} ${countForm(result.resourceCount, "recurso único", "recursos únicos")}, ${result.sharedResources} ${countForm(result.sharedResources, "recurso compartido", "recursos compartidos")}.`,
+    mergerBackup: (path) => `Package anterior conservado como copia de seguridad: ${path}`,
     mergerError: "Error al fusionar:",
     restoreOriginals: "Desfusionar",
     restoreBusyTitle: "Desfusionando...",
@@ -1350,12 +1353,14 @@ async function runMerger() {
         packagePaths: state.mergerSources,
         destinationFolder,
         outputName,
+        // The OS Save dialog already confirmed replacing an existing filename.
+        allowOverwrite: true,
       },
     });
     state.mergerResult = result;
     await appModal.showSuccess({
       titleText: t("modalSuccessTitle"),
-      messageText: t("mergerSuccess", result),
+      messageText: [t("mergerSuccess", result), result.backupPath ? t("mergerBackup", result.backupPath) : ""].filter(Boolean).join("\n"),
       primaryLabel: t("modalOk"),
     });
     await revealItemInDir(result.outputPath);
