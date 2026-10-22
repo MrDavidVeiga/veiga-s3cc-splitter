@@ -16,6 +16,7 @@
     <link rel="stylesheet" href="./src/ui/fluent/button-geometry.css" />
     <link rel="stylesheet" href="./src/winui-splitter.css" />
     <link rel="stylesheet" href="./src/ui/fluent/thumbnail-items.css" />
+    <link rel="stylesheet" href="./src/manager-layout-parity.css" />
   </head>
   <body class="release-v1">
     <div class="app-shell">
@@ -43,9 +44,9 @@
               <i id="lang-toggle-icon" class="fa-solid fa-angle-down" aria-hidden="true"></i>
             </button>
             <div id="lang-menu" class="lang-menu hidden" role="listbox" aria-label="Language options">
-              <button class="lang-menu-item" data-lang="en" type="button" role="option">EN</button>
-              <button class="lang-menu-item" data-lang="es" type="button" role="option">ES</button>
-              <button class="lang-menu-item" data-lang="pt" type="button" role="option">PT</button>
+              <button class="lang-menu-item" data-lang="en" type="button" role="option" aria-selected="false">EN</button>
+              <button class="lang-menu-item" data-lang="es" type="button" role="option" aria-selected="false">ES</button>
+              <button class="lang-menu-item" data-lang="pt" type="button" role="option" aria-selected="false">PT</button>
             </div>
           </div>
         </div>
@@ -129,7 +130,7 @@
                     <div id="content-filter-menu" class="lang-menu content-filter-menu hidden" role="listbox"></div>
                   </div>
                 </div>
-                <input id="search-input" class="text-input results-search-input" type="text" placeholder="Search by name or Instance ID" autocomplete="off" spellcheck="false" aria-label="Search by name or Instance ID" />
+                <input id="search-input" class="text-input results-search-input" type="search" placeholder="Search by name or Instance ID" autocomplete="off" spellcheck="false" aria-label="Search by name or Instance ID" />
               </div>
               <div class="results-selection-controls">
                 <button id="select-all-btn" class="secondary-btn">Select All</button>
@@ -139,9 +140,9 @@
 
 <div class="results-grid">
                 <div class="results-list-column">
-  <section class="list-card">
+  <section class="list-card manager-list-card">
     <div class="list-header"><span></span></div>
-    <div id="resource-list" class="resource-list"></div>
+    <div id="resource-list" class="resource-list package-list" aria-live="polite"></div>
   </section>
                   <div class="footer-actions results-footer-actions">
               <button id="export-btn" class="primary-btn">Export Selection</button>
@@ -191,6 +192,7 @@
           aria-describedby="app-modal-message"
           tabindex="-1"
         >
+          <div class="app-modal-icon" aria-hidden="true"></div>
           <div class="app-modal-header">
             <h2 id="app-modal-title" class="app-modal-title"></h2>
             <button id="app-modal-close" class="app-modal-close" type="button" aria-label="">
