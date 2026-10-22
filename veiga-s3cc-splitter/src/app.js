@@ -140,7 +140,7 @@ const translations = {
     modalCancel: "Cancel",
     modalClose: "Close",
     modalRemove: "Remove",
-    emptyTitle: "Open a package to begin.",
+    emptyTitle: "Packages to Split",
     emptySubtitle: "The list, preview and actions will appear here.",
     previewTitle: "Preview",
     previewEmpty: "Select a resource to see the preview.",
@@ -272,7 +272,7 @@ const translations = {
     modalCancel: "Cancelar",
     modalClose: "Fechar",
     modalRemove: "Remover",
-    emptyTitle: "Abra um package para começar.",
+    emptyTitle: "Packages para Separar",
     emptySubtitle: "A lista, preview e ações aparecem aqui.",
     previewTitle: "Preview",
     previewEmpty: "Selecione um recurso para ver o preview.",
@@ -404,7 +404,7 @@ const translations = {
     modalCancel: "Cancelar",
     modalClose: "Cerrar",
     modalRemove: "Eliminar",
-    emptyTitle: "Abre un package para empezar.",
+    emptyTitle: "Packages para Separar",
     emptySubtitle: "La lista, la vista previa y las acciones aparecerán aquí.",
     previewTitle: "Vista previa",
     previewEmpty: "Selecciona un recurso para ver la vista previa.",
@@ -631,6 +631,11 @@ function applyStaticTranslations() {
     const isActive = btn.dataset.lang === state.language;
     btn.classList.toggle("hidden", isActive);
     btn.classList.toggle("active", isActive);
+    // Match Manager: selected abbreviation already appears in the trigger,
+    // so its listbox option is hidden and the ARIA state tracks that choice.
+    btn.hidden = isActive;
+    btn.setAttribute("aria-hidden", String(isActive));
+    btn.setAttribute("aria-selected", String(isActive));
     btn.title = btn.dataset.lang.toUpperCase();
   });
 }
