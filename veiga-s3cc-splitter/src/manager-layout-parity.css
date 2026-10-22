@@ -529,7 +529,7 @@ html[data-theme-choice] body.release-v1 .topbar #lang-menu .lang-menu-item {
   justify-content:flex-start;
   width:100%;
   min-height:30px;
-  padding:6px 8px;
+  padding:10px 12px;
   margin:0;
   border:0;
   border-radius:var(--winui-control-radius);
