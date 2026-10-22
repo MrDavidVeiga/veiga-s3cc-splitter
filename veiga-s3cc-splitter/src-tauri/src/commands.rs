@@ -8317,6 +8317,64 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn merger_requires_explicit_consent_and_preserves_replaced_output_in_a_backup() {
+        let root = test_dir("merger-safe-overwrite");
+        let source_a = root.join("Source_A.package");
+        let source_b = root.join("Source_B.package");
+        let destination = root.join("output");
+        std::fs::create_dir_all(&destination).unwrap();
+        write_test_package(&source_a, &[(TYPE_CASP, 0, 0xA1123, vec![1, 2, 3])]);
+        write_test_package(&source_b, &[(TYPE_CASP, 0, 0xB1123, vec![4, 5, 6])]);
+
+        let original_a = std::fs::read(&source_a).unwrap();
+        let original_b = std::fs::read(&source_b).unwrap();
+        let output = destination.join("Merged.package");
+        std::fs::write(&output, b"old-merged-kept-exactly").unwrap();
+
+        let mut payload = MergePackagesPayload {
+            package_paths: vec![
+                source_a.display().to_string(),
+                source_b.display().to_string(),
+            ],
+            destination_folder: destination.display().to_string(),
+            output_name: "Merged.package".to_string(),
+            allow_overwrite: false,
+        };
+        let error = merge_packages_with_manifest(payload.clone()).unwrap_err();
+        assert!(error.contains("Já existe"), "{error}");
+        assert_eq!(std::fs::read(&output).unwrap(), b"old-merged-kept-exactly");
+
+        payload.allow_overwrite = true;
+        let result = merge_packages_with_manifest(payload.clone()).unwrap();
+        let saved = result.backup_path.expect("A confirmed replacement must create a backup");
+        assert!(saved.ends_with(".s3ccbak"));
+        assert_eq!(std::fs::read(&saved).unwrap(), b"old-merged-kept-exactly");
+        let first_merged = std::fs::read(&output).unwrap();
+        assert!(WritablePackage::load(&output).is_ok());
+
+        let second = merge_packages_with_manifest(payload).unwrap();
+        let backup_again = second.backup_path.expect("Each overwrite needs another backup");
+        assert_ne!(saved, backup_again);
+        assert_eq!(std::fs::read(&backup_again).unwrap(), first_merged);
+        assert_eq!(std::fs::read(&source_a).unwrap(), original_a);
+        assert_eq!(std::fs::read(&source_b).unwrap(), original_b);
+
+        // No replacement of an original source is allowed, even with consent.
+        let protected = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![
+                source_a.display().to_string(),
+                source_b.display().to_string(),
+            ],
+            destination_folder: root.display().to_string(),
+            output_name: "Source_A.package".to_string(),
+            allow_overwrite: true,
+        }).unwrap_err();
+        assert!(protected.contains("package de origem"), "{protected}");
+        assert_eq!(std::fs::read(&source_a).unwrap(), original_a);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn atomic_merged_swap_restores_original_when_rebuilt_missing() {
         let root = test_dir("atomic-merged-rollback");
         let source = root.join("Merged.package");
