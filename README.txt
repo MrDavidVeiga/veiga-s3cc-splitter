@@ -1,5 +1,7 @@
 Veiga's S3CC Splitter v2.0.0 | Beta 1 — Versão Beta Final 2.0
 
+Detailed change history and specific community credits: see CHANGELOG.md in this branch.
+
 What's included in the unified Beta 1 v2.0.0
 
 - Unified Beta 1: original Beta 1 Splitter v2.0.0 and former Beta 2 v2.1.0 features are consolidated under v2.0.0.
