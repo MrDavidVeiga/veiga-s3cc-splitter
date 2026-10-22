@@ -1,8 +1,10 @@
-Veiga's S3CC Splitter v2.0.0 | Beta 1 — Versão Beta Final 2.0
+Veiga's S3CC Splitter v2.0.0 | Beta 1
+
+Current development branch: `beta/v2.0.0-beta1`. The final integrated release is planned as **v2.0.0**; Beta 1 and Beta 2 remain separate until a reviewed merge. See `BETAS_ATUAIS.md` for the canonical branches. The file chooser displays `*.package` and still opens `.dbc` files.
 
 Detailed change history and specific community credits: see CHANGELOG.md in this branch.
 
-What's included in the unified Beta 1 v2.0.0
+What's included in Beta 1 (planned v2.0.0 release)
 
 - Unified Beta 1: original Beta 1 Splitter v2.0.0 and former Beta 2 v2.1.0 features are consolidated under v2.0.0.
 - Splitter and Merger modes are available in the same application.
@@ -118,5 +120,5 @@ Thank you
 Thank you to everyone who tests the tool, reports problems, and helps improve compatibility with real The Sims 3 custom-content collections.
 
 
-Canonical working branch: beta-final/v2.0.0
+Historical prior branch: beta-final/v2.0.0. Current: beta/v2.0.0-beta1
 The former Beta 1 and Beta 2 histories are preserved; always use the canonical branch for current 2.0 beta-final work.
