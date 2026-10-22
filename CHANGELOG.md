@@ -10,6 +10,9 @@ This retrospective changelog describes the capabilities in the canonical branch,
 
 ### Improved — Manager WinUI 3 layout parity (2026-10-22)
 
+- **Manager header consistency (2026-10-22):** renamed the localized Splitter welcome heading to **Packages para Separar** (PT/ES; **Packages to Split** in EN) and matched the Merger heading's primary text color and weight. Recentered the Theme icon/label and language control in the topbar; aligned their 16px/14px geometry and the 12px regular EN/ES/PT language menu with the latest Manager. The selected language option is hidden from the flyout and exposed through the trigger. PR #21.
+
+
 - Unified the **language / EN-PT-ES abbreviation / theme** topbar geometry with the latest S3CC Manager reference (`MrDavidVeiga/S3CC-Manager`, `fix/canonical-category-folders-20261019`), including spacing, 14 px labels, Fluent control heights and 12/16 px icons.
 - Matched the Manager **content filter ComboBox and name/Instance ID SearchBox** typography, colors, dimensions, dropdown radius and focus styling.
 - Reused the Manager's **results list shell** (`manager-list-card` and `package-list` classes) with 18 px outer radius and 28 px fixed list-header spacing, without replacing the Splitter's resource virtualizer.
