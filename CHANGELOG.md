@@ -8,6 +8,17 @@
 
 This retrospective changelog covers features present in the canonical branch at documentation time. It does not imply that the code changes were all made on this date, that all platforms have passed final acceptance, or that experimental changes proposed in other branches were released. “Beta Final” is the name of the active beta line, not a claim of production readiness.
 
+### Improved — Manager WinUI 3 layout parity (2026-10-22)
+
+- Unified the **language / EN-PT-ES abbreviation / theme** topbar geometry with the latest S3CC Manager reference (`MrDavidVeiga/S3CC-Manager`, `fix/canonical-category-folders-20261019`), including spacing, 14 px labels, Fluent control heights and 12/16 px icons.
+- Matched the Manager **content filter ComboBox and name/Instance ID SearchBox** typography, colors, dimensions, dropdown radius and focus styling.
+- Reused the Manager's **results list shell** (`manager-list-card` and `package-list` classes) with 18 px outer radius and 28 px fixed list-header spacing, without replacing the Splitter's resource virtualizer.
+- Restored the Manager's **WinUI 3 native Fluent scrollbar** (12 px stable channel; 4 px resting thumb inset, 2 px on hover, 1 px when pressed) for resources, Merger inputs, preview and filter dropdown.
+- Matched the main **content panel (outer)** border, corner radius, fill and padding beside the sidebar.
+- Restyled **info / warning / error / success / confirmation dialogs** with Manager-style state icons, localized text layout, themed surfaces and centered 120 px action buttons, retaining the Splitter's existing modal keyboard behavior.
+- Added UI parity regression tests; frontend test/build validation passed on both branches, and the Beta Final 2.1 WinUI browser visual smoke passed after correcting the initial 140 px modal-button mismatch to 120 px.
+- **Scope:** visual, HTML and CSS parity only. No change to resource merge/export engines or claims that Merger gameplay lag has been resolved. See PRs [#19](https://github.com/MrDavidVeiga/veiga-s3cc-splitter/pull/19) and [#20](https://github.com/MrDavidVeiga/veiga-s3cc-splitter/pull/20).
+
 ### Added — Core Splitter, Merger, and reversible operations
 
 - **Splitter** and **Merger** in the same desktop application, with distinct operating modes.
