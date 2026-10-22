@@ -1,0 +1,40 @@
+name: GreatDaySimmer Merger overwrite safety
+on:
+  push:
+    branches:
+      - "fix/beta1-merger-safe-overwrite-20261022"
+      - "fix/beta2-merger-safe-overwrite-20261022"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify JS frontend and build
+        working-directory: veiga-s3cc-splitter
+        run: |
+          npm ci
+          node --test src/*.test.mjs
+          npm run build
+
+  merger-rust:
+    name: Rust Merger safety and DBPF validation
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: veiga-s3cc-splitter/src-tauri -> target
+      - name: Test confirmed replacement, rolling backups and source protection
+        run: cargo test --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml merger_requires_explicit_consent_and_preserves_replaced_output_in_a_backup --locked -- --nocapture
+      - name: Compile entire Rust test suite
+        run: cargo test --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml --locked --no-run
