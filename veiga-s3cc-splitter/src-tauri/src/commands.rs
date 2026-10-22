@@ -7919,6 +7919,8 @@ mod remove_selected_tests {
         let xml_data = b"<complate name=\"OriginalPattern\" />".to_vec();
         let objd_data = vec![0x10, 0x20, 0x30];
         let casp_data = vec![0x05, 0x08, 0x0D];
+        let stbl_instance = 0xF400_0000_0000_0004u64;
+        let stbl_data = b"STBL game display-name payload".to_vec();
 
         write_test_package(
             &a,
@@ -7927,7 +7929,10 @@ mod remove_selected_tests {
                 (TYPE_XML, 0, xml_instance, xml_data.clone()),
             ],
         );
-        write_test_package(&b, &[(TYPE_CASP, 0, casp_instance, casp_data.clone())]);
+        write_test_package(&b, &[
+            (TYPE_CASP, 0, casp_instance, casp_data.clone()),
+            (TYPE_STBL, 0, stbl_instance, stbl_data.clone()),
+        ]);
 
         let result = merge_packages_with_manifest(MergePackagesPayload {
             package_paths: vec![a.display().to_string(), b.display().to_string()],
@@ -7952,6 +7957,7 @@ mod remove_selected_tests {
             (TYPE_XML, xml_instance, xml_data),
             (TYPE_OBJD, objd_instance, objd_data),
             (TYPE_CASP, casp_instance, casp_data),
+            (TYPE_STBL, stbl_instance, stbl_data),
         ] {
             let entry = merged.entries.iter()
                 .find(|e| e.type_id == type_id && e.instance == instance).unwrap();
@@ -7959,6 +7965,30 @@ mod remove_selected_tests {
         }
         let manifest = read_merge_manifest_from_writable(&merged).unwrap().unwrap();
         assert_eq!(manifest.packages.len(), 2);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn legacy_game_xml_manifest_is_still_recognized_for_unmerge() {
+        use crate::merge_manifest::LEGACY_MANIFEST_TYPE;
+
+        let root = test_dir("legacy-manifest-compat");
+        let source = root.join("old-merged.package");
+        std::fs::create_dir_all(&root).unwrap();
+        let legacy_manifest = MergeManifest {
+            version: 1,
+            packages: vec![],
+        };
+        write_test_package(&source, &[(
+            LEGACY_MANIFEST_TYPE,
+            MANIFEST_GROUP,
+            MANIFEST_INSTANCE,
+            legacy_manifest.to_xml_bytes(),
+        )]);
+
+        let pkg = WritablePackage::load(&source).unwrap();
+        let decoded = read_merge_manifest_from_writable(&pkg).unwrap().unwrap();
+        assert_eq!(decoded, legacy_manifest);
         let _ = std::fs::remove_dir_all(&root);
     }
 
