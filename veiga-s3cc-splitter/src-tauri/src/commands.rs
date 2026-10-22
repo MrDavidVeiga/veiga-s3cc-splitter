@@ -231,6 +231,8 @@ pub struct MergePackagesPayload {
     pub package_paths: Vec<String>,
     pub destination_folder: String,
     pub output_name: String,
+    #[serde(default)]
+    pub allow_overwrite: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -243,6 +245,7 @@ pub struct CollectMergeSourcesPayload {
 #[serde(rename_all = "camelCase")]
 pub struct MergePackagesResult {
     pub output_path: String,
+    pub backup_path: Option<String>,
     pub package_count: usize,
     pub resource_count: usize,
     pub shared_resources: usize,
@@ -5148,11 +5151,28 @@ pub fn merge_packages_with_manifest(
     create_dir_all(&destination).map_err(|e| e.to_string())?;
     let output_name = normalized_merged_output_name(&payload.output_name);
     let output_path = destination.join(&output_name);
-    if output_path.exists() {
+    let overwrite_target = output_path.exists();
+    if overwrite_target && !payload.allow_overwrite {
         return Err(format!(
-            "Já existe um arquivo com esse nome no destino: {}",
+            "Já existe um arquivo com esse nome no destino: {}. Confirme a substituição na janela Salvar como.",
             output_path.display()
         ));
+    }
+    if overwrite_target {
+        // Never replace an input package during a merge, even after a Save dialog
+        // confirmed overwrite: an original input can still be open/read below.
+        let existing_output = output_path
+            .canonicalize()
+            .map_err(|e| format!("Não foi possível validar o arquivo de destino: {e}"))?;
+        for source_path in &payload.package_paths {
+            let input_path = PathBuf::from(source_path);
+            if input_path.canonicalize().ok().as_ref() == Some(&existing_output) {
+                return Err(format!(
+                    "O destino selecionado também é um package de origem: {}. Escolha outro nome para preservar o original.",
+                    output_path.display()
+                ));
+            }
+        }
     }
     let temp_path = destination.join(format!(
         ".{}.merge-temp-{}.package",
@@ -5420,13 +5440,50 @@ pub fn merge_packages_with_manifest(
     rebuilt_manifest.validate_keys(&available_keys)?;
     drop(rebuilt);
 
-    rename(&temp_path, &output_path).map_err(|e| {
-        let _ = remove_file(&temp_path);
-        format!("O merged foi validado, mas não foi possível finalizar o arquivo: {e}")
-    })?;
+    let backup_path = if overwrite_target {
+        // The native Save dialog may have approved overwrite. Only replace after
+        // validating the complete temporary DBPF and its merge manifest. Keep a
+        // permanent rollback backup with a non-.package suffix so recursive
+        // source-folder scans cannot silently re-import the backup as CC.
+        if !output_path.exists() {
+            return Err("O package de destino desapareceu durante a mesclagem; nenhuma substituição foi realizada.".to_string());
+        }
+        let backup_dir = destination.join("Merged_backups");
+        create_dir_all(&backup_dir)
+            .map_err(|e| format!("Não foi possível criar a pasta de backups do Merger: {e}"))?;
+        let stamp = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_nanos();
+        let original_name = output_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Merged.package");
+        let backup_path = (0..128)
+            .map(|counter| backup_dir.join(format!(
+                "{original_name}.{stamp}.{}.{}.s3ccbak",
+                std::process::id(),
+                counter
+            )))
+            .find(|candidate| !candidate.exists())
+            .ok_or_else(|| "Não foi possível obter um nome de backup exclusivo; o original foi preservado.".to_string())?;
+        replace_source_with_rollback(&output_path, &temp_path, &backup_path)?;
+        Some(backup_path.display().to_string())
+    } else {
+        // Refuse to overwrite a file that appeared while the merge was running.
+        if output_path.exists() {
+            return Err("Um package surgiu no caminho de destino durante a mesclagem; nenhum arquivo foi substituído.".to_string());
+        }
+        rename(&temp_path, &output_path).map_err(|e| {
+            let _ = remove_file(&temp_path);
+            format!("O merged foi validado, mas não foi possível finalizar o arquivo: {e}")
+        })?;
+        None
+    };
 
     Ok(MergePackagesResult {
         output_path: output_path.display().to_string(),
+        backup_path,
         package_count: rebuilt_manifest.packages.len(),
         resource_count: written.len(),
         shared_resources: shared_keys.len(),
@@ -7935,6 +7992,7 @@ mod remove_selected_tests {
             ],
             destination_folder: merged_dir.display().to_string(),
             output_name: "MyMerged.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
 
@@ -8024,6 +8082,7 @@ mod remove_selected_tests {
             ],
             destination_folder: destination.display().to_string(),
             output_name: "Conflict.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap_err();
 
@@ -8073,6 +8132,7 @@ mod remove_selected_tests {
             ],
             destination_folder: destination.display().to_string(),
             output_name: "EyebrowsMerged.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
 
@@ -8191,6 +8251,7 @@ mod remove_selected_tests {
             ],
             destination_folder: destination.display().to_string(),
             output_name: "Merged.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
 
@@ -8322,6 +8383,7 @@ mod remove_selected_tests {
             package_paths: sources,
             destination_folder: destination.display().to_string(),
             output_name: "Merged.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
         let original_size = std::fs::metadata(&merged.output_path).unwrap().len();
@@ -8405,6 +8467,7 @@ mod remove_selected_tests {
             package_paths: paths,
             destination_folder: destination.display().to_string(),
             output_name: "MergedTen.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
 
@@ -8547,6 +8610,7 @@ mod remove_selected_tests {
             ],
             destination_folder: merged_dir.display().to_string(),
             output_name: "MergedClips.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
 
@@ -8641,6 +8705,7 @@ mod remove_selected_tests {
             ],
             destination_folder: merged_dir.display().to_string(),
             output_name: "CombinedPoseLists.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
 
@@ -8787,6 +8852,7 @@ mod remove_selected_tests {
             ],
             destination_folder: merged_a_dir.display().to_string(),
             output_name: "MergedA.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
 
@@ -8797,6 +8863,7 @@ mod remove_selected_tests {
             ],
             destination_folder: merged_b_dir.display().to_string(),
             output_name: "MergedB.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
 
