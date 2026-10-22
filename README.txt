@@ -1,8 +1,10 @@
-Veiga's S3CC Splitter v2.1.0 | Beta 2 — Versão Beta Final 2.1
+Veiga's S3CC Splitter v2.0.0 | Beta 2
+
+Current development branch: `beta/v2.0.0-beta2`. The final integrated release is planned as **v2.0.0**; Beta 1 and Beta 2 remain separate until a reviewed merge. See `BETAS_ATUAIS.md` for the canonical branches. The file chooser displays `*.package` and still opens `.dbc` files.
 
 Detailed change history, known issues and contributor credits: see CHANGELOG.md in this branch.
 
-What's included in Beta Final 2.1 (former Beta 3)
+What's included in Beta 2 (planned v2.0.0 release; formerly called Beta Final 2.1 / Beta 3)
 
 - Splitter and Merger modes are available in the same application.
 - Results can be filtered and searched, with zero preselection, multiple selection, Shift + click, and Select All / Select None limited to the visible result set.
@@ -26,7 +28,7 @@ What's included in Beta Final 2.1 (former Beta 3)
   - quietlyshout reported excessive RAM usage during large exports, duplicate-name export issues, and suggested improvements for a more compact/resizable interface and clearer duplicate handling.
 - The portable build workflow covers Windows x64, Windows x86, Windows ARM64, Linux x64, Linux x86, Linux ARM64, macOS Intel, and macOS Apple Silicon.
 
-Additional capabilities included in Beta Final 2.1
+Additional capabilities included in Beta 2
 
 CLIP and Pose List support
 
@@ -138,5 +140,5 @@ Thank you
 Thank you to everyone who tests the tool, reports problems, and helps improve compatibility with real The Sims 3 custom-content collections.
 
 
-Canonical working branch: beta-final/v2.1.0
-This supersedes the older Beta 3 naming and keeps all former Beta 3 features. Do not use the legacy build/v2.2.0 branch for current Beta Final 2.1 work.
+Historical prior branch: beta-final/v2.1.0. Current: beta/v2.0.0-beta2
+This supersedes the former Beta 3 and Beta Final 2.1 labels, preserving all features in Beta 2. Do not use historical branches for new development.
