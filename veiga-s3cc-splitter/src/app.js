@@ -31,12 +31,12 @@ const translations = {
     appTitle: "Veiga's S3CC Splitter",
     langLabel: "Language:",
     pickPackage: "Open Package",
-    dropHint: "Select or drag a .package or .dbc here",
+    dropHint: "Select or drag a file here",
     scanList: "Load List",
     modeSplitter: "Splitter",
     modeMerger: "Merger",
     mergerAddPackages: "Add Packages",
-    mergerAddHint: "Select .package/.dbc files or drag files/folders here",
+    mergerAddHint: "Select or drag folders or files here",
     mergerRun: "Merge Packages",
     mergerClear: "Clear List",
     mergerTitle: "Packages to Merge",
@@ -163,12 +163,12 @@ const translations = {
     appTitle: "Veiga's S3CC Splitter",
     langLabel: "Idioma:",
     pickPackage: "Abrir Package",
-    dropHint: "Selecione ou arraste um .package ou .dbc aqui",
+    dropHint: "Selecione ou arraste um arquivo aqui",
     scanList: "Carregar Lista",
     modeSplitter: "Separador",
     modeMerger: "Mesclador",
     mergerAddPackages: "Adicionar Packages",
-    mergerAddHint: "Selecione .package/.dbc ou arraste arquivos/pastas aqui",
+    mergerAddHint: "Selecione ou arraste pastas ou arquivos aqui",
     mergerRun: "Mesclar Packages",
     mergerClear: "Limpar Lista",
     mergerTitle: "Packages para Mesclar",
@@ -295,12 +295,12 @@ const translations = {
     appTitle: "Veiga's S3CC Splitter",
     langLabel: "Idioma:",
     pickPackage: "Abrir Package",
-    dropHint: "Selecciona o arrastra un .package o .dbc aquí",
+    dropHint: "Selecciona o arrastra un archivo aquí",
     scanList: "Cargar Lista",
     modeSplitter: "Separador",
     modeMerger: "Fusionador",
     mergerAddPackages: "Añadir Packages",
-    mergerAddHint: "Selecciona .package/.dbc o arrastra archivos/carpetas aquí",
+    mergerAddHint: "Selecciona o arrastra carpetas o archivos aquí",
     mergerRun: "Fusionar Packages",
     mergerClear: "Limpiar Lista",
     mergerTitle: "Packages para Fusionar",
@@ -584,12 +584,12 @@ function applyStaticTranslations() {
   if (el.appTitle) el.appTitle.textContent = t("appTitle");
   if (el.langLabel) el.langLabel.textContent = t("langLabel");
   if (el.pickPackageBtn) el.pickPackageBtn.textContent = t("pickPackage");
-  if (el.dropHint) el.dropHint.textContent = t("dropHint");
+  if (el.dropHint) el.dropHint.querySelector(".drop-hint-title")?.replaceChildren(t("dropHint"));
   if (el.scanBtn) el.scanBtn.textContent = t("scanList");
   if (el.modeSplitterBtn) el.modeSplitterBtn.textContent = t("modeSplitter");
   if (el.modeMergerBtn) el.modeMergerBtn.textContent = t("modeMerger");
   if (el.mergerAddPackagesBtn) el.mergerAddPackagesBtn.textContent = t("mergerAddPackages");
-  if (el.mergerAddHint) el.mergerAddHint.textContent = t("mergerAddHint");
+  if (el.mergerAddHint) el.mergerAddHint.querySelector(".drop-hint-title")?.replaceChildren(t("mergerAddHint"));
   if (el.mergerRunBtn) el.mergerRunBtn.innerHTML = `${buttonIcons.zip}<span>${state.mergerBusy ? t("mergerBusy") : t("mergerRun")}</span>`;
   if (el.mergerClearBtn) el.mergerClearBtn.innerHTML = `${buttonIcons.clear}<span>${t("mergerClear")}</span>`;
   if (el.mergerTitle) el.mergerTitle.textContent = t("mergerTitle");
