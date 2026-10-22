@@ -76,3 +76,21 @@ assert.deepEqual(
   ["skin", "decor"],
 );
 assert.deepEqual(deselectVisibleItems(items, ["skin", "decor"], "all"), []);
+
+// Regression: Select All / Select None receive the same already-filtered + searched
+// subset rendered by app.js (getVisibleResources). They must not touch hidden matches.
+const searchableItems = [
+  { key: "red-hair", label: "Red Hair", kind: "CASP", contentCategories: ["Hair"] },
+  { key: "blue-hair", label: "Blue Hair", kind: "CASP", contentCategories: ["Hair"] },
+  { key: "red-shirt", label: "Red Shirt", kind: "CASP", contentCategories: ["Clothes"] },
+  { key: "skin", label: "Default Skin", kind: "SkinTone", contentCategories: ["Skins"] },
+];
+const filterVisible = visibleItemsForFilter(searchableItems, "Hair");
+const filterAndSearchVisible = filterVisible.filter((item) => item.label.toLowerCase().includes("red"));
+
+assert.deepEqual(filterAndSearchVisible.map((item) => item.key), ["red-hair"]);
+assert.deepEqual(selectVisibleItems(filterAndSearchVisible, ["skin"], "all"), ["skin", "red-hair"]);
+assert.deepEqual(
+  deselectVisibleItems(filterAndSearchVisible, ["red-hair", "blue-hair", "red-shirt", "skin"], "all"),
+  ["blue-hair", "red-shirt", "skin"],
+);

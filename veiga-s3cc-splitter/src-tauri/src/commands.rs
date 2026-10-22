@@ -15,6 +15,13 @@ use sims3_core::dbpf::{DBPFEntry, DBPF};
 use sims3_pack::dbpf::{Package as WritablePackage, ResourceEntry as WritableEntry};
 use zip::write::FileOptions;
 
+use crate::merge_manifest::{
+    is_manifest_tgi, read_from_dbpf as read_merge_manifest_from_dbpf,
+    read_from_writable as read_merge_manifest_from_writable, ManifestAnchor, ManifestPackage,
+    ManifestPreservedResource, ManifestResource, MergeManifest, MANIFEST_GROUP, MANIFEST_INSTANCE,
+    MANIFEST_TYPE,
+};
+
 const TYPE_CASP: u32 = 0x034AEECB;
 const TYPE_FACE: u32 = 0x0358B08A;
 const TYPE_SKINTONE: u32 = 0x0354796A;
@@ -31,6 +38,7 @@ const TYPE_GEOM: u32 = 0x015A1849;
 const TYPE_VPXY: u32 = 0x736884F1;
 const TYPE_MODL: u32 = 0x01661233;
 const TYPE_KEY: u32 = 0x0166038C;
+const TYPE_PACKAGE_MANIFEST: u32 = 0x73E93EEB;
 const TYPE_MLOD: u32 = 0x01D10F34;
 const TYPE_MTST: u32 = 0x02019972;
 const TYPE_BONE: u32 = 0x00AE6C67;
@@ -72,10 +80,19 @@ pub struct ResourceItem {
     pub content_categories: Vec<String>,
 }
 
+#[derive(Debug, Serialize, Clone, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceRelation {
+    pub duplicate_count: usize,
+    pub tgi_conflict_count: usize,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanResult {
     pub items: Vec<ResourceItem>,
+    pub manifest_package_count: usize,
+    pub relations: BTreeMap<String, ResourceRelation>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,6 +125,44 @@ pub struct ExportSelectionPayload {
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct MergePackagesPayload {
+    pub package_paths: Vec<String>,
+    pub destination_folder: String,
+    pub output_name: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectMergeSourcesPayload {
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergePackagesResult {
+    pub output_path: String,
+    pub package_count: usize,
+    pub resource_count: usize,
+    pub shared_resources: usize,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreManifestPayload {
+    pub package_path: String,
+    pub destination_folder: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreManifestResult {
+    pub destination_folder: String,
+    pub package_count: usize,
+    pub output_paths: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct RemoveSelectionPayload {
     pub package_path: String,
     pub selected_keys: Vec<String>,
@@ -130,6 +185,8 @@ pub struct RemoveSelectionPlan {
     pub shared_resources_preserved: usize,
     pub selected_resources_preserved: usize,
     pub resources_to_remove: usize,
+    pub manifest_packages_to_remove: usize,
+    pub manifest_package_total: usize,
     pub remaining_resources: usize,
 }
 
@@ -139,6 +196,7 @@ pub struct RemoveSelectionResult {
     pub output_path: String,
     pub backup_path: String,
     pub removed_resources: usize,
+    pub removed_manifest_packages: usize,
     pub shared_resources_preserved: usize,
     pub selected_resources_preserved: usize,
 }
@@ -739,7 +797,15 @@ fn object_content_category(label: &str) -> &'static str {
         "Plumbing"
     } else if contains_any(&["lamp", "light", "lighting"]) {
         "Lighting"
-    } else if contains_any(&["decor", "painting", "sculpture", "rug", "curtain", "mirror", "plant"]) {
+    } else if contains_any(&[
+        "decor",
+        "painting",
+        "sculpture",
+        "rug",
+        "curtain",
+        "mirror",
+        "plant",
+    ]) {
         "Decor"
     } else if contains_any(&["game", "arcade", "instrument", "entertainment"]) {
         "Entertainment"
@@ -1095,7 +1161,8 @@ fn safe_package_resource_names(package: &DBPF<'_>) -> BTreeMap<u64, String> {
                 package.entries_for_instance(entry.instance).iter()
                     .filter_map(|&index| package.files.get(index))
                     .find_map(|candidate| {
-                    if candidate.resource_type != TYPE_OBJK || candidate.instance != entry.instance {
+                    if candidate.resource_type != TYPE_OBJK || candidate.instance != entry.instance
+                    {
                         return None;
                     }
                     objk_script_class_name(candidate.data())
@@ -1106,6 +1173,22 @@ fn safe_package_resource_names(package: &DBPF<'_>) -> BTreeMap<u64, String> {
             let trimmed = name.trim();
             if !trimmed.is_empty() {
                 names.insert(entry.instance, trimmed.to_string());
+            }
+        }
+    }
+
+    if let Ok(Some(manifest)) = read_merge_manifest_from_dbpf(package) {
+        for source in &manifest.packages {
+            let stem = Path::new(&source.name)
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.is_empty())
+                .unwrap_or(&source.name)
+                .to_string();
+            for anchor in &source.anchors {
+                if let Ok(parts) = parse_key(&anchor.key) {
+                    names.insert(parts.instance, stem.clone());
+                }
             }
         }
     }
@@ -1951,9 +2034,7 @@ fn normalized_instance_query(query: &str) -> Option<u64> {
     };
     let candidate = candidate.trim();
 
-    if !(8..=16).contains(&candidate.len())
-        || !candidate.chars().all(|ch| ch.is_ascii_hexdigit())
-    {
+    if !(8..=16).contains(&candidate.len()) || !candidate.chars().all(|ch| ch.is_ascii_hexdigit()) {
         return None;
     }
 
@@ -3241,6 +3322,372 @@ fn expand_selection_for_export(
     Ok(selected)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct LogicalAtomKey {
+    resource_type: u32,
+    resource_group: u32,
+    data_len: usize,
+    hash_a: u64,
+    hash_b: u64,
+}
+
+#[derive(Clone, Debug)]
+struct LogicalAtom {
+    key: LogicalAtomKey,
+    entry_index: usize,
+}
+
+#[derive(Clone, Debug)]
+struct LogicalProfile {
+    atoms: Vec<LogicalAtom>,
+}
+
+fn relation_ignored_resource(parts: ResourceKeyParts) -> bool {
+    parts.resource_type == TYPE_KEY
+        || parts.resource_type == TYPE_PACKAGE_MANIFEST
+        || is_manifest_tgi(parts.resource_type, parts.resource_group, parts.instance)
+}
+
+fn relation_hash_pair(data: &[u8]) -> (u64, u64) {
+    let mut a = 0xcbf29ce484222325u64;
+    let mut b = 0x84222325cbf29ce4u64 ^ data.len() as u64;
+
+    for &byte in data {
+        a ^= byte as u64;
+        a = a.wrapping_mul(0x100000001b3);
+
+        b ^= (byte as u64).wrapping_add(0x9e3779b97f4a7c15);
+        b = b.rotate_left(13).wrapping_mul(0xff51afd7ed558ccd);
+        b ^= b >> 29;
+    }
+
+    (a, b)
+}
+
+fn relation_tgi_index(package: &DBPF<'_>) -> HashMap<ResourceKeyParts, Vec<usize>> {
+    let mut index: HashMap<ResourceKeyParts, Vec<usize>> = HashMap::new();
+
+    for (entry_index, entry) in package.files.iter().enumerate() {
+        let parts = ResourceKeyParts {
+            resource_type: entry.resource_type,
+            resource_group: entry.resource_group,
+            instance: entry.instance,
+        };
+        index.entry(parts).or_default().push(entry_index);
+    }
+
+    index
+}
+
+fn relation_entries_have_same_payload(package: &DBPF<'_>, indices: &[usize]) -> bool {
+    let Some(first_index) = indices.first().copied() else {
+        return true;
+    };
+    let first = package.files[first_index].data();
+    indices
+        .iter()
+        .copied()
+        .skip(1)
+        .all(|entry_index| package.files[entry_index].data() == first)
+}
+
+fn relation_tgi_conflicts(
+    package: &DBPF<'_>,
+    tgi_index: &HashMap<ResourceKeyParts, Vec<usize>>,
+) -> HashMap<ResourceKeyParts, usize> {
+    let mut conflicts = HashMap::new();
+
+    for (parts, indices) in tgi_index {
+        if relation_ignored_resource(*parts) || indices.len() < 2 {
+            continue;
+        }
+        if !relation_entries_have_same_payload(package, indices) {
+            conflicts.insert(*parts, indices.len());
+        }
+    }
+
+    conflicts
+}
+
+fn logical_profile_for_item(
+    package: &DBPF<'_>,
+    item: &ResourceItem,
+    name_map: &BTreeMap<u64, String>,
+    tgi_index: &HashMap<ResourceKeyParts, Vec<usize>>,
+    tgi_conflicts: &HashMap<ResourceKeyParts, usize>,
+    atom_cache: &mut HashMap<usize, LogicalAtomKey>,
+) -> Result<(Option<LogicalProfile>, usize), String> {
+    let base_keys: HashSet<String> = item
+        .key
+        .split("||")
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+
+    if base_keys.is_empty() {
+        return Ok((None, 0));
+    }
+
+    let expanded = expand_selection_for_export(package, &base_keys, false, name_map)?;
+    let mut ordered_keys: Vec<String> = expanded.into_iter().collect();
+    ordered_keys.sort();
+
+    let mut atoms = Vec::new();
+    let mut conflict_count = 0usize;
+
+    for key in ordered_keys {
+        let parts = parse_key(&key)?;
+        if relation_ignored_resource(parts) {
+            continue;
+        }
+
+        let Some(indices) = tgi_index.get(&parts) else {
+            continue;
+        };
+        if indices.is_empty() {
+            continue;
+        }
+
+        if let Some(count) = tgi_conflicts.get(&parts) {
+            conflict_count = conflict_count.max(*count);
+            continue;
+        }
+
+        let entry_index = indices[0];
+        let atom_key = *atom_cache.entry(entry_index).or_insert_with(|| {
+            let data = package.files[entry_index].data();
+            let (hash_a, hash_b) = relation_hash_pair(data);
+            LogicalAtomKey {
+                resource_type: parts.resource_type,
+                resource_group: parts.resource_group,
+                data_len: data.len(),
+                hash_a,
+                hash_b,
+            }
+        });
+        atoms.push(LogicalAtom {
+            key: atom_key,
+            entry_index,
+        });
+    }
+
+    if conflict_count > 1 {
+        return Ok((None, conflict_count));
+    }
+    if atoms.is_empty() {
+        return Ok((None, 0));
+    }
+
+    atoms.sort_by_key(|atom| atom.key);
+    Ok((Some(LogicalProfile { atoms }), 0))
+}
+
+fn logical_profiles_exactly_equal(
+    package: &DBPF<'_>,
+    left: &LogicalProfile,
+    right: &LogicalProfile,
+) -> bool {
+    if left.atoms.len() != right.atoms.len() {
+        return false;
+    }
+
+    let left_keys: Vec<LogicalAtomKey> = left.atoms.iter().map(|atom| atom.key).collect();
+    let right_keys: Vec<LogicalAtomKey> = right.atoms.iter().map(|atom| atom.key).collect();
+    if left_keys != right_keys {
+        return false;
+    }
+
+    let mut start = 0usize;
+    while start < left.atoms.len() {
+        let atom_key = left.atoms[start].key;
+        let mut end = start + 1;
+        while end < left.atoms.len() && left.atoms[end].key == atom_key {
+            end += 1;
+        }
+
+        let mut used = vec![false; end - start];
+        for left_atom in &left.atoms[start..end] {
+            let left_data = package.files[left_atom.entry_index].data();
+            let mut matched = false;
+
+            for (offset, right_atom) in right.atoms[start..end].iter().enumerate() {
+                if used[offset] {
+                    continue;
+                }
+                let right_data = package.files[right_atom.entry_index].data();
+                if left_data == right_data {
+                    used[offset] = true;
+                    matched = true;
+                    break;
+                }
+            }
+
+            if !matched {
+                return false;
+            }
+        }
+
+        start = end;
+    }
+
+    true
+}
+
+fn build_resource_relations(
+    package: &DBPF<'_>,
+    name_map: &BTreeMap<u64, String>,
+    items: &[ResourceItem],
+) -> BTreeMap<String, ResourceRelation> {
+    let tgi_index = relation_tgi_index(package);
+    let tgi_conflicts = relation_tgi_conflicts(package, &tgi_index);
+    let mut atom_cache: HashMap<usize, LogicalAtomKey> = HashMap::new();
+    let mut profiles: Vec<Option<LogicalProfile>> = vec![None; items.len()];
+    let mut relations: Vec<ResourceRelation> = vec![ResourceRelation::default(); items.len()];
+
+    for (item_index, item) in items.iter().enumerate() {
+        let Ok((profile, conflict_count)) = logical_profile_for_item(
+            package,
+            item,
+            name_map,
+            &tgi_index,
+            &tgi_conflicts,
+            &mut atom_cache,
+        )
+        else {
+            continue;
+        };
+        if conflict_count > 1 {
+            relations[item_index].tgi_conflict_count = conflict_count;
+        } else {
+            profiles[item_index] = profile;
+        }
+    }
+
+    let mut buckets: HashMap<Vec<LogicalAtomKey>, Vec<usize>> = HashMap::new();
+    for (item_index, profile) in profiles.iter().enumerate() {
+        let Some(profile) = profile else {
+            continue;
+        };
+        let summary: Vec<LogicalAtomKey> = profile.atoms.iter().map(|atom| atom.key).collect();
+        buckets.entry(summary).or_default().push(item_index);
+    }
+
+    for candidates in buckets.values().filter(|candidates| candidates.len() > 1) {
+        let mut remaining = candidates.clone();
+
+        while let Some(seed) = remaining.pop() {
+            let Some(seed_profile) = profiles[seed].as_ref() else {
+                continue;
+            };
+
+            let mut exact_group = vec![seed];
+            let mut keep = Vec::new();
+
+            for candidate in remaining {
+                let Some(candidate_profile) = profiles[candidate].as_ref() else {
+                    keep.push(candidate);
+                    continue;
+                };
+
+                if logical_profiles_exactly_equal(package, seed_profile, candidate_profile) {
+                    exact_group.push(candidate);
+                } else {
+                    keep.push(candidate);
+                }
+            }
+
+            remaining = keep;
+
+            if exact_group.len() > 1 {
+                let duplicate_count = exact_group.len();
+                for item_index in exact_group {
+                    relations[item_index].duplicate_count = duplicate_count;
+                }
+            }
+        }
+    }
+
+    let mut by_key = BTreeMap::new();
+    for (item, relation) in items.iter().zip(relations.into_iter()) {
+        if relation.duplicate_count > 1 || relation.tgi_conflict_count > 1 {
+            by_key.insert(item.key.clone(), relation);
+        }
+    }
+
+    by_key
+}
+
+fn manifest_removal_plan_sets(
+    package: &DBPF<'_>,
+    manifest: &MergeManifest,
+    selected_keys: &[String],
+) -> Option<(HashSet<String>, HashSet<String>, HashSet<String>)> {
+    let selected_atomic: HashSet<String> = selected_keys
+        .iter()
+        .flat_map(|key| key.split("||"))
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+
+    let available: HashSet<String> = package
+        .files
+        .iter()
+        .filter(|entry| entry.resource_type != TYPE_KEY)
+        .filter(|entry| !is_manifest_tgi(entry.resource_type, entry.resource_group, entry.instance))
+        .map(key_string)
+        .collect();
+
+    let mut selected_packages = HashSet::new();
+    for source in &manifest.packages {
+        let matched = if source.anchors.is_empty() {
+            source
+                .resources
+                .iter()
+                .any(|resource| selected_atomic.contains(&resource.key))
+        } else {
+            source
+                .anchors
+                .iter()
+                .any(|anchor| selected_atomic.contains(&anchor.key))
+        };
+        if matched {
+            selected_packages.insert(source.id);
+        }
+    }
+
+    if selected_packages.is_empty() {
+        return None;
+    }
+
+    let mut selected_resources = HashSet::new();
+    let mut remaining_resources = HashSet::new();
+    for source in &manifest.packages {
+        let target = if selected_packages.contains(&source.id) {
+            &mut selected_resources
+        } else {
+            &mut remaining_resources
+        };
+        for resource in &source.resources {
+            if available.contains(&resource.key) {
+                target.insert(resource.key.clone());
+            }
+        }
+    }
+
+    let shared_preserved: HashSet<String> = selected_resources
+        .intersection(&remaining_resources)
+        .cloned()
+        .collect();
+    let resources_to_remove: HashSet<String> = selected_resources
+        .difference(&shared_preserved)
+        .cloned()
+        .collect();
+
+    Some((selected_resources, shared_preserved, resources_to_remove))
+}
+
 fn removal_plan_sets(
     package: &DBPF<'_>,
     selected_keys: &[String],
@@ -3250,10 +3697,15 @@ fn removal_plan_sets(
         return Err("Selecione pelo menos um item para remover.".to_string());
     }
 
+    if let Some(manifest) = read_valid_merge_manifest_from_dbpf(package) {
+        if let Some(plan) = manifest_removal_plan_sets(package, &manifest, selected_keys) {
+            return Ok(plan);
+        }
+    }
+
     let selected_compound: HashSet<String> = selected_keys.iter().cloned().collect();
     let selected_resources = expand_compound_keys(&selected_compound);
-    let mut candidate =
-        expand_selection_for_export(package, &selected_compound, true, name_map)?;
+    let mut candidate = expand_selection_for_export(package, &selected_compound, true, name_map)?;
 
     // KEY is metadata for the whole package and must never be removed directly.
     candidate.retain(|key| {
@@ -3275,17 +3727,14 @@ fn removal_plan_sets(
         }
     }
 
-    let required_by_remaining =
-        collect_clone_keys(package, &remaining_seeds, true, name_map)?;
+    let required_by_remaining = collect_clone_keys(package, &remaining_seeds, true, name_map)?;
     let shared_preserved: HashSet<String> = candidate
         .intersection(&required_by_remaining)
         .cloned()
         .collect();
 
-    let resources_to_remove: HashSet<String> = candidate
-        .difference(&shared_preserved)
-        .cloned()
-        .collect();
+    let resources_to_remove: HashSet<String> =
+        candidate.difference(&shared_preserved).cloned().collect();
 
     Ok((selected_resources, shared_preserved, resources_to_remove))
 }
@@ -3295,38 +3744,78 @@ fn build_remove_selection_plan(
     selected_keys: &[String],
     name_map: &BTreeMap<u64, String>,
 ) -> Result<RemoveSelectionPlan, String> {
-    let selected_compound: HashSet<String> = selected_keys.iter().cloned().collect();
-    let candidate =
-        expand_selection_for_export(package, &selected_compound, true, name_map)?;
-    let candidate_non_key: HashSet<String> = candidate
-        .into_iter()
-        .filter(|key| {
-            parse_key(key)
-                .map(|parts| parts.resource_type != TYPE_KEY)
-                .unwrap_or(false)
-        })
-        .collect();
-
+    let merge_manifest = read_valid_merge_manifest_from_dbpf(package);
+    let manifest_backed = merge_manifest.is_some();
+    let manifest_package_total = merge_manifest
+        .as_ref()
+        .map(|manifest| manifest.packages.len())
+        .unwrap_or(0);
+    let manifest_packages_to_remove = merge_manifest
+        .as_ref()
+        .map(|manifest| manifest.selected_package_ids(selected_keys).len())
+        .unwrap_or(0);
     let (selected_resources, shared_preserved, resources_to_remove) =
         removal_plan_sets(package, selected_keys, name_map)?;
-    let selected_resources_preserved = selected_resources
-        .intersection(&shared_preserved)
-        .count();
+
+    let candidate_resources = if manifest_backed {
+        selected_resources.len()
+    } else {
+        let selected_compound: HashSet<String> = selected_keys.iter().cloned().collect();
+        expand_selection_for_export(package, &selected_compound, true, name_map)?
+            .into_iter()
+            .filter(|key| {
+                parse_key(key)
+                    .map(|parts| parts.resource_type != TYPE_KEY)
+                    .unwrap_or(false)
+            })
+            .count()
+    };
+    let selected_resources_preserved = selected_resources.intersection(&shared_preserved).count();
 
     Ok(RemoveSelectionPlan {
         selected_items: selected_keys.len(),
         selected_resources: selected_resources.len(),
-        candidate_resources: candidate_non_key.len(),
+        candidate_resources,
         shared_resources_preserved: shared_preserved.len(),
         selected_resources_preserved,
         resources_to_remove: resources_to_remove.len(),
+        manifest_packages_to_remove,
+        manifest_package_total,
         remaining_resources: package
             .files
             .iter()
             .filter(|entry| entry.resource_type != TYPE_KEY)
+            .filter(|entry| {
+                !is_manifest_tgi(entry.resource_type, entry.resource_group, entry.instance)
+            })
             .filter(|entry| !resources_to_remove.contains(&key_string(entry)))
             .count(),
     })
+}
+
+fn available_resource_keys(package: &DBPF<'_>) -> HashSet<String> {
+    package
+        .files
+        .iter()
+        .filter(|entry| !is_manifest_tgi(entry.resource_type, entry.resource_group, entry.instance))
+        .map(key_string)
+        .collect()
+}
+
+fn read_valid_merge_manifest_from_dbpf(package: &DBPF<'_>) -> Option<MergeManifest> {
+    let manifest = read_merge_manifest_from_dbpf(package).ok().flatten()?;
+    manifest
+        .validate_keys(&available_resource_keys(package))
+        .ok()?;
+    Some(manifest)
+}
+
+fn require_valid_veiga_merge_manifest(package: &DBPF<'_>) -> Result<(), String> {
+    if read_valid_merge_manifest_from_dbpf(package).is_some() {
+        Ok(())
+    } else {
+        Err("Remove from Merged requer um Veiga Merge Manifest válido.".to_string())
+    }
 }
 
 fn unique_backup_directory(destination: &Path, stem: &str) -> PathBuf {
@@ -3366,10 +3855,624 @@ fn files_are_identical(left: &Path, right: &Path) -> Result<bool, String> {
     }
 }
 
+fn merger_anchor_kind(resource_type: u32) -> Option<&'static str> {
+    match resource_type {
+        TYPE_CASP => Some("CASP"),
+        TYPE_OBJD => Some("OBJD"),
+        TYPE_FACE => Some("FACE"),
+        TYPE_SKINTONE => Some("SkinTone"),
+        TYPE_PATTERN => Some("Pattern"),
+        _ => None,
+    }
+}
+
+fn normalized_merged_output_name(name: &str) -> String {
+    let trimmed = name.trim();
+    let base = if trimmed.is_empty() {
+        "Merged.package"
+    } else {
+        trimmed
+    };
+    let mut safe = sanitize_file_name(base);
+    if !safe.to_ascii_lowercase().ends_with(".package") {
+        safe.push_str(".package");
+    }
+    safe
+}
+
+fn append_uncompressed_resource(
+    out_pkg: &mut WritablePackage,
+    out_f: &mut File,
+    type_id: u32,
+    group: u32,
+    instance: u64,
+    data: &[u8],
+    unknown2: u16,
+) -> Result<(), String> {
+    let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+    out_f.write_all(data).map_err(|e| e.to_string())?;
+    out_pkg.entries.push(WritableEntry {
+        type_id,
+        group,
+        id1: (instance >> 32) as u32,
+        id2: instance as u32,
+        instance,
+        chunk_offset,
+        file_size: data.len() as u32,
+        mem_size: data.len() as u32,
+        compressed: 0,
+        unknown2,
+    });
+    Ok(())
+}
+
+fn is_per_source_metadata_type(resource_type: u32) -> bool {
+    matches!(resource_type, TYPE_KEY | TYPE_PACKAGE_MANIFEST)
+}
+
+fn preserved_source_metadata(
+    source: &WritablePackage,
+) -> Result<Vec<ManifestPreservedResource>, String> {
+    let mut preserved = Vec::new();
+    for entry in &source.entries {
+        if !is_per_source_metadata_type(entry.type_id) {
+            continue;
+        }
+        let data = source.get_uncompressed_data(entry).map_err(|e| {
+            format!(
+                "Não foi possível preservar metadado {}: {e}",
+                key_string_from_writable(entry)
+            )
+        })?;
+        preserved.push(ManifestPreservedResource {
+            key: key_string_from_writable(entry),
+            data_base64: STANDARD.encode(data),
+            unknown2: entry.unknown2,
+        });
+    }
+    Ok(preserved)
+}
+
+fn source_manifest_entries(
+    source: &WritablePackage,
+    source_path: &Path,
+    next_id: &mut u32,
+) -> Result<Vec<ManifestPackage>, String> {
+    let available: HashSet<String> = source
+        .entries
+        .iter()
+        .filter(|entry| !is_per_source_metadata_type(entry.type_id))
+        .filter(|entry| !is_manifest_tgi(entry.type_id, entry.group, entry.instance))
+        .map(key_string_from_writable)
+        .collect();
+
+    if let Some(existing) = read_merge_manifest_from_writable(source)? {
+        let mut nested = Vec::new();
+        let mut claimed = HashSet::new();
+        for package in existing.packages {
+            let resources: Vec<ManifestResource> = package
+                .resources
+                .into_iter()
+                .filter(|resource| available.contains(&resource.key))
+                .inspect(|resource| {
+                    claimed.insert(resource.key.clone());
+                })
+                .collect();
+            if resources.is_empty() {
+                continue;
+            }
+            let anchors = package
+                .anchors
+                .into_iter()
+                .filter(|anchor| available.contains(&anchor.key))
+                .collect();
+            nested.push(ManifestPackage {
+                id: *next_id,
+                name: package.name,
+                original_size: package.original_size,
+                anchors,
+                resources,
+                preserved_resources: package.preserved_resources,
+            });
+            *next_id += 1;
+        }
+
+        let unclaimed: Vec<String> = available.difference(&claimed).cloned().collect();
+        if !unclaimed.is_empty() {
+            let file_name = source_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("MergedSource.package")
+                .to_string();
+            let anchors = source
+                .entries
+                .iter()
+                .filter_map(|entry| {
+                    let kind = merger_anchor_kind(entry.type_id)?;
+                    let key = key_string_from_writable(entry);
+                    if !unclaimed.contains(&key) {
+                        return None;
+                    }
+                    Some(ManifestAnchor {
+                        kind: kind.to_string(),
+                        key,
+                    })
+                })
+                .collect();
+            nested.push(ManifestPackage {
+                id: *next_id,
+                name: file_name,
+                original_size: std::fs::metadata(source_path).map(|m| m.len()).unwrap_or(0),
+                anchors,
+                resources: unclaimed
+                    .into_iter()
+                    .map(|key| ManifestResource { key })
+                    .collect(),
+                preserved_resources: Vec::new(),
+            });
+            *next_id += 1;
+        }
+        return Ok(nested);
+    }
+
+    let file_name = source_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Source.package")
+        .to_string();
+    let mut resource_keys: Vec<String> = available.into_iter().collect();
+    resource_keys.sort();
+    let anchors = source
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            let kind = merger_anchor_kind(entry.type_id)?;
+            if entry.type_id == TYPE_KEY
+                || is_manifest_tgi(entry.type_id, entry.group, entry.instance)
+            {
+                return None;
+            }
+            Some(ManifestAnchor {
+                kind: kind.to_string(),
+                key: key_string_from_writable(entry),
+            })
+        })
+        .collect();
+
+    let package = ManifestPackage {
+        id: *next_id,
+        name: file_name,
+        original_size: std::fs::metadata(source_path).map(|m| m.len()).unwrap_or(0),
+        anchors,
+        resources: resource_keys
+            .into_iter()
+            .map(|key| ManifestResource { key })
+            .collect(),
+        preserved_resources: preserved_source_metadata(source)?,
+    };
+    *next_id += 1;
+    Ok(vec![package])
+}
+
+fn is_merge_source_file(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "package" | "dbc"))
+            .unwrap_or(false)
+}
+
+fn collect_merge_sources_from_path(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|e| format!("Não foi possível acessar {}: {e}", path.display()))?;
+
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+
+    if metadata.is_file() {
+        if is_merge_source_file(path) {
+            files.push(path.to_path_buf());
+        }
+        return Ok(());
+    }
+
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+
+    let mut entries = std::fs::read_dir(path)
+        .map_err(|e| format!("Não foi possível ler a pasta {}: {e}", path.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Falha ao enumerar a pasta {}: {e}", path.display()))?;
+
+    entries.sort_by_key(|entry| entry.path().to_string_lossy().to_ascii_lowercase());
+    for entry in entries {
+        collect_merge_sources_from_path(&entry.path(), files)?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn collect_merge_package_files(
+    payload: CollectMergeSourcesPayload,
+) -> Result<Vec<String>, String> {
+    let mut files = Vec::new();
+
+    for raw_path in payload.paths {
+        let trimmed = raw_path.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        collect_merge_sources_from_path(Path::new(trimmed), &mut files)?;
+    }
+
+    files.sort_by_key(|path| path.to_string_lossy().to_ascii_lowercase());
+
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    for path in files {
+        let display = path.to_string_lossy().into_owned();
+        let normalized = display.replace('\\', "/").to_ascii_lowercase();
+        if seen.insert(normalized) {
+            result.push(display);
+        }
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn merge_packages_with_manifest(
+    payload: MergePackagesPayload,
+) -> Result<MergePackagesResult, String> {
+    if payload.package_paths.len() < 2 {
+        return Err("Selecione pelo menos dois packages para mesclar.".to_string());
+    }
+    if payload.destination_folder.trim().is_empty() {
+        return Err("Escolha uma pasta de destino.".to_string());
+    }
+
+    let destination = PathBuf::from(&payload.destination_folder);
+    create_dir_all(&destination).map_err(|e| e.to_string())?;
+    let output_name = normalized_merged_output_name(&payload.output_name);
+    let output_path = destination.join(&output_name);
+    if output_path.exists() {
+        return Err(format!(
+            "Já existe um arquivo com esse nome no destino: {}",
+            output_path.display()
+        ));
+    }
+    let temp_path = destination.join(format!(
+        ".{}.merge-temp-{}.package",
+        output_name.trim_end_matches(".package"),
+        std::process::id()
+    ));
+    if temp_path.exists() {
+        remove_file(&temp_path).map_err(|e| e.to_string())?;
+    }
+
+    let mut sources = Vec::new();
+    let mut source_paths = Vec::new();
+    for raw_path in &payload.package_paths {
+        validate_package_extension(raw_path)?;
+        let path = PathBuf::from(raw_path);
+        let package = WritablePackage::load(&path)
+            .map_err(|e| format!("Falha ao abrir {}: {e}", path.display()))?;
+        sources.push(package);
+        source_paths.push(path);
+    }
+
+    let mut first_owner: HashMap<String, (usize, usize)> = HashMap::new();
+    let mut shared_keys = HashSet::new();
+    for (source_index, source) in sources.iter().enumerate() {
+        for (entry_index, entry) in source.entries.iter().enumerate() {
+            if is_per_source_metadata_type(entry.type_id)
+                || is_manifest_tgi(entry.type_id, entry.group, entry.instance)
+            {
+                continue;
+            }
+            let key = key_string_from_writable(entry);
+            if let Some((previous_source, previous_entry)) = first_owner.get(&key).copied() {
+                let previous = &sources[previous_source].entries[previous_entry];
+                let previous_data = sources[previous_source]
+                    .get_uncompressed_data(previous)
+                    .map_err(|e| e.to_string())?;
+                let current_data = source
+                    .get_uncompressed_data(entry)
+                    .map_err(|e| e.to_string())?;
+                if previous_data != current_data {
+                    let left = source_paths[previous_source]
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("package");
+                    let right = source_paths[source_index]
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("package");
+                    return Err(format!(
+                        "Conflito de TGI: {key} existe em {left} e {right} com dados diferentes. O merge foi cancelado."
+                    ));
+                }
+                shared_keys.insert(key);
+            } else {
+                first_owner.insert(key, (source_index, entry_index));
+            }
+        }
+    }
+
+    let mut manifest_packages = Vec::new();
+    let mut next_id = 1u32;
+    for (source, source_path) in sources.iter().zip(source_paths.iter()) {
+        manifest_packages.extend(source_manifest_entries(source, source_path, &mut next_id)?);
+    }
+    let manifest = MergeManifest {
+        version: 2,
+        packages: manifest_packages,
+    };
+
+    let mut out_pkg = WritablePackage::new(&temp_path, false).map_err(|e| e.to_string())?;
+    let mut out_f = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&out_pkg.path)
+        .map_err(|e| e.to_string())?;
+    out_f
+        .seek(SeekFrom::Start(out_pkg.index_position as u64))
+        .map_err(|e| e.to_string())?;
+
+    let mut written = HashSet::new();
+    for (source_index, source) in sources.iter().enumerate() {
+        for (entry_index, entry) in source.entries.iter().enumerate() {
+            if is_per_source_metadata_type(entry.type_id)
+                || is_manifest_tgi(entry.type_id, entry.group, entry.instance)
+            {
+                continue;
+            }
+            let key = key_string_from_writable(entry);
+            if !written.insert(key.clone()) {
+                continue;
+            }
+            if first_owner.get(&key).copied() != Some((source_index, entry_index)) {
+                continue;
+            }
+
+            let raw = source.get_raw_data(entry).map_err(|e| e.to_string())?;
+            let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+            out_f.write_all(&raw).map_err(|e| e.to_string())?;
+            out_pkg.entries.push(WritableEntry {
+                type_id: entry.type_id,
+                group: entry.group,
+                id1: entry.id1,
+                id2: entry.id2,
+                instance: entry.instance,
+                chunk_offset,
+                file_size: entry.file_size,
+                mem_size: entry.mem_size,
+                compressed: entry.compressed,
+                unknown2: entry.unknown2,
+            });
+        }
+    }
+
+    let manifest_bytes = manifest.to_xml_bytes();
+    append_uncompressed_resource(
+        &mut out_pkg,
+        &mut out_f,
+        MANIFEST_TYPE,
+        MANIFEST_GROUP,
+        MANIFEST_INSTANCE,
+        &manifest_bytes,
+        0,
+    )?;
+
+    out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+    out_pkg
+        .write_index_and_header()
+        .map_err(|e| e.to_string())?;
+    drop(out_f);
+    drop(out_pkg);
+
+    let rebuilt = WritablePackage::load(&temp_path)
+        .map_err(|e| format!("O merged temporário falhou na validação DBPF: {e}"))?;
+    let rebuilt_manifest = read_merge_manifest_from_writable(&rebuilt)?
+        .ok_or_else(|| "O merged final não contém o Merge Manifest.".to_string())?;
+    let available_keys: HashSet<String> = rebuilt
+        .entries
+        .iter()
+        .filter(|entry| !is_manifest_tgi(entry.type_id, entry.group, entry.instance))
+        .map(key_string_from_writable)
+        .collect();
+    rebuilt_manifest.validate_keys(&available_keys)?;
+    drop(rebuilt);
+
+    rename(&temp_path, &output_path).map_err(|e| {
+        let _ = remove_file(&temp_path);
+        format!("O merged foi validado, mas não foi possível finalizar o arquivo: {e}")
+    })?;
+
+    Ok(MergePackagesResult {
+        output_path: output_path.display().to_string(),
+        package_count: rebuilt_manifest.packages.len(),
+        resource_count: written.len(),
+        shared_resources: shared_keys.len(),
+    })
+}
+
+#[tauri::command]
+pub fn restore_manifest_packages(
+    payload: RestoreManifestPayload,
+) -> Result<RestoreManifestResult, String> {
+    validate_package_extension(&payload.package_path)?;
+    if payload.destination_folder.trim().is_empty() {
+        return Err("Escolha uma pasta de destino.".to_string());
+    }
+
+    let source = WritablePackage::load(&payload.package_path).map_err(|e| e.to_string())?;
+    let manifest = read_merge_manifest_from_writable(&source)?
+        .ok_or_else(|| "Este package não contém um Veiga Merge Manifest.".to_string())?;
+    let destination = PathBuf::from(&payload.destination_folder);
+    create_dir_all(&destination).map_err(|e| e.to_string())?;
+
+    let index: HashMap<String, usize> = source
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| !is_manifest_tgi(entry.type_id, entry.group, entry.instance))
+        .map(|(idx, entry)| (key_string_from_writable(entry), idx))
+        .collect();
+
+    let mut planned_names = HashSet::new();
+    for package_info in &manifest.packages {
+        let mut file_name = sanitize_file_name(&package_info.name);
+        if file_name.trim().is_empty() {
+            file_name = format!("Package_{}.package", package_info.id);
+        }
+        if !file_name.to_ascii_lowercase().ends_with(".package") {
+            file_name.push_str(".package");
+        }
+        let normalized_name = file_name.to_ascii_lowercase();
+        if !planned_names.insert(normalized_name) {
+            return Err(format!(
+                "O manifesto contém nomes de arquivo duplicados que não podem ser restaurados na mesma pasta: {file_name}"
+            ));
+        }
+        let output_path = destination.join(&file_name);
+        if output_path.exists() {
+            return Err(format!(
+                "A restauração foi cancelada porque já existe: {}",
+                output_path.display()
+            ));
+        }
+        for resource in &package_info.resources {
+            if !index.contains_key(&resource.key) {
+                return Err(format!(
+                    "A restauração foi cancelada antes de criar arquivos: {} referencia o recurso ausente {}.",
+                    package_info.name, resource.key
+                ));
+            }
+        }
+        for resource in &package_info.preserved_resources {
+            parse_key(&resource.key).map_err(|e| {
+                format!(
+                    "A restauração foi cancelada: metadado preservado inválido em {} ({}): {e}",
+                    package_info.name, resource.key
+                )
+            })?;
+            STANDARD.decode(&resource.data_base64).map_err(|e| {
+                format!(
+                    "A restauração foi cancelada: metadado preservado corrompido em {} ({}): {e}",
+                    package_info.name, resource.key
+                )
+            })?;
+        }
+    }
+
+    let mut output_paths = Vec::new();
+    for package_info in &manifest.packages {
+        let mut file_name = sanitize_file_name(&package_info.name);
+        if file_name.trim().is_empty() {
+            file_name = format!("Package_{}.package", package_info.id);
+        }
+        if !file_name.to_ascii_lowercase().ends_with(".package") {
+            file_name.push_str(".package");
+        }
+        let output_path = destination.join(&file_name);
+        if output_path.exists() {
+            return Err(format!(
+                "A restauração foi cancelada porque já existe: {}",
+                output_path.display()
+            ));
+        }
+
+        let mut out_pkg = WritablePackage::new(&output_path, false).map_err(|e| e.to_string())?;
+        let mut out_f = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&out_pkg.path)
+            .map_err(|e| e.to_string())?;
+        out_f
+            .seek(SeekFrom::Start(out_pkg.index_position as u64))
+            .map_err(|e| e.to_string())?;
+
+        let mut written = HashSet::new();
+        for resource in &package_info.resources {
+            if !written.insert(resource.key.clone()) {
+                continue;
+            }
+            let entry_index = index.get(&resource.key).copied().ok_or_else(|| {
+                format!(
+                    "Não foi possível restaurar {}: recurso {} está ausente do merged.",
+                    package_info.name, resource.key
+                )
+            })?;
+            let entry = &source.entries[entry_index];
+            let raw = source.get_raw_data(entry).map_err(|e| e.to_string())?;
+            let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+            out_f.write_all(&raw).map_err(|e| e.to_string())?;
+            out_pkg.entries.push(WritableEntry {
+                type_id: entry.type_id,
+                group: entry.group,
+                id1: entry.id1,
+                id2: entry.id2,
+                instance: entry.instance,
+                chunk_offset,
+                file_size: entry.file_size,
+                mem_size: entry.mem_size,
+                compressed: entry.compressed,
+                unknown2: entry.unknown2,
+            });
+        }
+
+        for resource in &package_info.preserved_resources {
+            let parts = parse_key(&resource.key).map_err(|e| {
+                format!(
+                    "Não foi possível restaurar {}: metadado preservado {} é inválido: {e}",
+                    package_info.name, resource.key
+                )
+            })?;
+            let data = STANDARD.decode(&resource.data_base64).map_err(|e| {
+                format!(
+                    "Não foi possível restaurar {}: metadado preservado {} está corrompido: {e}",
+                    package_info.name, resource.key
+                )
+            })?;
+            append_uncompressed_resource(
+                &mut out_pkg,
+                &mut out_f,
+                parts.resource_type,
+                parts.resource_group,
+                parts.instance,
+                &data,
+                resource.unknown2,
+            )?;
+        }
+
+        out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+        out_pkg
+            .write_index_and_header()
+            .map_err(|e| e.to_string())?;
+        drop(out_f);
+        drop(out_pkg);
+        WritablePackage::load(&output_path)
+            .map_err(|e| format!("Package restaurado inválido ({}): {e}", file_name))?;
+        output_paths.push(output_path.display().to_string());
+    }
+
+    Ok(RestoreManifestResult {
+        destination_folder: destination.display().to_string(),
+        package_count: output_paths.len(),
+        output_paths,
+    })
+}
+
 fn write_removed_package(
     package: &DBPF<'_>,
     source_package: &WritablePackage,
     source_file: &mut File,
+    selected_keys: &[String],
     resources_to_remove: &HashSet<String>,
     temp_path: &Path,
 ) -> Result<(), String> {
@@ -3395,9 +4498,15 @@ fn write_removed_package(
         .seek(SeekFrom::Start(out_pkg.index_position as u64))
         .map_err(|e| e.to_string())?;
 
+    let updated_manifest = read_merge_manifest_from_writable(source_package)?
+        .map(|manifest| manifest.update_after_removal(selected_keys, resources_to_remove));
+
     for entry in &source_package.entries {
         let key = key_string_from_writable(entry);
-        if entry.type_id == TYPE_KEY || resources_to_remove.contains(&key) {
+        if entry.type_id == TYPE_KEY
+            || is_manifest_tgi(entry.type_id, entry.group, entry.instance)
+            || resources_to_remove.contains(&key)
+        {
             continue;
         }
 
@@ -3440,6 +4549,21 @@ fn write_removed_package(
         });
     }
 
+    if let Some(manifest) = updated_manifest {
+        if !manifest.packages.is_empty() {
+            let data = manifest.to_xml_bytes();
+            append_uncompressed_resource(
+                &mut out_pkg,
+                &mut out_f,
+                MANIFEST_TYPE,
+                MANIFEST_GROUP,
+                MANIFEST_INSTANCE,
+                &data,
+                0,
+            )?;
+        }
+    }
+
     out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
     out_pkg
         .write_index_and_header()
@@ -3450,6 +4574,7 @@ fn write_removed_package(
 fn validate_removed_package(
     source_package: &WritablePackage,
     output_path: &Path,
+    selected_keys: &[String],
     resources_to_remove: &HashSet<String>,
 ) -> Result<(), String> {
     let rebuilt = WritablePackage::load(output_path)
@@ -3457,7 +4582,8 @@ fn validate_removed_package(
 
     let mut expected_counts: HashMap<String, usize> = HashMap::new();
     for entry in &source_package.entries {
-        if entry.type_id == TYPE_KEY {
+        if entry.type_id == TYPE_KEY || is_manifest_tgi(entry.type_id, entry.group, entry.instance)
+        {
             continue;
         }
         let key = key_string_from_writable(entry);
@@ -3469,7 +4595,8 @@ fn validate_removed_package(
 
     let mut actual_counts: HashMap<String, usize> = HashMap::new();
     for entry in &rebuilt.entries {
-        if entry.type_id == TYPE_KEY {
+        if entry.type_id == TYPE_KEY || is_manifest_tgi(entry.type_id, entry.group, entry.instance)
+        {
             continue;
         }
         let key = key_string_from_writable(entry);
@@ -3486,6 +4613,35 @@ fn validate_removed_package(
             "Validação falhou: os recursos mantidos não correspondem exatamente ao package original."
                 .to_string(),
         );
+    }
+
+    let expected_manifest = read_merge_manifest_from_writable(source_package)?
+        .map(|manifest| manifest.update_after_removal(selected_keys, resources_to_remove));
+    let actual_manifest = read_merge_manifest_from_writable(&rebuilt)?;
+    match expected_manifest {
+        Some(expected) if expected.packages.is_empty() => {
+            if actual_manifest.is_some() {
+                return Err(
+                    "Validação falhou: o Merge Manifest deveria ter sido removido.".to_string(),
+                );
+            }
+        }
+        Some(expected) => {
+            let actual = actual_manifest.ok_or_else(|| {
+                "Validação falhou: o Merge Manifest atualizado está ausente.".to_string()
+            })?;
+            if actual != expected {
+                return Err("Validação falhou: o Merge Manifest atualizado não corresponde ao plano de remoção.".to_string());
+            }
+            let available: HashSet<String> = rebuilt
+                .entries
+                .iter()
+                .filter(|entry| !is_manifest_tgi(entry.type_id, entry.group, entry.instance))
+                .map(key_string_from_writable)
+                .collect();
+            actual.validate_keys(&available)?;
+        }
+        None => {}
     }
 
     let mmap = open_package(&output_path.display().to_string())?;
@@ -3514,11 +4670,8 @@ fn replace_source_with_rollback(
         ));
     }
 
-    rename(source_path, &rollback).map_err(|e| {
-        format!(
-            "Não foi possível preparar a substituição segura do original: {e}"
-        )
-    })?;
+    rename(source_path, &rollback)
+        .map_err(|e| format!("Não foi possível preparar a substituição segura do original: {e}"))?;
 
     if let Err(error) = rename(temp_path, output_path) {
         let _ = rename(&rollback, source_path);
@@ -3623,7 +4776,10 @@ fn clone_package_file_name(
     base_key: &str,
     name_map: &BTreeMap<u64, String>,
 ) -> String {
-    format!("{}.package", selection_output_stem(package, base_key, name_map))
+    format!(
+        "{}.package",
+        selection_output_stem(package, base_key, name_map)
+    )
 }
 
 fn selected_label_file_name(
@@ -3714,14 +4870,18 @@ fn read_raw_writable_entry(
         .seek(SeekFrom::Start(entry.chunk_offset as u64))
         .map_err(|e| e.to_string())?;
     let mut raw = vec![0u8; entry.file_size as usize];
-    source_file.read_exact(&mut raw).map_err(|e| e.to_string())?;
+    source_file
+        .read_exact(&mut raw)
+        .map_err(|e| e.to_string())?;
     Ok(raw)
 }
 
 fn writable_entry_index(source_package: &WritablePackage) -> HashMap<String, usize> {
     let mut index = HashMap::with_capacity(source_package.entries.len());
     for (position, entry) in source_package.entries.iter().enumerate() {
-        index.entry(key_string_from_writable(entry)).or_insert(position);
+        index
+            .entry(key_string_from_writable(entry))
+            .or_insert(position);
     }
     index
 }
@@ -4087,6 +5247,80 @@ fn create_clone_package(payload: &ExportSelectionPayload) -> Result<(String, usi
     Ok((batch_root.display().to_string(), total_count))
 }
 
+fn build_merge_manifest_items(
+    package: &DBPF<'_>,
+    manifest: &MergeManifest,
+    query: &str,
+    name_map: &BTreeMap<u64, String>,
+) -> Vec<ResourceItem> {
+    let available: HashSet<String> = package.files.iter().map(key_string).collect();
+    let mut items = Vec::new();
+
+    for source in &manifest.packages {
+        let mut selection_keys: Vec<String> = source
+            .anchors
+            .iter()
+            .map(|anchor| anchor.key.clone())
+            .filter(|key| available.contains(key))
+            .collect();
+
+        if selection_keys.is_empty() {
+            selection_keys = source
+                .resources
+                .iter()
+                .map(|resource| resource.key.clone())
+                .filter(|key| available.contains(key))
+                .collect();
+        }
+        selection_keys.sort();
+        selection_keys.dedup();
+        if selection_keys.is_empty() {
+            continue;
+        }
+
+        let mut categories = Vec::new();
+        for anchor in &source.anchors {
+            if !available.contains(&anchor.key) {
+                continue;
+            }
+            for category in content_categories_for_key(package, &anchor.key, name_map) {
+                push_unique_category(&mut categories, &category);
+            }
+        }
+
+        let mut kinds: Vec<String> = source
+            .anchors
+            .iter()
+            .map(|anchor| anchor.kind.clone())
+            .collect();
+        kinds.sort();
+        kinds.dedup();
+        let kind = if kinds.is_empty() {
+            "Merged CC".to_string()
+        } else {
+            kinds.join(" + ")
+        };
+
+        let item = ResourceItem {
+            label: source.name.clone(),
+            key: selection_keys.join("||"),
+            kind,
+            details: format!(
+                "Merge Manifest • {} recurso(s) • {} anchor(s)",
+                source.resources.len(),
+                source.anchors.len()
+            ),
+            content_categories: categories,
+        };
+        if item_matches_query(&item, query) {
+            items.push(item);
+        }
+    }
+
+    items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    items
+}
+
 #[tauri::command]
 pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String> {
     let package_path = payload.package_path.trim();
@@ -4107,8 +5341,20 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
         let package = parse_package(&mmap)?;
         let query = payload.search.unwrap_or_default().to_lowercase();
         let name_map = package_resource_names(&package);
+        let merge_manifest = read_valid_merge_manifest_from_dbpf(&package);
+        let manifest_package_count = merge_manifest
+            .as_ref()
+            .map(|manifest| manifest.packages.len())
+            .unwrap_or(0);
 
-        let items = if resource_type == "skintone" {
+        let items = if resource_type == "all" && merge_manifest.is_some() {
+            build_merge_manifest_items(
+                &package,
+                merge_manifest.as_ref().unwrap(),
+                &query,
+                &name_map,
+            )
+        } else if resource_type == "skintone" {
             build_skintone_group_items(&package, &query, &name_map)
         } else if resource_type == "face" {
             build_face_group_items(&package, &query, &name_map)
@@ -4146,7 +5392,13 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
             items
         };
 
-        Ok(ScanResult { items })
+        let relations = build_resource_relations(&package, &name_map, &items);
+
+        Ok(ScanResult {
+            items,
+            manifest_package_count,
+            relations,
+        })
     })
     .map_err(|_| "Falha ao carregar a lista de recursos deste package.".to_string())?
 }
@@ -4204,10 +5456,9 @@ pub fn remove_selected_from_merged(
     let package = parse_package(&mmap)?;
     let name_map = package_resource_names(&package);
     let plan = build_remove_selection_plan(&package, &payload.selected_keys, &name_map)?;
-    if plan.resources_to_remove == 0 {
+    if plan.resources_to_remove == 0 && plan.manifest_packages_to_remove == 0 {
         return Err(
-            "Nenhum recurso pode ser removido com segurança; todos os recursos selecionados são compartilhados ou protegidos."
-                .to_string(),
+            "Nenhum recurso ou entrada de manifesto pode ser removido com segurança.".to_string(),
         );
     }
 
@@ -4231,6 +5482,7 @@ pub fn remove_selected_from_merged(
         &package,
         &source_package,
         &mut source_file,
+        &payload.selected_keys,
         &resources_to_remove,
         &temp_path,
     )?;
@@ -4238,6 +5490,7 @@ pub fn remove_selected_from_merged(
     if let Err(error) = validate_removed_package(
         &source_package,
         &temp_path,
+        &payload.selected_keys,
         &resources_to_remove,
     ) {
         let _ = remove_file(&temp_path);
@@ -4296,6 +5549,7 @@ pub fn remove_selected_from_merged(
         output_path: output_path.display().to_string(),
         backup_path: backup_path.display().to_string(),
         removed_resources: resources_to_remove.len(),
+        removed_manifest_packages: plan.manifest_packages_to_remove,
         shared_resources_preserved: shared_preserved.len(),
         selected_resources_preserved: plan.selected_resources_preserved,
     })
@@ -4407,7 +5661,10 @@ pub fn zip_selected_resources(payload: ExportSelectionPayload) -> Result<String,
 
     if payload.selected_keys.len() <= 1 {
         let zip_name = if let Some(base_key) = payload.selected_keys.first() {
-            format!("{}.zip", selection_output_stem(&package, base_key, &name_map))
+            format!(
+                "{}.zip",
+                selection_output_stem(&package, base_key, &name_map)
+            )
         } else {
             format!("{}.zip", export_folder_name(&payload.package_path))
         };
@@ -4479,7 +5736,6 @@ pub fn zip_selected_resources(payload: ExportSelectionPayload) -> Result<String,
     Ok(batch_root.display().to_string())
 }
 
-
 #[cfg(test)]
 mod remove_selected_tests {
     use super::*;
@@ -4526,6 +5782,10 @@ mod remove_selected_tests {
         package.index_position = file.stream_position().unwrap() as u32;
         drop(file);
         package.write_index_and_header().unwrap();
+    }
+
+    fn test_resource_key(resource_type: u32, group: u32, instance: u64) -> String {
+        format!("0x{resource_type:08X}-0x{group:08X}-0x{instance:016X}")
     }
 
     #[test]
@@ -4583,10 +5843,7 @@ mod remove_selected_tests {
         let shared_instance = 0x1111_2222_3333_4444u64;
         let selected_xml_instance = 0xAAAA_BBBB_CCCC_D001u64;
         let remaining_xml_instance = 0xAAAA_BBBB_CCCC_D002u64;
-        let shared_key_text = format!(
-            "key:{TYPE_IMG:08X}:{:08X}:{shared_instance:016X}",
-            0u32
-        );
+        let shared_key_text = format!("key:{TYPE_IMG:08X}:{:08X}:{shared_instance:016X}", 0u32);
 
         write_test_package(
             &source,
@@ -4618,10 +5875,7 @@ mod remove_selected_tests {
         let (_selected, shared, remove) =
             removal_plan_sets(&package, &[selected_key.clone()], &name_map).unwrap();
 
-        let shared_img_key = format!(
-            "0x{TYPE_IMG:08X}-0x{:08X}-0x{shared_instance:016X}",
-            0u32
-        );
+        let shared_img_key = format!("0x{TYPE_IMG:08X}-0x{:08X}-0x{shared_instance:016X}", 0u32);
         assert!(remove.contains(&selected_key));
         assert!(shared.contains(&shared_img_key));
         assert!(!remove.contains(&shared_img_key));
@@ -4632,11 +5886,13 @@ mod remove_selected_tests {
             &package,
             &source_package,
             &mut source_file,
+            &[selected_key.clone()],
             &remove,
             &rebuilt,
         )
         .unwrap();
-        validate_removed_package(&source_package, &rebuilt, &remove).unwrap();
+        validate_removed_package(&source_package, &rebuilt, &[selected_key.clone()], &remove)
+            .unwrap();
 
         let rebuilt_package = WritablePackage::load(&rebuilt).unwrap();
         let rebuilt_keys: HashSet<String> = rebuilt_package
@@ -4656,8 +5912,742 @@ mod remove_selected_tests {
         let _ = remove_file(&source);
         let _ = remove_file(&rebuilt);
     }
-}
 
+    fn test_dir(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "veiga-splitter-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn relation_for<'a>(
+        scan: &'a ScanResult,
+        key: &str,
+    ) -> ResourceRelation {
+        scan.relations.get(key).cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn same_name_and_shared_dependency_do_not_make_different_items_duplicates() {
+        let root = test_dir("same-name-shared-dependency");
+        let path = root.join("SameNameSharedDependency.package");
+        let first = 0xAAAA_2000_0000_0001u64;
+        let second = 0xBBBB_2000_0000_0002u64;
+        let shared = 0xCCCC_2000_0000_0003u64;
+        let shared_key_text = format!("key:{TYPE_IMG:08X}:{:08X}:{shared:016X}", 0u32);
+
+        write_test_package(
+            &path,
+            &[
+                (
+                    TYPE_XML,
+                    0,
+                    first,
+                    format!("<first>{shared_key_text}</first>").into_bytes(),
+                ),
+                (
+                    TYPE_XML,
+                    0,
+                    second,
+                    format!("<second>{shared_key_text}</second>").into_bytes(),
+                ),
+                (TYPE_IMG, 0, shared, vec![7, 7, 7, 7]),
+            ],
+        );
+
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let name_map = BTreeMap::new();
+        let items = vec![
+            ResourceItem {
+                label: "Same Internal Name".to_string(),
+                key: test_resource_key(TYPE_XML, 0, first),
+                kind: "XML".to_string(),
+                details: String::new(),
+                content_categories: Vec::new(),
+            },
+            ResourceItem {
+                label: "Same Internal Name".to_string(),
+                key: test_resource_key(TYPE_XML, 0, second),
+                kind: "XML".to_string(),
+                details: String::new(),
+                content_categories: Vec::new(),
+            },
+        ];
+
+        let relations = build_resource_relations(&package, &name_map, &items);
+        assert!(relations.is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scan_marks_exact_logical_content_as_duplicate_even_with_different_tgi() {
+        let root = test_dir("duplicate-content");
+        let path = root.join("DuplicateContent.package");
+        let first = 0xAAAA_0000_0000_0001u64;
+        let second = 0xBBBB_0000_0000_0002u64;
+        let payload = vec![1, 2, 3, 4, 5, 6];
+
+        write_test_package(
+            &path,
+            &[
+                (TYPE_CASP, 0, first, payload.clone()),
+                (TYPE_CASP, 0, second, payload),
+            ],
+        );
+
+        let scan = scan_package_resources(ScanPayload {
+            package_path: path.display().to_string(),
+            resource_type: "casp".to_string(),
+            search: None,
+        })
+        .unwrap();
+
+        assert_eq!(scan.items.len(), 2);
+        assert_ne!(scan.items[0].label, scan.items[1].label);
+        for item in &scan.items {
+            let relation = relation_for(&scan, &item.key);
+            assert_eq!(relation.duplicate_count, 2);
+            assert_eq!(relation.tgi_conflict_count, 0);
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scan_does_not_mark_different_payloads_as_duplicate() {
+        let root = test_dir("different-content");
+        let path = root.join("DifferentContent.package");
+        let first = 0xAAAA_1000_0000_0001u64;
+        let second = 0xBBBB_1000_0000_0002u64;
+
+        write_test_package(
+            &path,
+            &[
+                (TYPE_CASP, 0, first, vec![1, 2, 3]),
+                (TYPE_CASP, 0, second, vec![1, 2, 4]),
+            ],
+        );
+
+        let scan = scan_package_resources(ScanPayload {
+            package_path: path.display().to_string(),
+            resource_type: "casp".to_string(),
+            search: None,
+        })
+        .unwrap();
+
+        assert_eq!(scan.items.len(), 2);
+        assert!(scan.relations.is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scan_reports_tgi_conflict_when_same_tgi_has_different_payloads() {
+        let root = test_dir("tgi-conflict");
+        let path = root.join("TgiConflict.package");
+        let instance = 0xCCCC_0000_0000_0003u64;
+
+        write_test_package(
+            &path,
+            &[
+                (TYPE_CASP, 0, instance, vec![1, 2, 3]),
+                (TYPE_CASP, 0, instance, vec![9, 8, 7]),
+            ],
+        );
+
+        let scan = scan_package_resources(ScanPayload {
+            package_path: path.display().to_string(),
+            resource_type: "casp".to_string(),
+            search: None,
+        })
+        .unwrap();
+
+        assert_eq!(scan.items.len(), 2);
+        let key = scan.items[0].key.clone();
+        let relation = relation_for(&scan, &key);
+        assert_eq!(relation.duplicate_count, 0);
+        assert_eq!(relation.tgi_conflict_count, 2);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scan_marks_repeated_identical_tgi_as_duplicate_not_conflict() {
+        let root = test_dir("repeated-identical-tgi");
+        let path = root.join("RepeatedIdenticalTgi.package");
+        let instance = 0xDDDD_0000_0000_0004u64;
+        let payload = vec![4, 4, 4, 4];
+
+        write_test_package(
+            &path,
+            &[
+                (TYPE_CASP, 0, instance, payload.clone()),
+                (TYPE_CASP, 0, instance, payload),
+            ],
+        );
+
+        let scan = scan_package_resources(ScanPayload {
+            package_path: path.display().to_string(),
+            resource_type: "casp".to_string(),
+            search: None,
+        })
+        .unwrap();
+
+        assert_eq!(scan.items.len(), 2);
+        let key = scan.items[0].key.clone();
+        let relation = relation_for(&scan, &key);
+        assert_eq!(relation.duplicate_count, 2);
+        assert_eq!(relation.tgi_conflict_count, 0);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scan_only_marks_valid_veiga_merge_manifest_as_reversible() {
+        let root = test_dir("manifest-detection");
+        let valid = root.join("Valid.package");
+        let common = root.join("Common.package");
+        let other_tool = root.join("OtherToolMerged.package");
+        let old = root.join("OldManifest.package");
+        let corrupt = root.join("CorruptManifest.package");
+
+        let casp = 0x1010_0000_0000_0001u64;
+        let objd = 0x1010_0000_0000_0002u64;
+        let casp_key = test_resource_key(TYPE_CASP, 0, casp);
+        let valid_manifest = MergeManifest {
+            version: 2,
+            packages: vec![ManifestPackage {
+                id: 1,
+                name: "ValidOriginal.package".to_string(),
+                original_size: 3,
+                anchors: vec![ManifestAnchor {
+                    kind: "CASP".to_string(),
+                    key: casp_key.clone(),
+                }],
+                resources: vec![ManifestResource {
+                    key: casp_key.clone(),
+                }],
+                preserved_resources: Vec::new(),
+            }],
+        };
+        write_test_package(
+            &valid,
+            &[
+                (TYPE_CASP, 0, casp, vec![1, 2, 3]),
+                (
+                    MANIFEST_TYPE,
+                    MANIFEST_GROUP,
+                    MANIFEST_INSTANCE,
+                    valid_manifest.to_xml_bytes(),
+                ),
+            ],
+        );
+
+        write_test_package(&common, &[(TYPE_CASP, 0, casp, vec![1, 2, 3])]);
+        write_test_package(
+            &other_tool,
+            &[
+                (TYPE_CASP, 0, casp, vec![1, 2, 3]),
+                (TYPE_OBJD, 0, objd, vec![4]),
+            ],
+        );
+
+        let old_manifest = MergeManifest {
+            version: 1,
+            packages: vec![ManifestPackage {
+                id: 1,
+                name: "OldOriginal.package".to_string(),
+                original_size: 3,
+                anchors: vec![ManifestAnchor {
+                    kind: "CASP".to_string(),
+                    key: casp_key.clone(),
+                }],
+                resources: vec![ManifestResource {
+                    key: casp_key.clone(),
+                }],
+                preserved_resources: Vec::new(),
+            }],
+        };
+        write_test_package(
+            &old,
+            &[
+                (TYPE_CASP, 0, casp, vec![1, 2, 3]),
+                (
+                    MANIFEST_TYPE,
+                    MANIFEST_GROUP,
+                    MANIFEST_INSTANCE,
+                    old_manifest.to_xml_bytes(),
+                ),
+            ],
+        );
+        write_test_package(
+            &corrupt,
+            &[
+                (TYPE_CASP, 0, casp, vec![1, 2, 3]),
+                (
+                    MANIFEST_TYPE,
+                    MANIFEST_GROUP,
+                    MANIFEST_INSTANCE,
+                    b"not a veiga manifest".to_vec(),
+                ),
+            ],
+        );
+
+        for (path, expected_count) in [
+            (&valid, 1usize),
+            (&common, 0usize),
+            (&other_tool, 0usize),
+            (&old, 1usize),
+            (&corrupt, 0usize),
+        ] {
+            let scan = scan_package_resources(ScanPayload {
+                package_path: path.display().to_string(),
+                resource_type: "all".to_string(),
+                search: None,
+            })
+            .unwrap();
+            assert_eq!(scan.manifest_package_count, expected_count);
+        }
+
+        let valid_plan = analyze_remove_selection(RemoveSelectionPayload {
+            package_path: valid.display().to_string(),
+            selected_keys: vec![casp_key.clone()],
+        })
+        .unwrap();
+        assert_eq!(valid_plan.manifest_package_total, 1);
+        assert_eq!(valid_plan.manifest_packages_to_remove, 1);
+
+        for path in [&common, &other_tool, &corrupt] {
+            let generic_plan = analyze_remove_selection(RemoveSelectionPayload {
+                package_path: path.display().to_string(),
+                selected_keys: vec![casp_key.clone()],
+            })
+            .unwrap();
+            assert_eq!(generic_plan.manifest_package_total, 0);
+            assert_eq!(generic_plan.manifest_packages_to_remove, 0);
+            assert!(generic_plan.resources_to_remove > 0);
+        }
+
+        let external_dir = root.join("external-output");
+        std::fs::create_dir_all(&external_dir).unwrap();
+        let external_result = remove_selected_from_merged(RemoveSelectionApplyPayload {
+            package_path: other_tool.display().to_string(),
+            destination_folder: external_dir.display().to_string(),
+            selected_keys: vec![casp_key.clone()],
+        })
+        .unwrap();
+        assert_eq!(external_result.removed_manifest_packages, 0);
+        assert!(!external_result.backup_path.is_empty());
+        assert!(Path::new(&external_result.backup_path).is_file());
+        assert!(Path::new(&external_result.output_path).is_file());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reversible_merger_writes_manifest_and_restores_original_names() {
+        let root = test_dir("reversible-merge");
+        let source_a = root.join("TShirtMickey.package");
+        let source_b = root.join("ModernSofa.package");
+        let merged_dir = root.join("merged");
+        let restore_dir = root.join("restored");
+        std::fs::create_dir_all(&merged_dir).unwrap();
+        std::fs::create_dir_all(&restore_dir).unwrap();
+
+        let casp_instance = 0x1111_0000_0000_0001u64;
+        let objd_instance = 0x2222_0000_0000_0002u64;
+        let shared_instance = 0x3333_0000_0000_0003u64;
+        let shared_data = vec![9, 8, 7, 6, 5];
+
+        write_test_package(
+            &source_a,
+            &[
+                (TYPE_CASP, 0, casp_instance, vec![1, 2, 3]),
+                (TYPE_IMG, 0, shared_instance, shared_data.clone()),
+            ],
+        );
+        write_test_package(
+            &source_b,
+            &[
+                (TYPE_OBJD, 0, objd_instance, vec![4, 5, 6]),
+                (TYPE_IMG, 0, shared_instance, shared_data),
+            ],
+        );
+
+        let result = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![
+                source_a.display().to_string(),
+                source_b.display().to_string(),
+            ],
+            destination_folder: merged_dir.display().to_string(),
+            output_name: "MyMerged.package".to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(result.package_count, 2);
+        assert_eq!(result.shared_resources, 1);
+        assert_eq!(result.resource_count, 3);
+
+        let merged = WritablePackage::load(&result.output_path).unwrap();
+        let manifest = read_merge_manifest_from_writable(&merged).unwrap().unwrap();
+        assert_eq!(
+            manifest
+                .packages
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["TShirtMickey.package", "ModernSofa.package"]
+        );
+        assert_eq!(manifest.packages[0].anchors[0].kind, "CASP");
+        assert_eq!(manifest.packages[1].anchors[0].kind, "OBJD");
+
+        let scan = scan_package_resources(ScanPayload {
+            package_path: result.output_path.clone(),
+            resource_type: "all".to_string(),
+            search: None,
+        })
+        .unwrap();
+        assert_eq!(scan.manifest_package_count, 2);
+        assert_eq!(scan.items.len(), 2);
+        let labels: HashSet<String> = scan.items.iter().map(|item| item.label.clone()).collect();
+        assert!(labels.contains("TShirtMickey.package"));
+        assert!(labels.contains("ModernSofa.package"));
+
+        let restored = restore_manifest_packages(RestoreManifestPayload {
+            package_path: result.output_path.clone(),
+            destination_folder: restore_dir.display().to_string(),
+        })
+        .unwrap();
+        assert_eq!(restored.package_count, 2);
+        assert!(restore_dir.join("TShirtMickey.package").exists());
+        assert!(restore_dir.join("ModernSofa.package").exists());
+
+        let restored_a = WritablePackage::load(restore_dir.join("TShirtMickey.package")).unwrap();
+        let restored_a_keys: HashSet<String> = restored_a
+            .entries
+            .iter()
+            .map(key_string_from_writable)
+            .collect();
+        assert!(restored_a_keys.contains(&format!(
+            "0x{TYPE_CASP:08X}-0x00000000-0x{casp_instance:016X}"
+        )));
+        assert!(restored_a_keys.contains(&format!(
+            "0x{TYPE_IMG:08X}-0x00000000-0x{shared_instance:016X}"
+        )));
+
+        let restored_b = WritablePackage::load(restore_dir.join("ModernSofa.package")).unwrap();
+        let restored_b_keys: HashSet<String> = restored_b
+            .entries
+            .iter()
+            .map(key_string_from_writable)
+            .collect();
+        assert!(restored_b_keys.contains(&format!(
+            "0x{TYPE_OBJD:08X}-0x00000000-0x{objd_instance:016X}"
+        )));
+        assert!(restored_b_keys.contains(&format!(
+            "0x{TYPE_IMG:08X}-0x00000000-0x{shared_instance:016X}"
+        )));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reversible_merger_rejects_conflicting_tgi_data() {
+        let root = test_dir("merge-conflict");
+        let source_a = root.join("A.package");
+        let source_b = root.join("B.package");
+        let destination = root.join("out");
+        std::fs::create_dir_all(&destination).unwrap();
+
+        let instance = 0x4444_0000_0000_0004u64;
+        write_test_package(&source_a, &[(TYPE_IMG, 0, instance, vec![1, 2, 3])]);
+        write_test_package(&source_b, &[(TYPE_IMG, 0, instance, vec![9, 9, 9])]);
+
+        let error = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![
+                source_a.display().to_string(),
+                source_b.display().to_string(),
+            ],
+            destination_folder: destination.display().to_string(),
+            output_name: "Conflict.package".to_string(),
+        })
+        .unwrap_err();
+
+        assert!(error.contains("Conflito de TGI"));
+        assert!(!destination.join("Conflict.package").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reversible_merger_preserves_package_manifest_and_key_metadata_per_source() {
+        let root = test_dir("merge-source-metadata");
+        let source_a = root.join("Eyebrows N01.package");
+        let source_b = root.join("Eyebrows N02.package");
+        let destination = root.join("out");
+        let restore_dir = root.join("restored");
+        std::fs::create_dir_all(&destination).unwrap();
+        std::fs::create_dir_all(&restore_dir).unwrap();
+
+        let casp_a = 0x7777_0000_0000_0001u64;
+        let casp_b = 0x7777_0000_0000_0002u64;
+        let package_manifest_a = b"<packageManifest name=\"N01\" />".to_vec();
+        let package_manifest_b = b"<packageManifest name=\"N02\" />".to_vec();
+        let key_a = b"KEY-N01".to_vec();
+        let key_b = b"KEY-N02".to_vec();
+
+        write_test_package(
+            &source_a,
+            &[
+                (TYPE_CASP, 0, casp_a, vec![1, 2, 3]),
+                (TYPE_PACKAGE_MANIFEST, 0, 0, package_manifest_a.clone()),
+                (TYPE_KEY, 0, 0, key_a.clone()),
+            ],
+        );
+        write_test_package(
+            &source_b,
+            &[
+                (TYPE_CASP, 0, casp_b, vec![4, 5, 6]),
+                (TYPE_PACKAGE_MANIFEST, 0, 0, package_manifest_b.clone()),
+                (TYPE_KEY, 0, 0, key_b.clone()),
+            ],
+        );
+
+        let merged = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![
+                source_a.display().to_string(),
+                source_b.display().to_string(),
+            ],
+            destination_folder: destination.display().to_string(),
+            output_name: "EyebrowsMerged.package".to_string(),
+        })
+        .unwrap();
+
+        let merged_package = WritablePackage::load(&merged.output_path).unwrap();
+        assert!(!merged_package
+            .entries
+            .iter()
+            .any(|entry| entry.type_id == TYPE_PACKAGE_MANIFEST));
+        assert!(!merged_package
+            .entries
+            .iter()
+            .any(|entry| entry.type_id == TYPE_KEY));
+
+        let manifest = read_merge_manifest_from_writable(&merged_package)
+            .unwrap()
+            .unwrap();
+        assert_eq!(manifest.version, 2);
+        assert_eq!(manifest.packages.len(), 2);
+        assert!(manifest.packages.iter().all(|package| {
+            package
+                .preserved_resources
+                .iter()
+                .any(|resource| resource.key.starts_with("0x73E93EEB-"))
+        }));
+        assert!(manifest.packages.iter().all(|package| {
+            package
+                .preserved_resources
+                .iter()
+                .any(|resource| resource.key.starts_with("0x0166038C-"))
+        }));
+
+        restore_manifest_packages(RestoreManifestPayload {
+            package_path: merged.output_path.clone(),
+            destination_folder: restore_dir.display().to_string(),
+        })
+        .unwrap();
+
+        let restored_a = WritablePackage::load(restore_dir.join("Eyebrows N01.package")).unwrap();
+        let restored_b = WritablePackage::load(restore_dir.join("Eyebrows N02.package")).unwrap();
+
+        let restored_manifest_a = restored_a
+            .entries
+            .iter()
+            .find(|entry| entry.type_id == TYPE_PACKAGE_MANIFEST)
+            .unwrap();
+        let restored_manifest_b = restored_b
+            .entries
+            .iter()
+            .find(|entry| entry.type_id == TYPE_PACKAGE_MANIFEST)
+            .unwrap();
+        assert_eq!(
+            restored_a
+                .get_uncompressed_data(restored_manifest_a)
+                .unwrap(),
+            package_manifest_a
+        );
+        assert_eq!(
+            restored_b
+                .get_uncompressed_data(restored_manifest_b)
+                .unwrap(),
+            package_manifest_b
+        );
+
+        let restored_key_a = restored_a
+            .entries
+            .iter()
+            .find(|entry| entry.type_id == TYPE_KEY)
+            .unwrap();
+        let restored_key_b = restored_b
+            .entries
+            .iter()
+            .find(|entry| entry.type_id == TYPE_KEY)
+            .unwrap();
+        assert_eq!(
+            restored_a.get_uncompressed_data(restored_key_a).unwrap(),
+            key_a
+        );
+        assert_eq!(
+            restored_b.get_uncompressed_data(restored_key_b).unwrap(),
+            key_b
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn removing_merged_cc_updates_embedded_manifest() {
+        let root = test_dir("manifest-removal");
+        let source_a = root.join("A.package");
+        let source_b = root.join("B.package");
+        let destination = root.join("out");
+        std::fs::create_dir_all(&destination).unwrap();
+
+        let casp_a = 0x5555_0000_0000_0001u64;
+        let casp_b = 0x5555_0000_0000_0002u64;
+        let shared = 0x5555_0000_0000_0003u64;
+        write_test_package(
+            &source_a,
+            &[
+                (TYPE_CASP, 0, casp_a, vec![1]),
+                (TYPE_IMG, 0, shared, vec![7, 7]),
+            ],
+        );
+        write_test_package(
+            &source_b,
+            &[
+                (TYPE_CASP, 0, casp_b, vec![2]),
+                (TYPE_IMG, 0, shared, vec![7, 7]),
+            ],
+        );
+
+        let merged = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![
+                source_a.display().to_string(),
+                source_b.display().to_string(),
+            ],
+            destination_folder: destination.display().to_string(),
+            output_name: "Merged.package".to_string(),
+        })
+        .unwrap();
+
+        let rebuilt = root.join("rebuilt.package");
+        let mmap = open_package(&merged.output_path).unwrap();
+        let dbpf = parse_package(&mmap).unwrap();
+        let source_package = WritablePackage::load(&merged.output_path).unwrap();
+        let mut source_file = File::open(&merged.output_path).unwrap();
+        let selected_key = format!("0x{TYPE_CASP:08X}-0x00000000-0x{casp_a:016X}");
+        let name_map = package_resource_names(&dbpf);
+        let (_selected_resources, shared_resources, removed) =
+            removal_plan_sets(&dbpf, &[selected_key.clone()], &name_map).unwrap();
+        let shared_key = format!("0x{TYPE_IMG:08X}-0x00000000-0x{shared:016X}");
+        assert!(removed.contains(&selected_key));
+        assert!(!removed.contains(&shared_key));
+        assert!(shared_resources.contains(&shared_key));
+
+        write_removed_package(
+            &dbpf,
+            &source_package,
+            &mut source_file,
+            &[selected_key.clone()],
+            &removed,
+            &rebuilt,
+        )
+        .unwrap();
+        validate_removed_package(&source_package, &rebuilt, &[selected_key], &removed).unwrap();
+
+        let rebuilt_package = WritablePackage::load(&rebuilt).unwrap();
+        let manifest = read_merge_manifest_from_writable(&rebuilt_package)
+            .unwrap()
+            .unwrap();
+        assert_eq!(manifest.packages.len(), 1);
+        assert_eq!(manifest.packages[0].name, "B.package");
+        assert!(manifest.packages[0]
+            .resources
+            .iter()
+            .any(|r| r.key.ends_with(&format!("{shared:016X}"))));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn remove_selection_plan_reports_original_manifest_package_ratio() {
+        let root = test_dir("manifest-removal-ratio");
+        let source_dir = root.join("sources");
+        let destination = root.join("out");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::create_dir_all(&destination).unwrap();
+
+        let shared = 0x9999_0000_0000_1000u64;
+        let mut paths = Vec::new();
+        let mut casp_instances = Vec::new();
+        for index in 0..10u64 {
+            let casp = 0x9999_0000_0000_2000u64 + index;
+            casp_instances.push(casp);
+            let path = source_dir.join(format!("Original_{index}.package"));
+            let mut resources = vec![(TYPE_CASP, 0, casp, vec![index as u8 + 1])];
+            if index == 0 {
+                resources.push((TYPE_IMG, 0, shared, vec![7, 7, 7]));
+                resources.push((TYPE_OBJD, 0, 0x9999_0000_0000_3000, vec![3, 3, 3]));
+            } else if index == 1 {
+                resources.push((TYPE_IMG, 0, shared, vec![7, 7, 7]));
+            }
+            write_test_package(&path, &resources);
+            paths.push(path.display().to_string());
+        }
+
+        let merged = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: paths,
+            destination_folder: destination.display().to_string(),
+            output_name: "MergedTen.package".to_string(),
+        })
+        .unwrap();
+
+        let mmap = open_package(&merged.output_path).unwrap();
+        let dbpf = parse_package(&mmap).unwrap();
+        let name_map = package_resource_names(&dbpf);
+        let first = test_resource_key(TYPE_CASP, 0, casp_instances[0]);
+        let second = test_resource_key(TYPE_CASP, 0, casp_instances[1]);
+        let same_original_extra = test_resource_key(TYPE_OBJD, 0, 0x9999_0000_0000_3000);
+
+        let two_of_ten =
+            build_remove_selection_plan(&dbpf, &[first.clone(), second.clone()], &name_map)
+                .unwrap();
+        assert_eq!(two_of_ten.manifest_packages_to_remove, 2);
+        assert_eq!(two_of_ten.manifest_package_total, 10);
+
+        let one_of_ten =
+            build_remove_selection_plan(&dbpf, std::slice::from_ref(&first), &name_map).unwrap();
+        assert_eq!(one_of_ten.manifest_packages_to_remove, 1);
+        assert_eq!(one_of_ten.manifest_package_total, 10);
+        assert!(one_of_ten.shared_resources_preserved > 0);
+
+        let same_original =
+            build_remove_selection_plan(&dbpf, &[first.clone(), same_original_extra], &name_map)
+                .unwrap();
+        assert_eq!(same_original.manifest_packages_to_remove, 1);
+        assert_eq!(same_original.manifest_package_total, 10);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
 
 #[cfg(test)]
 mod key_name_normalization_tests {
@@ -4704,7 +6694,6 @@ mod key_name_normalization_tests {
     }
 }
 
-
 #[cfg(test)]
 mod content_category_tests {
     use super::{casp_content_category, object_content_category, CaspFolderInfo};
@@ -4722,12 +6711,30 @@ mod content_category_tests {
 
     #[test]
     fn classifies_core_casp_categories_exclusively() {
-        assert_eq!(casp_content_category(Some(casp("Hair", Some("Hair"))), ""), "Hair");
-        assert_eq!(casp_content_category(Some(casp("Hair", Some("Beard"))), ""), "Facial Hair");
-        assert_eq!(casp_content_category(Some(casp("Hair", Some("Eyebrows"))), ""), "Eyebrows");
-        assert_eq!(casp_content_category(Some(casp("Hair", Some("Body Hair"))), ""), "Body Hair");
-        assert_eq!(casp_content_category(Some(casp("Accessories", Some("Rings"))), ""), "Accessories");
-        assert_eq!(casp_content_category(Some(casp("Clothing", None)), ""), "Clothes");
+        assert_eq!(
+            casp_content_category(Some(casp("Hair", Some("Hair"))), ""),
+            "Hair"
+        );
+        assert_eq!(
+            casp_content_category(Some(casp("Hair", Some("Beard"))), ""),
+            "Facial Hair"
+        );
+        assert_eq!(
+            casp_content_category(Some(casp("Hair", Some("Eyebrows"))), ""),
+            "Eyebrows"
+        );
+        assert_eq!(
+            casp_content_category(Some(casp("Hair", Some("Body Hair"))), ""),
+            "Body Hair"
+        );
+        assert_eq!(
+            casp_content_category(Some(casp("Accessories", Some("Rings"))), ""),
+            "Accessories"
+        );
+        assert_eq!(
+            casp_content_category(Some(casp("Clothing", None)), ""),
+            "Clothes"
+        );
         assert_eq!(casp_content_category(None, ""), "Other CASP");
     }
 
@@ -4736,7 +6743,10 @@ mod content_category_tests {
         assert_eq!(casp_content_category(None, "Creator_WinterBoot"), "Shoes");
         assert_eq!(casp_content_category(None, "CustomEye"), "Eyes");
         assert_eq!(casp_content_category(None, "PetCoatLong"), "Pet Coats");
-        assert_eq!(casp_content_category(None, "PetAccessoryCollar"), "Pet Accessories");
+        assert_eq!(
+            casp_content_category(None, "PetAccessoryCollar"),
+            "Pet Accessories"
+        );
     }
 
     #[test]
@@ -4745,5 +6755,39 @@ mod content_category_tests {
         assert_eq!(object_content_category("Wall Lamp"), "Walls");
         assert_eq!(object_content_category("Grand Window"), "Windows");
         assert_eq!(object_content_category("Unknown Thing"), "Other Objects");
+    }
+}
+
+#[cfg(test)]
+mod merge_source_collection_tests {
+    use super::*;
+    use std::fs::{create_dir_all, remove_dir_all, write};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn dropped_folder_collects_packages_recursively_and_ignores_other_files() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("veiga-merger-drop-{nonce}"));
+        let nested = root.join("Nested");
+        create_dir_all(&nested).unwrap();
+
+        write(root.join("A.package"), b"DBPF").unwrap();
+        write(nested.join("B.DBC"), b"DBPF").unwrap();
+        write(nested.join("ignore.txt"), b"ignore").unwrap();
+
+        let result = collect_merge_package_files(CollectMergeSourcesPayload {
+            paths: vec![root.to_string_lossy().into_owned()],
+        })
+        .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().any(|path| path.ends_with("A.package")));
+        assert!(result.iter().any(|path| path.ends_with("B.DBC")));
+        assert!(!result.iter().any(|path| path.ends_with("ignore.txt")));
+
+        remove_dir_all(root).unwrap();
     }
 }

@@ -16,19 +16,19 @@ jobs:
         include:
           - platform: windows-2022
             target: ""
-            args: ""
+            args: "--bundles msi"
 
           - platform: ubuntu-22.04
             target: ""
-            args: ""
+            args: "--bundles deb,appimage"
 
           - platform: macos-15-intel
             target: x86_64-apple-darwin
-            args: "--target x86_64-apple-darwin"
+            args: "--target x86_64-apple-darwin --bundles dmg"
 
           - platform: macos-15
             target: aarch64-apple-darwin
-            args: "--target aarch64-apple-darwin"
+            args: "--target aarch64-apple-darwin --bundles dmg"
 
     runs-on: ${{ matrix.platform }}
 
