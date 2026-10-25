@@ -55,6 +55,10 @@ jobs:
           }) -join ';'
           cargo test --locked --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml object_export_uses_manifest_owned_icon_and_never_steals_another_objects_icon -- --nocapture
           if ($LASTEXITCODE -ne 0) { throw "Object ICON regression failed" }
+          cargo test --locked --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml merged_index_is_sorted_and_game_manifest_is_not_tuning_xml -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "Merged DBPF sorted-index regression failed" }
+          cargo test --locked --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml new_and_legacy_manifest_types_both_recognized_without_claiming_game_xml -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "Manifest compatibility regression failed" }
  } |
             Sort-Object FullName -Descending |
             Select-Object -First 1
