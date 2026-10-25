@@ -5210,16 +5210,22 @@ pub fn merge_packages_with_manifest(
                         continue;
                     }
 
-                    let left = source_paths[previous_source]
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("package");
-                    let right = source_paths[source_index]
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("package");
+                    // Same Type/Group/Instance with different *decoded* data
+                    // is not an identical resource. Never pick a winner silently:
+                    // recolors and overrides can deliberately share TGI values.
+                    let left = source_paths[previous_source].display();
+                    let right = source_paths[source_index].display();
                     return Err(format!(
-                        "Conflito de TGI: {key} existe em {left} e {right} com dados diferentes. O merge foi cancelado."
+                        "Conflito de TGI: {key} ({kind}, Type 0x{type_id:08X}, Group 0x{group:08X}, Instance 0x{instance:016X}).\n\
+                         Origem A: {left}\n  Tamanho descompactado: {size_a} bytes\n\
+                         Origem B: {right}\n  Tamanho descompactado: {size_b} bytes\n\
+                         Os dois recursos têm a mesma identidade, mas conteúdos diferentes. O merge foi cancelado sem substituir nenhum original. Separe os CCs, ou decida qual override/recolor deve prevalecer antes de criar um merged.",
+                        kind = kind_from_type(entry.type_id),
+                        type_id = entry.type_id,
+                        group = entry.group,
+                        instance = entry.instance,
+                        size_a = previous_data.len(),
+                        size_b = current_data.len(),
                     ));
                 }
                 shared_keys.insert(key);
@@ -8015,7 +8021,7 @@ mod remove_selected_tests {
 
         let instance = 0x4444_0000_0000_0004u64;
         write_test_package(&source_a, &[(TYPE_IMG, 0, instance, vec![1, 2, 3])]);
-        write_test_package(&source_b, &[(TYPE_IMG, 0, instance, vec![9, 9, 9])]);
+        write_test_package(&source_b, &[(TYPE_IMG, 0, instance, vec![9, 9, 9, 9])]);
 
         let error = merge_packages_with_manifest(MergePackagesPayload {
             package_paths: vec![
@@ -8028,6 +8034,11 @@ mod remove_selected_tests {
         .unwrap_err();
 
         assert!(error.contains("Conflito de TGI"));
+        assert!(error.contains(&source_a.display().to_string()));
+        assert!(error.contains(&source_b.display().to_string()));
+        assert!(error.contains("IMG"));
+        assert!(error.contains("3 bytes"));
+        assert!(error.contains("4 bytes"));
         assert!(!destination.join("Conflict.package").exists());
         let _ = std::fs::remove_dir_all(&root);
     }

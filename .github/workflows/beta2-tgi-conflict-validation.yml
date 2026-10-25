@@ -1,0 +1,68 @@
+name: Beta 2 TGI conflict diagnostics
+on:
+  push:
+    branches:
+      - "fix/beta2-tgi-conflict-diagnostics-20261025"
+  pull_request:
+    branches:
+      - "beta/v2.0.0-beta2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-compile:
+    name: Rust compile and conflict regressions
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: veiga-s3cc-splitter/src-tauri -> target
+      - name: Compile workspace and test sources
+        shell: pwsh
+        run: |
+          cargo check --locked --workspace
+          if ($LASTEXITCODE -ne 0) { throw 'Rust workspace failed' }
+          cargo check --locked --workspace --tests
+          if ($LASTEXITCODE -ne 0) { throw 'Rust tests failed to compile' }
+      - name: Prepare exact Tauri test harness with Windows Common Controls v6
+        shell: pwsh
+        run: |
+          cargo test --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml --locked --no-run
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot build test harness' }
+          $sdkBin = 'C:\Program Files (x86)\Windows Kits\10\bin'
+          $mt = Get-ChildItem -LiteralPath $sdkBin -Filter mt.exe -File -Recurse |
+            Where-Object { $_.DirectoryName.EndsWith('\x64') } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $mt) { throw 'Windows SDK x64 mt.exe not found' }
+          $manifestPath = Join-Path $env:RUNNER_TEMP 'veiga-tests.manifest'
+          @'
+          <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+            <assemblyIdentity type="win32" name="Veiga.S3CC.Splitter.UnitTests" version="1.0.0.0" processorArchitecture="*" />
+            <dependency>
+              <dependentAssembly>
+                <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*" />
+              </dependentAssembly>
+            </dependency>
+          </assembly>
+          '@ | Set-Content -LiteralPath $manifestPath -Encoding utf8
+          $tests = @(Get-ChildItem -LiteralPath 'target\debug\deps' -Filter 'veiga_s3cc_splitter*.exe' -File)
+          if ($tests.Count -eq 0) { throw 'No Tauri test executables' }
+          foreach ($exe in $tests) {
+            & $mt.FullName '-nologo' '-manifest' $manifestPath "-outputresource:$($exe.FullName);#1"
+            if ($LASTEXITCODE -ne 0) { throw "Cannot embed v6 manifest in $($exe.Name)" }
+          }
+      - name: Test TGI conflict prevention and diagnostic
+        shell: pwsh
+        run: |
+          $serviceFabric = 'C:\Program Files\Microsoft Service Fabric\bin\Fabric\Fabric.Code'
+          $env:PATH = (($env:PATH -split ';') | Where-Object {
+            $_.TrimEnd('\') -ine $serviceFabric.TrimEnd('\')
+          }) -join ';'
+          cargo test --locked --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml reversible_merger_rejects_conflicting_tgi_data -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Detailed conflict report regression failed' }
