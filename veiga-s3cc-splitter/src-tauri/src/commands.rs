@@ -6379,28 +6379,28 @@ fn create_clone_package_from_loaded(
     // verbatim (decoded payload); all other clones keep the filtered KEY.
     if !restores_original_key {
         if let Some(raw) = filtered_key_data.filter(|raw| !raw.is_empty()) {
-        if let Some(template) = source_package
-            .entries
-            .iter()
-            .find(|entry| entry.type_id == TYPE_KEY)
-        {
-            let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
-            out_f.write_all(&raw).map_err(|e| e.to_string())?;
-            out_pkg.entries.push(WritableEntry {
-                type_id: template.type_id,
-                group: template.group,
-                id1: template.id1,
-                id2: template.id2,
-                instance: template.instance,
-                chunk_offset,
-                file_size: raw.len() as u32,
-                mem_size: raw.len() as u32,
-                compressed: 0,
-                unknown2: template.unknown2,
-            });
-            count += 1;
+            if let Some(template) = source_package
+                .entries
+                .iter()
+                .find(|entry| entry.type_id == TYPE_KEY)
+            {
+                let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+                out_f.write_all(&raw).map_err(|e| e.to_string())?;
+                out_pkg.entries.push(WritableEntry {
+                    type_id: template.type_id,
+                    group: template.group,
+                    id1: template.id1,
+                    id2: template.id2,
+                    instance: template.instance,
+                    chunk_offset,
+                    file_size: raw.len() as u32,
+                    mem_size: raw.len() as u32,
+                    compressed: 0,
+                    unknown2: template.unknown2,
+                });
+                count += 1;
+            }
         }
-    }
     }
 
     for (parts, data, unknown2) in original_metadata {
@@ -7453,6 +7453,135 @@ mod remove_selected_tests {
 
     fn test_resource_key(resource_type: u32, group: u32, instance: u64) -> String {
         format!("0x{resource_type:08X}-0x{group:08X}-0x{instance:016X}")
+    }
+
+    #[test]
+    fn manual_clone_restores_complete_source_metadata_without_cross_contamination() {
+        let root = test_dir("object-restore-metadata");
+        let merged_path = root.join("Merged.package");
+        let clone_path = root.join("NativeBodyWash.package");
+        let selected_obj = test_resource_key(TYPE_OBJD, 0, 0xA0A0);
+        let selected_icon = test_resource_key(TYPE_ICON, 0, 0xB0B0);
+        let other_obj = test_resource_key(TYPE_OBJD, 0, 0xC0C0);
+        let other_icon = test_resource_key(TYPE_ICON, 0, 0xD0D0);
+        let manifest_key = test_resource_key(TYPE_PACKAGE_MANIFEST, 0, 0);
+        let key_key = test_resource_key(TYPE_KEY, 0, 0xEE);
+        let original_key = b"original-KEY-resource";
+        let original_manifest = b"<packageManifest native='yes'/>";
+
+        let manifest = MergeManifest {
+            version: 2,
+            packages: vec![
+                ManifestPackage {
+                    id: 1,
+                    name: "NativeBodyWash.package".to_string(),
+                    original_size: 555,
+                    anchors: vec![ManifestAnchor {kind:"OBJD".to_string(), key:selected_obj.clone()}],
+                    resources: vec![
+                        ManifestResource {key:selected_obj.clone()},
+                        ManifestResource {key:selected_icon.clone()},
+                    ],
+                    preserved_resources: vec![
+                        ManifestPreservedResource {
+                            key: key_key.clone(),
+                            data_base64: STANDARD.encode(original_key),
+                            unknown2: 0,
+                        },
+                        ManifestPreservedResource {
+                            key: manifest_key.clone(),
+                            data_base64: STANDARD.encode(original_manifest),
+                            unknown2: 0,
+                        },
+                    ],
+                },
+                ManifestPackage {
+                    id: 2,
+                    name: "UnrelatedObject.package".to_string(),
+                    original_size: 222,
+                    anchors: vec![ManifestAnchor {kind:"OBJD".to_string(), key:other_obj.clone()}],
+                    resources: vec![
+                        ManifestResource {key:other_obj.clone()},
+                        ManifestResource {key:other_icon.clone()},
+                    ],
+                    preserved_resources: vec![],
+                },
+            ],
+        };
+        write_test_package(&merged_path, &[
+            (TYPE_OBJD, 0, 0xA0A0, b"object-native".to_vec()),
+            (TYPE_ICON, 0, 0xB0B0, b"icon-native".to_vec()),
+            (TYPE_OBJD, 0, 0xC0C0, b"object-unrelated".to_vec()),
+            (TYPE_ICON, 0, 0xD0D0, b"icon-unrelated".to_vec()),
+            (MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+        ]);
+        let mmap = open_package(&merged_path.display().to_string()).unwrap();
+        let core = parse_package(&mmap).unwrap();
+        let writable = WritablePackage::load(&merged_path).unwrap();
+        let mut handle = File::open(&merged_path).unwrap();
+        create_clone_package_from_loaded(
+            &core,
+            &BTreeMap::new(),
+            &writable,
+            &mut handle,
+            &[selected_obj.clone()],
+            true,
+            false,
+            &clone_path,
+        ).unwrap();
+        let restored = WritablePackage::load(&clone_path).unwrap();
+        let get = |key: &str| {
+            let p = parse_key(key).unwrap();
+            restored.entries.iter().find(|entry| {
+                entry.type_id == p.resource_type
+                    && entry.group == p.resource_group
+                    && entry.instance == p.instance
+            }).map(|entry| restored.get_uncompressed_data(entry).unwrap())
+        };
+        assert_eq!(get(&selected_obj).unwrap(), b"object-native");
+        assert_eq!(get(&selected_icon).unwrap(), b"icon-native");
+        assert_eq!(get(&key_key).unwrap(), original_key);
+        assert_eq!(get(&manifest_key).unwrap(), original_manifest);
+        assert!(get(&other_obj).is_none());
+        assert!(get(&other_icon).is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn incomplete_source_never_inherits_original_global_metadata() {
+        let root = test_dir("partial-metadata");
+        let path = root.join("Merged.package");
+        let obj_key = test_resource_key(TYPE_OBJD, 0, 0x123);
+        let unselected_key = test_resource_key(TYPE_IMG, 0, 0x456);
+        let manifest = MergeManifest {
+            version: 2,
+            packages: vec![ManifestPackage {
+                id: 1,
+                name: "Partial.package".to_string(),
+                original_size: 500,
+                anchors: vec![ManifestAnchor {kind:"OBJD".to_string(), key:obj_key.clone()}],
+                resources: vec![
+                    ManifestResource {key:obj_key.clone()},
+                    ManifestResource {key:unselected_key.clone()},
+                ],
+                preserved_resources: vec![
+                    ManifestPreservedResource {
+                        key: test_resource_key(TYPE_KEY, 0, 1),
+                        data_base64: STANDARD.encode(b"stale-key-for-whole-source"),
+                        unknown2: 0,
+                    },
+                ],
+            }],
+        };
+        write_test_package(&path, &[
+            (TYPE_OBJD, 0, 0x123, b"object".to_vec()),
+            (TYPE_IMG, 0, 0x456, b"unrelated-image".to_vec()),
+            (MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let core = parse_package(&mmap).unwrap();
+        let selected = HashSet::from([obj_key]);
+        assert!(complete_source_preserved_metadata(&core, &selected).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
