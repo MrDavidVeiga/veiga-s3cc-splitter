@@ -135,7 +135,7 @@
      Ok(())
  }
 
- fn main() -> Result<(), Box<dyn Error>> {
+ fn main() -> Result<()> {
      let args: Vec<_> = std::env::args_os().collect();
      if args.len() != 4 {
          eprintln!(
