@@ -5019,6 +5019,34 @@ fn normalized_merged_output_name(name: &str) -> String {
     safe
 }
 
+// DBPF uses 32-bit offsets and a 31-bit stored size (the upper bit is
+// reserved by the resource index). Reject large outputs instead of writing
+// a truncated offset or wrapping the index header silently.
+fn checked_dbpf_resource_offset(file: &mut File, size: u64) -> Result<u32, String> {
+    if size > 0x7FFF_FFFF {
+        return Err("Recurso excede o limite DBPF de 31 bits; operação cancelada.".to_string());
+    }
+    let offset = file.stream_position().map_err(|e| e.to_string())?;
+    let end = offset.checked_add(size)
+        .ok_or_else(|| "Overflow no deslocamento do recurso DBPF.".to_string())?;
+    if end > u32::MAX as u64 {
+        return Err("Package excederia o limite DBPF de 32 bits; nenhuma substituição foi realizada.".to_string());
+    }
+    u32::try_from(offset).map_err(|_| "Offset DBPF de 32 bits inválido.".to_string())
+}
+
+fn checked_dbpf_index_position(package: &WritablePackage, file: &mut File) -> Result<u32, String> {
+    let position = file.stream_position().map_err(|e| e.to_string())?;
+    let count = u64::try_from(package.entries.len())
+        .map_err(|_| "Índice DBPF contém entradas demais.".to_string())?;
+    let index_size = count.checked_mul(32).and_then(|n| n.checked_add(4))
+        .ok_or_else(|| "Overflow ao calcular índice DBPF.".to_string())?;
+    if position.checked_add(index_size).map(|x| x > u32::MAX as u64).unwrap_or(true) {
+        return Err("Índice excederia o limite DBPF de 32 bits; resultado temporário recusado.".to_string());
+    }
+    u32::try_from(position).map_err(|_| "Posição do índice DBPF inválida.".to_string())
+}
+
 fn append_uncompressed_resource(
     out_pkg: &mut WritablePackage,
     out_f: &mut File,
@@ -5028,7 +5056,7 @@ fn append_uncompressed_resource(
     data: &[u8],
     unknown2: u16,
 ) -> Result<(), String> {
-    let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+    let chunk_offset = checked_dbpf_resource_offset(out_f, data.len() as u64)?;
     out_f.write_all(data).map_err(|e| e.to_string())?;
     out_pkg.entries.push(WritableEntry {
         type_id,
@@ -5972,7 +6000,7 @@ pub fn restore_manifest_packages(
             )?;
         }
 
-        out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+        out_pkg.index_position = checked_dbpf_index_position(&out_pkg, &mut out_f)?;
         out_pkg
             .write_index_and_header()
             .map_err(|e| e.to_string())?;
@@ -6092,7 +6120,7 @@ fn write_removed_package(
             continue;
         }
 
-        let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+        let chunk_offset = checked_dbpf_resource_offset(&mut out_f, entry.file_size as u64)?;
         source_file
             .seek(SeekFrom::Start(entry.chunk_offset as u64))
             .map_err(|e| e.to_string())?;
@@ -6138,7 +6166,7 @@ fn write_removed_package(
         .find(|entry| entry.type_id == TYPE_KEY)
     {
         let raw = build_filtered_key_data(package, &retained_keys);
-        let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+        let chunk_offset = checked_dbpf_resource_offset(&mut out_f, raw.len() as u64)?;
         out_f.write_all(&raw).map_err(|e| e.to_string())?;
         out_pkg.entries.push(WritableEntry {
             type_id: template.type_id,
@@ -6172,7 +6200,7 @@ fn write_removed_package(
     // Sorting the index does not reorder any compressed payload or chunk offset.
     // Keep DBPF lookup deterministic and avoid arbitrary source-order entries.
     out_pkg.entries.sort_by_key(|entry| (entry.type_id, entry.group, entry.instance));
-    out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+    out_pkg.index_position = checked_dbpf_index_position(&out_pkg, &mut out_f)?;
     out_pkg
         .write_index_and_header()
         .map_err(|e| e.to_string())?;
@@ -6648,9 +6676,9 @@ fn create_clone_package_from_loaded(
             continue;
         }
 
-        let raw = read_raw_writable_entry(source_file, entry)?;
-        let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
-        out_f.write_all(&raw).map_err(|e| e.to_string())?;
+        // Streaming prevents an exported IMG from occupying hundreds of MiB
+        // of memory while preserving its original compression metadata.
+        let chunk_offset = copy_stored_merge_resource(source_file, entry, &mut out_f)?;
         out_pkg.entries.push(WritableEntry {
             type_id: entry.type_id,
             group: entry.group,
@@ -6675,7 +6703,7 @@ fn create_clone_package_from_loaded(
                 .iter()
                 .find(|entry| entry.type_id == TYPE_KEY)
             {
-                let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+                let chunk_offset = checked_dbpf_resource_offset(&mut out_f, raw.len() as u64)?;
                 out_f.write_all(&raw).map_err(|e| e.to_string())?;
                 out_pkg.entries.push(WritableEntry {
                     type_id: template.type_id,
@@ -6708,7 +6736,7 @@ fn create_clone_package_from_loaded(
     }
 
 
-    out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+    out_pkg.index_position = checked_dbpf_index_position(&out_pkg, &mut out_f)?;
     out_pkg
         .write_index_and_header()
         .map_err(|e| e.to_string())?;
@@ -9105,6 +9133,25 @@ mod remove_selected_tests {
         assert!(error.contains("4 bytes"));
         assert!(!destination.join("Conflict.package").exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn checked_dbpf_writes_refuse_offset_and_resource_length_overflow() {
+        let path = test_path("dbpf-boundary-check");
+        let package = WritablePackage::new(&path, false).unwrap();
+        let mut file = OpenOptions::new().read(true).write(true).open(&path).unwrap();
+        file.seek(SeekFrom::Start(u32::MAX as u64 - 8)).unwrap();
+        assert!(checked_dbpf_resource_offset(&mut file, 32)
+            .unwrap_err().contains("32 bits"));
+        assert!(checked_dbpf_resource_offset(&mut file, 0x8000_0000)
+            .unwrap_err().contains("31 bits"));
+        assert!(checked_dbpf_index_position(&package, &mut file)
+            .unwrap_err().contains("32 bits"));
+        file.seek(SeekFrom::Start(96)).unwrap();
+        assert_eq!(checked_dbpf_resource_offset(&mut file, 32).unwrap(), 96);
+        drop(file);
+        drop(package);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
