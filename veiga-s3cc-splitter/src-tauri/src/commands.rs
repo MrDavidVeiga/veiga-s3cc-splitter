@@ -8021,7 +8021,7 @@ mod remove_selected_tests {
 
         let instance = 0x4444_0000_0000_0004u64;
         write_test_package(&source_a, &[(TYPE_IMG, 0, instance, vec![1, 2, 3])]);
-        write_test_package(&source_b, &[(TYPE_IMG, 0, instance, vec![9, 9, 9])]);
+        write_test_package(&source_b, &[(TYPE_IMG, 0, instance, vec![9, 9, 9, 9])]);
 
         let error = merge_packages_with_manifest(MergePackagesPayload {
             package_paths: vec![
@@ -8034,6 +8034,11 @@ mod remove_selected_tests {
         .unwrap_err();
 
         assert!(error.contains("Conflito de TGI"));
+        assert!(error.contains(&source_a.display().to_string()));
+        assert!(error.contains(&source_b.display().to_string()));
+        assert!(error.contains("IMG"));
+        assert!(error.contains("3 bytes"));
+        assert!(error.contains("4 bytes"));
         assert!(!destination.join("Conflict.package").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
