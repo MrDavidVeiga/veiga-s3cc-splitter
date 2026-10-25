@@ -2347,18 +2347,39 @@ fn tone_group_members(
             && entry.instance == tone.instance
     }).ok_or_else(|| format!("Selected TONE resource not found: {}", key_string_from_parts(tone)))?;
 
-    let base = tone_display_name(entry, name_map);
+    let _ = (entry, name_map);
     let mut found = HashSet::new();
 
-    // Resolve exact Type/Group/Instance references from the TONE resource's
-    // internal TGI block. Name and instance equality do NOT establish texture
-    // ownership, especially inside third-party (s3pe) merged packages.
-    for candidate in package
-        .files
-        .iter()
-        .filter(|candidate| candidate.resource_type == TYPE_SKINTONE)
-        .filter(|candidate| tone_display_name(candidate, name_map).eq_ignore_ascii_case(&base))
-    {
+    // Names are for display, never for associating skin resources. Different
+    // non-default CCs can share a display name (including "Default") in
+    // legacy s3pe merges. Without a reversible manifest, select ONLY the
+    // exact requested TONE, not every TONE with that name.
+    let selected_key = key_string_from_parts(tone);
+    let mut owner_tones = HashSet::from([selected_key.clone()]);
+    if let Some(manifest) = read_merge_manifest_from_dbpf(package)? {
+        let owners: Vec<_> = manifest.packages.iter()
+            .filter(|source| source.resources.iter().any(|r| r.key == selected_key))
+            .collect();
+        if owners.len() == 1 {
+            for resource in &owners[0].resources {
+                if let Ok(parts) = parse_key(&resource.key) {
+                    if parts.resource_type == TYPE_SKINTONE
+                        && package.entry_index(parts.resource_type, parts.resource_group, parts.instance).is_some()
+                    {
+                        owner_tones.insert(resource.key.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Resolve actual Type/Group/Instance references recorded by each proven
+    // owner TONE. The source name or skin classification cannot establish
+    // texture ownership, especially inside third-party s3pe merged packages.
+    for candidate in package.files.iter().filter(|candidate| {
+        candidate.resource_type == TYPE_SKINTONE
+            && owner_tones.contains(&key_string(candidate))
+    }) {
         found.insert(key_string(candidate));
         let references = parse_tone_references(candidate.data()).map_err(|error| {
             format!(
