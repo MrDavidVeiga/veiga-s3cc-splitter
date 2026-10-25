@@ -7484,6 +7484,50 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn skins_with_identical_display_names_do_not_mix_tone_or_image_dependencies() {
+        let root = test_dir("two-skins-same-display-name");
+        let path = root.join("OldS3peMerged.package");
+        fn tone_ref(img: u64) -> Vec<u8> {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&6u32.to_le_bytes());
+            bytes.extend_from_slice(&16u32.to_le_bytes());
+            bytes.extend_from_slice(&20u32.to_le_bytes());
+            bytes.resize(24, 0);
+            bytes.extend_from_slice(&1u32.to_le_bytes());
+            bytes.extend_from_slice(&TYPE_IMG.to_le_bytes());
+            bytes.extend_from_slice(&0u32.to_le_bytes());
+            bytes.extend_from_slice(&img.to_le_bytes());
+            bytes
+        }
+        write_test_package(&path, &[
+            (TYPE_SKINTONE, 0, 0x101, tone_ref(0x501)),
+            (TYPE_IMG, 0, 0x501, b"first-skin".to_vec()),
+            (TYPE_SKINTONE, 0, 0x202, tone_ref(0x502)),
+            (TYPE_IMG, 0, 0x502, b"second-skin".to_vec()),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let name_map = BTreeMap::from([
+            (0x101, "Default".to_string()),
+            (0x202, "Default".to_string()),
+        ]);
+        let found = tone_group_members(
+            &package,
+            ResourceKeyParts {
+                resource_type: TYPE_SKINTONE,
+                resource_group: 0,
+                instance: 0x101,
+            },
+            &name_map,
+        ).unwrap();
+        assert!(found.iter().any(|p| p.resource_type == TYPE_SKINTONE && p.instance == 0x101));
+        assert!(found.iter().any(|p| p.resource_type == TYPE_IMG && p.instance == 0x501));
+        assert!(!found.iter().any(|p| p.instance == 0x202 || p.instance == 0x502),
+            "Identically named but unrelated skin resources must never leak");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn tone_ramp_png_is_preserved_when_image_reference_is_not_first() {
         let root = test_dir("tone-nonfirst-img-ramp");
         let source = root.join("Tone.package");
