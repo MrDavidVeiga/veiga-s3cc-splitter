@@ -6161,6 +6161,32 @@ fn clone_package_file_name(
     base_key: &str,
     name_map: &BTreeMap<u64, String>,
 ) -> String {
+    // A TONE's display label cannot determine whether its source was a
+    // Default or Non-default skin. If a Veiga manifest identifies a UNIQUE
+    // original source for the selected TONE, preserve that filename instead
+    // of inferring the category from UI labels.
+    if let Ok(parts) = parse_key(first_compound_key(base_key)) {
+        if parts.resource_type == TYPE_SKINTONE {
+            if let Ok(Some(manifest)) = read_merge_manifest_from_dbpf(package) {
+                let tone_key = key_string_from_parts(parts);
+                let mut matching = manifest.packages.iter().filter(|source| {
+                    source.resources.iter().any(|resource| resource.key == tone_key)
+                        && !source.name.trim().is_empty()
+                });
+                if let Some(source) = matching.next() {
+                    if matching.next().is_none() {
+                        let stem = sanitize_file_name(source.name.trim());
+                        return if stem.to_ascii_lowercase().ends_with(".package") {
+                            stem
+                        } else {
+                            format!("{stem}.package")
+                        };
+                    }
+                }
+            }
+        }
+    }
+
     format!(
         "{}.package",
         selection_output_stem(package, base_key, name_map)
@@ -7481,6 +7507,36 @@ mod remove_selected_tests {
 
     fn test_resource_key(resource_type: u32, group: u32, instance: u64) -> String {
         format!("0x{resource_type:08X}-0x{group:08X}-0x{instance:016X}")
+    }
+
+    #[test]
+    fn skin_clone_uses_unambiguous_original_manifest_filename_not_default_label() {
+        let root = test_dir("manifest-skin-original-name");
+        let path = root.join("VeigaMerged.package");
+        let tone_key = test_resource_key(TYPE_SKINTONE, 0, 0xFACE);
+        let manifest = MergeManifest {
+            version: 2,
+            packages: vec![ManifestPackage {
+                id: 1,
+                name: "LalaSimmer_KaoaSkin_NonDefault.package".to_string(),
+                original_size: 1234,
+                anchors: vec![ManifestAnchor {kind: "TONE".to_string(), key: tone_key.clone()}],
+                resources: vec![ManifestResource {key: tone_key.clone()}],
+                preserved_resources: vec![],
+            }],
+        };
+        write_test_package(&path, &[
+            (TYPE_SKINTONE, 0, 0xFACE, vec![4, 0, 0, 0]),
+            (MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let names = BTreeMap::from([(0xFACE, "Default".to_string())]);
+        assert_eq!(
+            clone_package_file_name(&package, &tone_key, &names),
+            "LalaSimmer_KaoaSkin_NonDefault.package"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
