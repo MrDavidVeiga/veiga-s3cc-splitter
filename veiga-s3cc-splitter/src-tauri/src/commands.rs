@@ -4101,6 +4101,46 @@ fn expand_selection_for_export(
     let extra = collect_clone_keys(package, &selected, include_thumbnails, name_map)?;
     selected.extend(extra);
 
+    // A merged DBPF can contain icons for several independent objects.
+    // Their instances need not match OBJD, and copying an arbitrary icon
+    // would silently attach another object's preview. On Veiga merges, the
+    // embedded per-source manifest provides the exact ownership relationship.
+    let requested_objects: HashSet<String> = selected
+        .iter()
+        .filter(|key| {
+            parse_key(key)
+                .map(|parts| parts.resource_type == TYPE_OBJD)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect();
+    if !requested_objects.is_empty() {
+        if let Some(manifest) = read_merge_manifest_from_dbpf(package)? {
+            for source in &manifest.packages {
+                let owns_requested_object = source.anchors.iter().any(|anchor| {
+                    anchor.kind.eq_ignore_ascii_case("OBJD")
+                        && requested_objects.contains(&anchor.key)
+                });
+                if !owns_requested_object {
+                    continue;
+                }
+                let matching_icons: Vec<&str> = source.resources.iter()
+                    .filter_map(|resource| {
+                        let parts = parse_key(&resource.key).ok()?;
+                        (parts.resource_type == TYPE_ICON
+                            && matching_entry_index(package, parts).is_some())
+                            .then_some(resource.key.as_str())
+                    })
+                    .collect();
+                // If an original source had multiple ICONs, resource ownership
+                // inside that source is ambiguous; do not guess.
+                if matching_icons.len() == 1 {
+                    selected.insert(matching_icons[0].to_string());
+                }
+            }
+        }
+    }
+
     let key_names = raw_package_key_names(package);
     let needs_key = selected.iter().any(|key| {
         parse_key(key)
