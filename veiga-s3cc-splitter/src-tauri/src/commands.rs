@@ -7463,6 +7463,51 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn tone_ramp_png_is_preserved_when_image_reference_is_not_first() {
+        let root = test_dir("tone-nonfirst-img-ramp");
+        let source = root.join("Tone.package");
+        let tone_id = 0xAAA0;
+        let image_id = 0xBBB0;
+        let unrelated_id = 0xDDD0;
+        // v6; table at offset 8 + 16. First resource is not an IMG.
+        let mut tone = Vec::new();
+        tone.extend_from_slice(&6u32.to_le_bytes());
+        tone.extend_from_slice(&16u32.to_le_bytes());
+        tone.extend_from_slice(&(4u32 + 2 * 16).to_le_bytes());
+        tone.resize(24, 0);
+        tone.extend_from_slice(&2u32.to_le_bytes());
+        tone.extend_from_slice(&TYPE_XML.to_le_bytes());
+        tone.extend_from_slice(&0u32.to_le_bytes());
+        tone.extend_from_slice(&0x123u64.to_le_bytes());
+        tone.extend_from_slice(&TYPE_IMG.to_le_bytes());
+        tone.extend_from_slice(&0u32.to_le_bytes());
+        tone.extend_from_slice(&image_id.to_le_bytes());
+
+        write_test_package(&source, &[
+            (TYPE_SKINTONE, 0, tone_id, tone),
+            (TYPE_IMG, 0, image_id, b"skin-texture".to_vec()),
+            (TYPE_IMAG_PNG, 0, image_id, b"ramp-png".to_vec()),
+            (TYPE_IMAG_PNG, 0, unrelated_id, b"unrelated-png".to_vec()),
+        ]);
+        let mmap = open_package(&source.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let base = ResourceKeyParts {
+            resource_type: TYPE_SKINTONE,
+            resource_group: 0,
+            instance: tone_id,
+        };
+        let found = tone_group_members(&package, base, &BTreeMap::new()).unwrap();
+        assert!(found.iter().any(|p| {
+            p.resource_type == TYPE_IMG && p.instance == image_id
+        }));
+        assert!(found.iter().any(|p| {
+            p.resource_type == TYPE_IMAG_PNG && p.instance == image_id
+        }));
+        assert!(!found.iter().any(|p| p.instance == unrelated_id));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn manual_clone_restores_complete_source_metadata_without_cross_contamination() {
         let root = test_dir("object-restore-metadata");
         let merged_path = root.join("Merged.package");
