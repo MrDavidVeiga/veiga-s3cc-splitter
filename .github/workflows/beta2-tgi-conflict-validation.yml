@@ -1,0 +1,28 @@
+name: Beta 2 TGI conflict diagnostics
+on:
+  push:
+    branches:
+      - "fix/beta2-tgi-conflict-diagnostics-20261025"
+  pull_request:
+    branches:
+      - "beta/v2.0.0-beta2"
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: veiga-s3cc-splitter/src-tauri -> target
+      - name: Check Rust and tests
+        shell: pwsh
+        run: |
+          cargo check --locked --workspace
+          if ($LASTEXITCODE -ne 0) { throw "Workspace compile failed" }
+          cargo check --locked --workspace --tests
+          if ($LASTEXITCODE -ne 0) { throw "Rust test compile failed" }
