@@ -6490,6 +6490,40 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn replacing_merged_rolls_back_original_if_new_file_cannot_be_installed() {
+        let root = test_dir("merged-backup-rollback");
+        let original = root.join("Merged.package");
+        let missing_new = root.join(".missing-temporary.package");
+        let backup_dir = root.join("Merged_backups");
+        std::fs::create_dir_all(&backup_dir).unwrap();
+        let backup = backup_dir.join("Merged.package.backup.s3ccbak");
+        std::fs::write(&original, b"original-merged-must-survive").unwrap();
+
+        let error = replace_merged_with_backup(&original, &missing_new, &backup).unwrap_err();
+        assert!(error.contains("restaurado"), "{error}");
+        assert_eq!(std::fs::read(&original).unwrap(), b"original-merged-must-survive");
+        assert!(!backup.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn replacing_merged_never_overwrites_an_existing_backup() {
+        let root = test_dir("merged-backup-existing");
+        let original = root.join("Merged.package");
+        let rebuilt = root.join("validated-temp.package");
+        let backup = root.join("Merged.s3ccbak");
+        std::fs::write(&original, b"original").unwrap();
+        std::fs::write(&rebuilt, b"new").unwrap();
+        std::fs::write(&backup, b"prior-backup").unwrap();
+
+        assert!(replace_merged_with_backup(&original, &rebuilt, &backup).is_err());
+        assert_eq!(std::fs::read(&original).unwrap(), b"original");
+        assert_eq!(std::fs::read(&rebuilt).unwrap(), b"new");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"prior-backup");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn merger_requires_explicit_consent_and_preserves_replaced_output_in_a_backup() {
         let root = test_dir("merger-safe-overwrite");
         let source_a = root.join("Source_A.package");
