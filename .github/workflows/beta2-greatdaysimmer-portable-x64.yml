@@ -1,0 +1,72 @@
+name: Beta 2 GreatDaySimmer Windows x64 candidate
+
+on:
+  push:
+    branches:
+      - "integration/beta2-greatdaysimmer-fixes-20261025"
+    paths:
+      - ".github/workflows/beta2-greatdaysimmer-portable-x64.yml"
+      - "veiga-s3cc-splitter/**"
+      - "sims3-core/**"
+      - "sims3-pack/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portable:
+    name: Build isolated Windows x64 test executable
+    runs-on: windows-2022
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: veiga-s3cc-splitter/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: veiga-s3cc-splitter/src-tauri -> target
+      - name: Install dependencies
+        working-directory: veiga-s3cc-splitter
+        run: npm ci
+      - name: Build Windows x64 standalone executable
+        working-directory: veiga-s3cc-splitter
+        shell: pwsh
+        run: |
+          npm run tauri build -- --no-bundle
+          if ($LASTEXITCODE -ne 0) { throw 'Tauri Windows x64 build failed' }
+      - name: Verify executable and prepare portable candidate
+        shell: pwsh
+        run: |
+          $binary = Join-Path $PWD 'target\release\veiga-s3cc-splitter.exe'
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
+            throw "Expected Windows x64 exe was not generated at $binary"
+          }
+          $out = Join-Path $PWD 'portable\GreatDaySimmer-Beta2-Candidate'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item -LiteralPath $binary -Destination (Join-Path $out "Veiga's S3CC Splitter.exe")
+          @'
+          EXPERIMENTAL BUILD / PRIVATE TESTING ONLY
+          Integrated fixes for safe overwrite, skin TONE references, object ICON,
+          original metadata recovery, and TGI conflict diagnostics.
+          Keep original .package files and backups. Do not replace a known
+          working tool until game compatibility has been checked.
+          This archive contains only the executable, not any third-party CC.
+          '@ | Set-Content -LiteralPath (Join-Path $out 'READ-ME-FIRST.txt') -Encoding utf8
+          $exe = Get-Item -LiteralPath (Join-Path $out "Veiga's S3CC Splitter.exe")
+          Write-Host "Verified $($exe.Name), bytes: $($exe.Length)"
+          $hash = (Get-FileHash -LiteralPath $exe.FullName -Algorithm SHA256).Hash
+          "SHA256: $hash" | Set-Content -LiteralPath (Join-Path $out 'SHA256.txt')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GreatDaySimmer-Beta2-Windows-x64-Experimental
+          path: portable/GreatDaySimmer-Beta2-Candidate/*
+          if-no-files-found: error
+          retention-days: 30
