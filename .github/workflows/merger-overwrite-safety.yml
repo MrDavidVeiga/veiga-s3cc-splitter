@@ -41,7 +41,10 @@ jobs:
           # cargo's library test harness is a separate exe without that manifest.
           # Without it, a test harness importing TaskDialogIndirect from comctl32
           # exits before any tests run (0xC0000139). Keep the tests enabled.
-          cargo test --locked --workspace --no-run
+          # Match the exact package selection of the command run below.
+          # Using --workspace here makes Cargo build a differently hashed exe,
+          # leaving the subsequently executed harness without the v6 manifest.
+          cargo test --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml --locked --no-run
           if ($LASTEXITCODE -ne 0) { throw 'Rust tests did not compile' }
 
           $sdkBin = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
