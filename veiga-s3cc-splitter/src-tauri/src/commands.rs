@@ -4101,6 +4101,46 @@ fn expand_selection_for_export(
     let extra = collect_clone_keys(package, &selected, include_thumbnails, name_map)?;
     selected.extend(extra);
 
+    // A merged DBPF can contain icons for several independent objects.
+    // Their instances need not match OBJD, and copying an arbitrary icon
+    // would silently attach another object's preview. On Veiga merges, the
+    // embedded per-source manifest provides the exact ownership relationship.
+    let requested_objects: HashSet<String> = selected
+        .iter()
+        .filter(|key| {
+            parse_key(key)
+                .map(|parts| parts.resource_type == TYPE_OBJD)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect();
+    if !requested_objects.is_empty() {
+        if let Some(manifest) = read_merge_manifest_from_dbpf(package)? {
+            for source in &manifest.packages {
+                let owns_requested_object = source.anchors.iter().any(|anchor| {
+                    anchor.kind.eq_ignore_ascii_case("OBJD")
+                        && requested_objects.contains(&anchor.key)
+                });
+                if !owns_requested_object {
+                    continue;
+                }
+                let matching_icons: Vec<&str> = source.resources.iter()
+                    .filter_map(|resource| {
+                        let parts = parse_key(&resource.key).ok()?;
+                        (parts.resource_type == TYPE_ICON
+                            && matching_entry_index(package, parts).is_some())
+                            .then_some(resource.key.as_str())
+                    })
+                    .collect();
+                // If an original source had multiple ICONs, resource ownership
+                // inside that source is ambiguous; do not guess.
+                if matching_icons.len() == 1 {
+                    selected.insert(matching_icons[0].to_string());
+                }
+            }
+        }
+    }
+
     let key_names = raw_package_key_names(package);
     let needs_key = selected.iter().any(|key| {
         parse_key(key)
@@ -5400,6 +5440,9 @@ pub fn merge_packages_with_manifest(
         0,
     )?;
 
+    // Sorting the index does not reorder any compressed payload or chunk offset.
+    // Keep DBPF lookup deterministic and avoid arbitrary source-order entries.
+    out_pkg.entries.sort_by_key(|entry| (entry.type_id, entry.group, entry.instance));
     out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
     out_pkg
         .write_index_and_header()
@@ -5768,6 +5811,9 @@ fn write_removed_package(
         }
     }
 
+    // Sorting the index does not reorder any compressed payload or chunk offset.
+    // Keep DBPF lookup deterministic and avoid arbitrary source-order entries.
+    out_pkg.entries.sort_by_key(|entry| (entry.type_id, entry.group, entry.instance));
     out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
     out_pkg
         .write_index_and_header()
@@ -7242,6 +7288,68 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn object_export_uses_manifest_owned_icon_and_never_steals_another_objects_icon() {
+        use crate::merge_manifest::LEGACY_MANIFEST_TYPE;
+
+        for manifest_type in [MANIFEST_TYPE, LEGACY_MANIFEST_TYPE] {
+            let path = test_path("two-object-icons-owned-by-manifest");
+            let object_a = test_resource_key(TYPE_OBJD, 0, 0xA0A0);
+            let object_b = test_resource_key(TYPE_OBJD, 0, 0xB0B0);
+            let icon_a = test_resource_key(TYPE_ICON, 0, 0xC0C0);
+            let icon_b = test_resource_key(TYPE_ICON, 0, 0xD0D0);
+            let manifest = MergeManifest {
+                version: 2,
+                packages: vec![
+                    ManifestPackage {
+                        id: 1,
+                        name: "Object A.package".to_string(),
+                        original_size: 500,
+                        anchors: vec![ManifestAnchor {kind: "OBJD".to_string(), key: object_a.clone()}],
+                        resources: vec![
+                            ManifestResource {key: object_a.clone()},
+                            ManifestResource {key: icon_a.clone()},
+                        ],
+                        preserved_resources: vec![],
+                    },
+                    ManifestPackage {
+                        id: 2,
+                        name: "Object B.package".to_string(),
+                        original_size: 500,
+                        anchors: vec![ManifestAnchor {kind: "OBJD".to_string(), key: object_b.clone()}],
+                        resources: vec![
+                            ManifestResource {key: object_b.clone()},
+                            ManifestResource {key: icon_b.clone()},
+                        ],
+                        preserved_resources: vec![],
+                    },
+                ],
+            };
+            write_test_package(&path, &[
+                (TYPE_OBJD, 0, 0xA0A0, b"object-a".to_vec()),
+                (TYPE_OBJD, 0, 0xB0B0, b"object-b".to_vec()),
+                (TYPE_ICON, 0, 0xC0C0, b"icon-a".to_vec()),
+                (TYPE_ICON, 0, 0xD0D0, b"icon-b".to_vec()),
+                (manifest_type, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+            ]);
+            let mmap = open_package(&path.display().to_string()).unwrap();
+            let package = parse_package(&mmap).unwrap();
+            let keys = expand_selection_for_export(
+                &package,
+                &HashSet::from([object_a.clone()]),
+                true,
+                &BTreeMap::new(),
+            ).unwrap();
+            assert!(keys.contains(&object_a), "object must be retained");
+            assert!(keys.contains(&icon_a), "correct ICON must be retained");
+            assert!(!keys.contains(&icon_b), "unrelated ICON must not leak");
+            assert!(!keys.contains(&object_b), "unrelated object must not leak");
+            drop(package);
+            drop(mmap);
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
     fn uses_thumbnail_referenced_by_resource_in_same_package() {
         let path = test_path("embedded-casp-thumb");
         let casp_id = 0x1000_1234_5678_0001u64;
@@ -8003,6 +8111,48 @@ mod remove_selected_tests {
         )));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn merged_index_is_sorted_and_game_manifest_is_not_tuning_xml() {
+        let root = test_dir("sorted-opaque-merge");
+        let a = root.join("A.package");
+        let b = root.join("B.package");
+        let out = root.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        // Deliberately place high TGI before low TGI in the source.
+        write_test_package(&a, &[
+            (TYPE_STBL, 0, 0x9999, b"Catalog name".to_vec()),
+            (TYPE_OBJD, 0, 0x8888, b"objd".to_vec()),
+        ]);
+        write_test_package(&b, &[(TYPE_CASP, 0, 0x7777, b"casp".to_vec())]);
+
+        let merged = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![a.display().to_string(), b.display().to_string()],
+            destination_folder: out.display().to_string(),
+            output_name: "Merged.package".to_string(),
+        }).unwrap();
+        let result = WritablePackage::load(&merged.output_path).unwrap();
+        assert!(result.entries.windows(2).all(|pair| {
+            (pair[0].type_id, pair[0].group, pair[0].instance)
+                <= (pair[1].type_id, pair[1].group, pair[1].instance)
+        }));
+        let manifest_entry = result.entries.iter()
+            .find(|e| is_manifest_tgi(e.type_id, e.group, e.instance))
+            .unwrap();
+        assert_eq!(manifest_entry.type_id, MANIFEST_TYPE);
+        assert_ne!(manifest_entry.type_id, TYPE_XML);
+        for (ty, instance, expected) in [
+            (TYPE_STBL, 0x9999, b"Catalog name".as_slice()),
+            (TYPE_OBJD, 0x8888, b"objd".as_slice()),
+            (TYPE_CASP, 0x7777, b"casp".as_slice()),
+        ] {
+            let entry = result.entries.iter()
+                .find(|e| e.type_id == ty && e.instance == instance).unwrap();
+            assert_eq!(result.get_uncompressed_data(entry).unwrap(), expected);
+        }
+        drop(result);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
