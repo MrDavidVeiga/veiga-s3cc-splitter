@@ -19,6 +19,7 @@ use sims3_pack::dbpf::{Package as WritablePackage, ResourceEntry as WritableEntr
 use tauri::{AppHandle, Emitter, Manager};
 use zip::write::FileOptions;
 
+use crate::tone_dependencies::parse_tone_references;
 use crate::merge_manifest::{
     is_manifest_tgi, read_from_dbpf as read_merge_manifest_from_dbpf,
     read_from_writable as read_merge_manifest_from_writable, ManifestAnchor, ManifestPackage,
@@ -2339,50 +2340,73 @@ fn tone_group_members(
     package: &DBPF<'_>,
     tone: ResourceKeyParts,
     name_map: &BTreeMap<u64, String>,
-) -> Vec<ResourceKeyParts> {
-    let Some(entry) = package.files.iter().find(|entry| {
+) -> Result<Vec<ResourceKeyParts>, String> {
+    let entry = package.files.iter().find(|entry| {
         entry.resource_type == tone.resource_type
             && entry.resource_group == tone.resource_group
             && entry.instance == tone.instance
-    }) else {
-        return Vec::new();
-    };
+    }).ok_or_else(|| format!("Selected TONE resource not found: {}", key_string_from_parts(tone)))?;
 
     let base = tone_display_name(entry, name_map);
     let mut found = HashSet::new();
 
-    let tone_instances: Vec<u64> = package
+    // Resolve exact Type/Group/Instance references from the TONE resource's
+    // internal TGI block. Name and instance equality do NOT establish texture
+    // ownership, especially inside third-party (s3pe) merged packages.
+    for candidate in package
         .files
         .iter()
         .filter(|candidate| candidate.resource_type == TYPE_SKINTONE)
         .filter(|candidate| tone_display_name(candidate, name_map).eq_ignore_ascii_case(&base))
-        .map(|candidate| {
-            found.insert(key_string(candidate));
-            candidate.instance
-        })
-        .collect();
+    {
+        found.insert(key_string(candidate));
+        let references = parse_tone_references(candidate.data()).map_err(|error| {
+            format!(
+                "Cannot safely export skin TONE 0x{:016X}: {error}",
+                candidate.instance
+            )
+        })?;
 
-    for candidate in package.files.iter().filter(|candidate| {
-        matches!(
-            candidate.resource_type,
-            TYPE_IMG | TYPE_IMAG_JPG | TYPE_IMAG_PNG | TYPE_IMAG_TGA
-        )
-    }) {
-        let same_instance = tone_instances.contains(&candidate.instance);
-        let same_name_family = name_map
-            .get(&candidate.instance)
-            .map(|name| {
-                let lowered = name.to_lowercase();
-                let lowered_base = base.to_lowercase();
-                normalized_tone_name(name).eq_ignore_ascii_case(&base)
-                    || lowered.starts_with(&lowered_base)
-            })
-            .unwrap_or(false);
-        if same_instance || same_name_family {
-            found.insert(key_string(candidate));
+        // A TONE can refer to base-game textures not present in this DBPF.
+        // However, when ALL its referenced _IMG resources are absent, we cannot
+        // certify an independent package, as reproduced by GreatDaySimmer's
+        // s3pe-merged skin exports (some contain only one TONE).
+        let referenced_image_count = references.iter()
+            .filter(|reference| reference.resource_type == TYPE_IMG)
+            .count();
+        let mut matching_image_count = 0usize;
+        for reference in &references {
+            if let Some(index) = package.entry_index(
+                reference.resource_type,
+                reference.resource_group,
+                reference.instance,
+            ) {
+                found.insert(key_string(&package.files[index]));
+                if reference.resource_type == TYPE_IMG {
+                    matching_image_count += 1;
+                }
+            }
+        }
+        if referenced_image_count > 0 && matching_image_count == 0 {
+            return Err(format!(
+                "Skin TONE 0x{:016X} references {} _IMG entries, but none exist in the opened package. Cannot safely export an independent skin; source may rely on external resources or may already be incomplete.",
+                candidate.instance, referenced_image_count
+            ));
+        }
+
+        // A tone ramp's PNG swatch can share its instance with the first
+        // _IMG reference but differ in Type/Group.
+        if let Some(ramp) = references.first().filter(|reference| reference.resource_type == TYPE_IMG) {
+            for image in package.files.iter().filter(|image| {
+                image.resource_type == TYPE_IMAG_PNG && image.instance == ramp.instance
+            }) {
+                found.insert(key_string(image));
+            }
         }
     }
 
+    // KEY/NMAP is package-level metadata. Export code filters it to the
+    // selected resource instances; do not infer a skin's type from its name.
     for candidate in package
         .files
         .iter()
@@ -2393,30 +2417,30 @@ fn tone_group_members(
 
     let mut parts = Vec::new();
     for key in found {
-        if let Ok(p) = parse_key(&key) {
-            parts.push(p);
+        if let Ok(part) = parse_key(&key) {
+            parts.push(part);
         }
     }
-    parts
+    Ok(parts)
 }
 
 fn expand_selected_for_tones(
     package: &DBPF<'_>,
     selected: &HashSet<String>,
     name_map: &BTreeMap<u64, String>,
-) -> HashSet<String> {
+) -> Result<HashSet<String>, String> {
     let mut expanded = expand_compound_keys(selected);
     let base_keys: Vec<String> = expanded.iter().cloned().collect();
     for key in base_keys {
         if let Ok(parts) = parse_key(&key) {
             if parts.resource_type == TYPE_SKINTONE {
-                for dep in tone_group_members(package, parts, name_map) {
+                for dep in tone_group_members(package, parts, name_map)? {
                     expanded.insert(key_string_from_parts(dep));
                 }
             }
         }
     }
-    expanded
+    Ok(expanded)
 }
 
 fn package_resource_names(package: &DBPF<'_>) -> BTreeMap<u64, String> {
@@ -4052,7 +4076,7 @@ fn collect_clone_keys(
                 }
             }
             TYPE_SKINTONE => {
-                for part in tone_group_members(package, parts, name_map) {
+                for part in tone_group_members(package, parts, name_map)? {
                     enqueue_key(package, include_thumbnails, &mut resolved, &mut queue, part);
                 }
             }
@@ -4069,7 +4093,7 @@ fn collect_clone_keys(
         let discovered = match current.resource_type {
             TYPE_CASP => casp_direct_refs(package, current),
             TYPE_FACE => face_group_members(package, current, name_map),
-            TYPE_SKINTONE => tone_group_members(package, current, name_map),
+            TYPE_SKINTONE => tone_group_members(package, current, name_map)?,
             TYPE_OBJD => object_group_members(package, current),
             TYPE_OBJK => objk_direct_refs(package, current),
             TYPE_VPXY => vpxy_direct_refs(package, current),
@@ -4099,10 +4123,50 @@ fn expand_selection_for_export(
     include_thumbnails: bool,
     name_map: &BTreeMap<u64, String>,
 ) -> Result<HashSet<String>, String> {
-    let mut selected = expand_selected_for_tones(package, base_keys, name_map);
+    let mut selected = expand_selected_for_tones(package, base_keys, name_map)?;
     selected = expand_selected_for_faces(package, &selected, name_map);
     let extra = collect_clone_keys(package, &selected, include_thumbnails, name_map)?;
     selected.extend(extra);
+
+    // A merged DBPF can contain icons for several independent objects.
+    // Their instances need not match OBJD, and copying an arbitrary icon
+    // would silently attach another object's preview. On Veiga merges, the
+    // embedded per-source manifest provides the exact ownership relationship.
+    let requested_objects: HashSet<String> = selected
+        .iter()
+        .filter(|key| {
+            parse_key(key)
+                .map(|parts| parts.resource_type == TYPE_OBJD)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect();
+    if !requested_objects.is_empty() {
+        if let Some(manifest) = read_merge_manifest_from_dbpf(package)? {
+            for source in &manifest.packages {
+                let owns_requested_object = source.anchors.iter().any(|anchor| {
+                    anchor.kind.eq_ignore_ascii_case("OBJD")
+                        && requested_objects.contains(&anchor.key)
+                });
+                if !owns_requested_object {
+                    continue;
+                }
+                let matching_icons: Vec<&str> = source.resources.iter()
+                    .filter_map(|resource| {
+                        let parts = parse_key(&resource.key).ok()?;
+                        (parts.resource_type == TYPE_ICON
+                            && matching_entry_index(package, parts).is_some())
+                            .then_some(resource.key.as_str())
+                    })
+                    .collect();
+                // If an original source had multiple ICONs, resource ownership
+                // inside that source is ambiguous; do not guess.
+                if matching_icons.len() == 1 {
+                    selected.insert(matching_icons[0].to_string());
+                }
+            }
+        }
+    }
 
     let key_names = raw_package_key_names(package);
     let needs_key = selected.iter().any(|key| {
@@ -5238,16 +5302,22 @@ pub fn merge_packages_with_manifest(
                         continue;
                     }
 
-                    let left = source_paths[previous_source]
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("package");
-                    let right = source_paths[source_index]
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("package");
+                    // Same Type/Group/Instance with different *decoded* data
+                    // is not an identical resource. Never pick a winner silently:
+                    // recolors and overrides can deliberately share TGI values.
+                    let left = source_paths[previous_source].display();
+                    let right = source_paths[source_index].display();
                     return Err(format!(
-                        "Conflito de TGI: {key} existe em {left} e {right} com dados diferentes. O merge foi cancelado."
+                        "Conflito de TGI: {key} ({kind}, Type 0x{type_id:08X}, Group 0x{group:08X}, Instance 0x{instance:016X}).\n\
+                         Origem A: {left}\n  Tamanho descompactado: {size_a} bytes\n\
+                         Origem B: {right}\n  Tamanho descompactado: {size_b} bytes\n\
+                         Os dois recursos têm a mesma identidade, mas conteúdos diferentes. O merge foi cancelado sem substituir nenhum original. Separe os CCs, ou decida qual override/recolor deve prevalecer antes de criar um merged.",
+                        kind = kind_from_type(entry.type_id),
+                        type_id = entry.type_id,
+                        group = entry.group,
+                        instance = entry.instance,
+                        size_a = previous_data.len(),
+                        size_b = current_data.len(),
                     ));
                 }
                 shared_keys.insert(key);
@@ -5428,6 +5498,9 @@ pub fn merge_packages_with_manifest(
         0,
     )?;
 
+    // Sorting the index does not reorder any compressed payload or chunk offset.
+    // Keep DBPF lookup deterministic and avoid arbitrary source-order entries.
+    out_pkg.entries.sort_by_key(|entry| (entry.type_id, entry.group, entry.instance));
     out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
     out_pkg
         .write_index_and_header()
@@ -5833,6 +5906,9 @@ fn write_removed_package(
         }
     }
 
+    // Sorting the index does not reorder any compressed payload or chunk offset.
+    // Keep DBPF lookup deterministic and avoid arbitrary source-order entries.
+    out_pkg.entries.sort_by_key(|entry| (entry.type_id, entry.group, entry.instance));
     out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
     out_pkg
         .write_index_and_header()
@@ -7307,6 +7383,68 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn object_export_uses_manifest_owned_icon_and_never_steals_another_objects_icon() {
+        use crate::merge_manifest::LEGACY_MANIFEST_TYPE;
+
+        for manifest_type in [MANIFEST_TYPE, LEGACY_MANIFEST_TYPE] {
+            let path = test_path("two-object-icons-owned-by-manifest");
+            let object_a = test_resource_key(TYPE_OBJD, 0, 0xA0A0);
+            let object_b = test_resource_key(TYPE_OBJD, 0, 0xB0B0);
+            let icon_a = test_resource_key(TYPE_ICON, 0, 0xC0C0);
+            let icon_b = test_resource_key(TYPE_ICON, 0, 0xD0D0);
+            let manifest = MergeManifest {
+                version: 2,
+                packages: vec![
+                    ManifestPackage {
+                        id: 1,
+                        name: "Object A.package".to_string(),
+                        original_size: 500,
+                        anchors: vec![ManifestAnchor {kind: "OBJD".to_string(), key: object_a.clone()}],
+                        resources: vec![
+                            ManifestResource {key: object_a.clone()},
+                            ManifestResource {key: icon_a.clone()},
+                        ],
+                        preserved_resources: vec![],
+                    },
+                    ManifestPackage {
+                        id: 2,
+                        name: "Object B.package".to_string(),
+                        original_size: 500,
+                        anchors: vec![ManifestAnchor {kind: "OBJD".to_string(), key: object_b.clone()}],
+                        resources: vec![
+                            ManifestResource {key: object_b.clone()},
+                            ManifestResource {key: icon_b.clone()},
+                        ],
+                        preserved_resources: vec![],
+                    },
+                ],
+            };
+            write_test_package(&path, &[
+                (TYPE_OBJD, 0, 0xA0A0, b"object-a".to_vec()),
+                (TYPE_OBJD, 0, 0xB0B0, b"object-b".to_vec()),
+                (TYPE_ICON, 0, 0xC0C0, b"icon-a".to_vec()),
+                (TYPE_ICON, 0, 0xD0D0, b"icon-b".to_vec()),
+                (manifest_type, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+            ]);
+            let mmap = open_package(&path.display().to_string()).unwrap();
+            let package = parse_package(&mmap).unwrap();
+            let keys = expand_selection_for_export(
+                &package,
+                &HashSet::from([object_a.clone()]),
+                true,
+                &BTreeMap::new(),
+            ).unwrap();
+            assert!(keys.contains(&object_a), "object must be retained");
+            assert!(keys.contains(&icon_a), "correct ICON must be retained");
+            assert!(!keys.contains(&icon_b), "unrelated ICON must not leak");
+            assert!(!keys.contains(&object_b), "unrelated object must not leak");
+            drop(package);
+            drop(mmap);
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
     fn uses_thumbnail_referenced_by_resource_in_same_package() {
         let path = test_path("embedded-casp-thumb");
         let casp_id = 0x1000_1234_5678_0001u64;
@@ -8072,6 +8210,48 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn merged_index_is_sorted_and_game_manifest_is_not_tuning_xml() {
+        let root = test_dir("sorted-opaque-merge");
+        let a = root.join("A.package");
+        let b = root.join("B.package");
+        let out = root.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        // Deliberately place high TGI before low TGI in the source.
+        write_test_package(&a, &[
+            (TYPE_STBL, 0, 0x9999, b"Catalog name".to_vec()),
+            (TYPE_OBJD, 0, 0x8888, b"objd".to_vec()),
+        ]);
+        write_test_package(&b, &[(TYPE_CASP, 0, 0x7777, b"casp".to_vec())]);
+
+        let merged = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![a.display().to_string(), b.display().to_string()],
+            destination_folder: out.display().to_string(),
+            output_name: "Merged.package".to_string(),
+        }).unwrap();
+        let result = WritablePackage::load(&merged.output_path).unwrap();
+        assert!(result.entries.windows(2).all(|pair| {
+            (pair[0].type_id, pair[0].group, pair[0].instance)
+                <= (pair[1].type_id, pair[1].group, pair[1].instance)
+        }));
+        let manifest_entry = result.entries.iter()
+            .find(|e| is_manifest_tgi(e.type_id, e.group, e.instance))
+            .unwrap();
+        assert_eq!(manifest_entry.type_id, MANIFEST_TYPE);
+        assert_ne!(manifest_entry.type_id, TYPE_XML);
+        for (ty, instance, expected) in [
+            (TYPE_STBL, 0x9999, b"Catalog name".as_slice()),
+            (TYPE_OBJD, 0x8888, b"objd".as_slice()),
+            (TYPE_CASP, 0x7777, b"casp".as_slice()),
+        ] {
+            let entry = result.entries.iter()
+                .find(|e| e.type_id == ty && e.instance == instance).unwrap();
+            assert_eq!(result.get_uncompressed_data(entry).unwrap(), expected);
+        }
+        drop(result);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn reversible_merger_rejects_conflicting_tgi_data() {
         let root = test_dir("merge-conflict");
         let source_a = root.join("A.package");
@@ -8081,7 +8261,7 @@ mod remove_selected_tests {
 
         let instance = 0x4444_0000_0000_0004u64;
         write_test_package(&source_a, &[(TYPE_IMG, 0, instance, vec![1, 2, 3])]);
-        write_test_package(&source_b, &[(TYPE_IMG, 0, instance, vec![9, 9, 9])]);
+        write_test_package(&source_b, &[(TYPE_IMG, 0, instance, vec![9, 9, 9, 9])]);
 
         let error = merge_packages_with_manifest(MergePackagesPayload {
             package_paths: vec![
@@ -8095,6 +8275,11 @@ mod remove_selected_tests {
         .unwrap_err();
 
         assert!(error.contains("Conflito de TGI"));
+        assert!(error.contains(&source_a.display().to_string()));
+        assert!(error.contains(&source_b.display().to_string()));
+        assert!(error.contains("IMG"));
+        assert!(error.contains("3 bytes"));
+        assert!(error.contains("4 bytes"));
         assert!(!destination.join("Conflict.package").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
