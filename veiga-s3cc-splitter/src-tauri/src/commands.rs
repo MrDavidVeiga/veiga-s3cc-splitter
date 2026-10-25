@@ -19,6 +19,7 @@ use sims3_pack::dbpf::{Package as WritablePackage, ResourceEntry as WritableEntr
 use tauri::{AppHandle, Emitter, Manager};
 use zip::write::FileOptions;
 
+use crate::tone_dependencies::parse_tone_references;
 use crate::merge_manifest::{
     is_manifest_tgi, read_from_dbpf as read_merge_manifest_from_dbpf,
     read_from_writable as read_merge_manifest_from_writable, ManifestAnchor, ManifestPackage,
@@ -2336,50 +2337,73 @@ fn tone_group_members(
     package: &DBPF<'_>,
     tone: ResourceKeyParts,
     name_map: &BTreeMap<u64, String>,
-) -> Vec<ResourceKeyParts> {
-    let Some(entry) = package.files.iter().find(|entry| {
+) -> Result<Vec<ResourceKeyParts>, String> {
+    let entry = package.files.iter().find(|entry| {
         entry.resource_type == tone.resource_type
             && entry.resource_group == tone.resource_group
             && entry.instance == tone.instance
-    }) else {
-        return Vec::new();
-    };
+    }).ok_or_else(|| format!("Selected TONE resource not found: {}", key_string_from_parts(tone)))?;
 
     let base = tone_display_name(entry, name_map);
     let mut found = HashSet::new();
 
-    let tone_instances: Vec<u64> = package
+    // Resolve exact Type/Group/Instance references from the TONE resource's
+    // internal TGI block. Name and instance equality do NOT establish texture
+    // ownership, especially inside third-party (s3pe) merged packages.
+    for candidate in package
         .files
         .iter()
         .filter(|candidate| candidate.resource_type == TYPE_SKINTONE)
         .filter(|candidate| tone_display_name(candidate, name_map).eq_ignore_ascii_case(&base))
-        .map(|candidate| {
-            found.insert(key_string(candidate));
-            candidate.instance
-        })
-        .collect();
+    {
+        found.insert(key_string(candidate));
+        let references = parse_tone_references(candidate.data()).map_err(|error| {
+            format!(
+                "Cannot safely export skin TONE 0x{:016X}: {error}",
+                candidate.instance
+            )
+        })?;
 
-    for candidate in package.files.iter().filter(|candidate| {
-        matches!(
-            candidate.resource_type,
-            TYPE_IMG | TYPE_IMAG_JPG | TYPE_IMAG_PNG | TYPE_IMAG_TGA
-        )
-    }) {
-        let same_instance = tone_instances.contains(&candidate.instance);
-        let same_name_family = name_map
-            .get(&candidate.instance)
-            .map(|name| {
-                let lowered = name.to_lowercase();
-                let lowered_base = base.to_lowercase();
-                normalized_tone_name(name).eq_ignore_ascii_case(&base)
-                    || lowered.starts_with(&lowered_base)
-            })
-            .unwrap_or(false);
-        if same_instance || same_name_family {
-            found.insert(key_string(candidate));
+        // A TONE can refer to base-game textures not present in this DBPF.
+        // However, when ALL its referenced _IMG resources are absent, we cannot
+        // certify an independent package, as reproduced by GreatDaySimmer's
+        // s3pe-merged skin exports (some contain only one TONE).
+        let referenced_image_count = references.iter()
+            .filter(|reference| reference.resource_type == TYPE_IMG)
+            .count();
+        let mut matching_image_count = 0usize;
+        for reference in &references {
+            if let Some(index) = package.entry_index(
+                reference.resource_type,
+                reference.resource_group,
+                reference.instance,
+            ) {
+                found.insert(key_string(&package.files[index]));
+                if reference.resource_type == TYPE_IMG {
+                    matching_image_count += 1;
+                }
+            }
+        }
+        if referenced_image_count > 0 && matching_image_count == 0 {
+            return Err(format!(
+                "Skin TONE 0x{:016X} references {} _IMG entries, but none exist in the opened package. Cannot safely export an independent skin; source may rely on external resources or may already be incomplete.",
+                candidate.instance, referenced_image_count
+            ));
+        }
+
+        // A tone ramp's PNG swatch can share its instance with the first
+        // _IMG reference but differ in Type/Group.
+        if let Some(ramp) = references.first().filter(|reference| reference.resource_type == TYPE_IMG) {
+            for image in package.files.iter().filter(|image| {
+                image.resource_type == TYPE_IMAG_PNG && image.instance == ramp.instance
+            }) {
+                found.insert(key_string(image));
+            }
         }
     }
 
+    // KEY/NMAP is package-level metadata. Export code filters it to the
+    // selected resource instances; do not infer a skin's type from its name.
     for candidate in package
         .files
         .iter()
@@ -2390,30 +2414,30 @@ fn tone_group_members(
 
     let mut parts = Vec::new();
     for key in found {
-        if let Ok(p) = parse_key(&key) {
-            parts.push(p);
+        if let Ok(part) = parse_key(&key) {
+            parts.push(part);
         }
     }
-    parts
+    Ok(parts)
 }
 
 fn expand_selected_for_tones(
     package: &DBPF<'_>,
     selected: &HashSet<String>,
     name_map: &BTreeMap<u64, String>,
-) -> HashSet<String> {
+) -> Result<HashSet<String>, String> {
     let mut expanded = expand_compound_keys(selected);
     let base_keys: Vec<String> = expanded.iter().cloned().collect();
     for key in base_keys {
         if let Ok(parts) = parse_key(&key) {
             if parts.resource_type == TYPE_SKINTONE {
-                for dep in tone_group_members(package, parts, name_map) {
+                for dep in tone_group_members(package, parts, name_map)? {
                     expanded.insert(key_string_from_parts(dep));
                 }
             }
         }
     }
-    expanded
+    Ok(expanded)
 }
 
 fn package_resource_names(package: &DBPF<'_>) -> BTreeMap<u64, String> {
@@ -4049,7 +4073,7 @@ fn collect_clone_keys(
                 }
             }
             TYPE_SKINTONE => {
-                for part in tone_group_members(package, parts, name_map) {
+                for part in tone_group_members(package, parts, name_map)? {
                     enqueue_key(package, include_thumbnails, &mut resolved, &mut queue, part);
                 }
             }
@@ -4066,7 +4090,7 @@ fn collect_clone_keys(
         let discovered = match current.resource_type {
             TYPE_CASP => casp_direct_refs(package, current),
             TYPE_FACE => face_group_members(package, current, name_map),
-            TYPE_SKINTONE => tone_group_members(package, current, name_map),
+            TYPE_SKINTONE => tone_group_members(package, current, name_map)?,
             TYPE_OBJD => object_group_members(package, current),
             TYPE_OBJK => objk_direct_refs(package, current),
             TYPE_VPXY => vpxy_direct_refs(package, current),
@@ -4096,7 +4120,7 @@ fn expand_selection_for_export(
     include_thumbnails: bool,
     name_map: &BTreeMap<u64, String>,
 ) -> Result<HashSet<String>, String> {
-    let mut selected = expand_selected_for_tones(package, base_keys, name_map);
+    let mut selected = expand_selected_for_tones(package, base_keys, name_map)?;
     selected = expand_selected_for_faces(package, &selected, name_map);
     let extra = collect_clone_keys(package, &selected, include_thumbnails, name_map)?;
     selected.extend(extra);
