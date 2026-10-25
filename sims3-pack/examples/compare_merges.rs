@@ -162,6 +162,44 @@
              mem_size: size, compressed: 0, unknown2: 0,
          }
      }
+     fn sample_package(path: &Path, items: &[(u32, &[u8])]) {
+         let mut package = Package::new(path, false).unwrap();
+         let mut output = OpenOptions::new().read(true).write(true).open(path).unwrap();
+         output.seek(SeekFrom::Start(package.index_position as u64)).unwrap();
+         for (instance, bytes) in items {
+             let chunk_offset = output.stream_position().unwrap() as u32;
+             output.write_all(bytes).unwrap();
+             package.entries.push(ResourceEntry {
+                 type_id: 0x00B2D882, group: 0, id1: 0, id2: *instance,
+                 instance: *instance as u64, chunk_offset,
+                 file_size: bytes.len() as u32, mem_size: bytes.len() as u32,
+                 compressed: 0, unknown2: 0,
+             });
+         }
+         package.index_position = output.stream_position().unwrap() as u32;
+         drop(output);
+         package.write_index_and_header().unwrap();
+     }
+
+     #[test]
+     fn comparator_reports_present_missing_and_truly_changed_resources() {
+         let a = fixture("original.package");
+         let b = fixture("splitter.package");
+         let report = fixture("report.csv");
+         sample_package(&a, &[(1, b"same"), (2, b"old"), (3, b"only-a")]);
+         sample_package(&b, &[(1, b"same"), (2, b"new"), (4, b"only-b")]);
+         run(&a, &b, &report).unwrap();
+         let csv = std::fs::read_to_string(&report).unwrap();
+         assert!(csv.contains("same_stored,0x00B2D882,0x00000000,0x0000000000000001"));
+         assert!(csv.contains("different_decoded,0x00B2D882,0x00000000,0x0000000000000002"));
+         assert!(csv.contains("only_s3pe,0x00B2D882,0x00000000,0x0000000000000003"));
+         assert!(csv.contains("only_splitter,0x00B2D882,0x00000000,0x0000000000000004"));
+         assert!(run(&a, &b, &report).is_err(), "Never overwrite an existing audit report");
+         for path in [a, b, report] {
+             std::fs::remove_file(path).unwrap();
+         }
+     }
+
      #[test]
      fn buffered_stored_comparison_respects_offsets_and_differences() {
          let a = fixture("a");
