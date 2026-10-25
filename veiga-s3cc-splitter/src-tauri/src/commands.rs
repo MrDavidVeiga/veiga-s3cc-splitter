@@ -250,6 +250,7 @@ pub struct MergePackagesResult {
     pub package_count: usize,
     pub resource_count: usize,
     pub shared_resources: usize,
+    pub disk_free_bytes_warning: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -267,6 +268,7 @@ pub struct RestoreManifestResult {
     pub duplicate_count: usize,
     pub output_paths: Vec<String>,
     pub duplicate_paths: Vec<String>,
+    pub disk_free_bytes_warning: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -307,6 +309,7 @@ pub struct RemoveSelectionResult {
     pub removed_manifest_packages: usize,
     pub shared_resources_preserved: usize,
     pub selected_resources_preserved: usize,
+    pub disk_free_bytes_warning: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -5042,6 +5045,57 @@ fn append_uncompressed_resource(
     Ok(())
 }
 
+const MIN_RECOMMENDED_FREE_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+const DBPF_WRITE_HEADROOM_BYTES: u64 = 256 * 1024 * 1024;
+
+#[cfg(windows)]
+fn destination_free_bytes(destination: &Path) -> Result<Option<u64>, String> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetDiskFreeSpaceExW(
+            directory: *const u16,
+            free_available: *mut u64,
+            total_bytes: *mut u64,
+            total_free: *mut u64,
+        ) -> i32;
+    }
+    let name: Vec<u16> = destination.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let mut free = 0u64;
+    let result = unsafe {
+        GetDiskFreeSpaceExW(name.as_ptr(), &mut free, std::ptr::null_mut(), std::ptr::null_mut())
+    };
+    if result == 0 {
+        return Err(format!(
+            "Não foi possível verificar espaço disponível em {}: {}",
+            destination.display(), std::io::Error::last_os_error()
+        ));
+    }
+    Ok(Some(free))
+}
+
+#[cfg(not(windows))]
+fn destination_free_bytes(_destination: &Path) -> Result<Option<u64>, String> {
+    Ok(None)
+}
+
+fn evaluate_disk_budget(available: u64, needed: u64) -> Result<Option<u64>, String> {
+    if available < needed {
+        return Err(format!(
+            "Espaço livre insuficiente: {} MiB disponíveis; cerca de {} MiB necessários para temporário, backup e margem de segurança. Libere espaço antes de continuar. Nenhum original foi substituído.",
+            available / (1024 * 1024), needed / (1024 * 1024)
+        ));
+    }
+    Ok((available < MIN_RECOMMENDED_FREE_BYTES).then_some(available))
+}
+
+fn preflight_destination_space(destination: &Path, needed: u64) -> Result<Option<u64>, String> {
+    match destination_free_bytes(destination)? {
+        Some(free) => evaluate_disk_budget(free, needed),
+        None => Ok(None),
+    }
+}
+
 fn is_per_source_metadata_type(resource_type: u32) -> bool {
     matches!(resource_type, TYPE_KEY | TYPE_PACKAGE_MANIFEST)
 }
@@ -5380,6 +5434,15 @@ pub fn merge_packages_with_manifest(
         source_paths.push(path);
     }
 
+    // Merged temporary coexists with all originals until validation completes.
+    let required = source_paths.iter().try_fold(0u64, |bytes, path| {
+        let size = std::fs::metadata(path)
+            .map_err(|e| format!("Falha ao consultar tamanho de {}: {e}", path.display()))?
+            .len();
+        Ok::<u64, String>(bytes.saturating_add(size))
+    })?.saturating_add(DBPF_WRITE_HEADROOM_BYTES);
+    let disk_free_bytes_warning = preflight_destination_space(&destination, required)?;
+
     let pose_list_plan = pose_list_merge_plan(&sources)?;
 
     let mut first_owner: HashMap<String, (usize, usize)> = HashMap::new();
@@ -5697,6 +5760,7 @@ pub fn merge_packages_with_manifest(
         package_count: rebuilt_manifest.packages.len(),
         resource_count: written.len(),
         shared_resources: shared_keys.len(),
+        disk_free_bytes_warning,
     })
 }
 
@@ -5762,6 +5826,20 @@ pub fn restore_manifest_packages(
             })?;
         }
     }
+
+    // Restored resources can duplicate content that was shared in the merged.
+    let mut required = DBPF_WRITE_HEADROOM_BYTES;
+    for item in &manifest.packages {
+        required = required.saturating_add(96);
+        for resource in &item.resources {
+            let entry = &source.entries[index[&resource.key]];
+            required = required.saturating_add(entry.file_size as u64 + 32);
+        }
+        for resource in &item.preserved_resources {
+            required = required.saturating_add(resource.data_base64.len() as u64 + 32);
+        }
+    }
+    let disk_free_bytes_warning = preflight_destination_space(&destination, required)?;
 
     let mut existing_packages = existing_package_paths(&destination)?;
     let mut output_paths = Vec::new();
@@ -5901,6 +5979,7 @@ pub fn restore_manifest_packages(
         duplicate_count: duplicate_paths.len(),
         output_paths,
         duplicate_paths,
+        disk_free_bytes_warning,
     })
 }
 
@@ -7201,6 +7280,14 @@ fn remove_selected_from_merged_inner(
         ));
     }
 
+    let source_size = std::fs::metadata(&source_path)
+        .map_err(|e| format!("Falha ao consultar tamanho do package: {e}"))?
+        .len();
+    let required = source_size
+        .saturating_mul(if output_is_source { 1 } else { 2 })
+        .saturating_add(DBPF_WRITE_HEADROOM_BYTES);
+    let disk_free_bytes_warning = preflight_destination_space(&destination, required)?;
+
     let mmap = open_package(&payload.package_path)?;
     let package = parse_package(&mmap)?;
     let name_map = removal_name_map(&package, &payload.selected_keys);
@@ -7324,6 +7411,7 @@ fn remove_selected_from_merged_inner(
         removed_manifest_packages: plan.manifest_packages_to_remove,
         shared_resources_preserved: shared_preserved.len(),
         selected_resources_preserved: plan.selected_resources_preserved,
+        disk_free_bytes_warning,
     })
 }
 
@@ -8756,6 +8844,16 @@ mod remove_selected_tests {
         )));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn disk_budget_blocks_shortage_and_warns_under_five_gib() {
+        let gib = 1024u64 * 1024 * 1024;
+        assert!(evaluate_disk_budget(gib, 2 * gib)
+            .unwrap_err().contains("Espaço livre insuficiente"));
+        assert_eq!(evaluate_disk_budget(3 * gib, 2 * gib).unwrap(), Some(3 * gib));
+        assert_eq!(evaluate_disk_budget(6 * gib, 2 * gib).unwrap(), None);
+        assert_eq!(evaluate_disk_budget(2 * gib, 2 * gib).unwrap(), Some(2 * gib));
     }
 
     #[test]
