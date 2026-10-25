@@ -5764,6 +5764,24 @@ pub fn merge_packages_with_manifest(
     })
 }
 
+// A multi-package Unmerge is not atomic at the file-system level. If an
+// ordinary runtime error interrupts it midway, remove ONLY outputs created
+// by this invocation rather than leaving a plausible but incomplete restore.
+struct RestoreOutputsCleanup {
+    created_paths: Vec<PathBuf>,
+    committed: bool,
+}
+
+impl Drop for RestoreOutputsCleanup {
+    fn drop(&mut self) {
+        if !self.committed {
+            for path in &self.created_paths {
+                let _ = remove_file(path);
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub fn restore_manifest_packages(
     payload: RestoreManifestPayload,
@@ -5842,6 +5860,10 @@ pub fn restore_manifest_packages(
     let disk_free_bytes_warning = preflight_destination_space(&destination, required)?;
 
     let mut existing_packages = existing_package_paths(&destination)?;
+    let mut created_outputs = RestoreOutputsCleanup {
+        created_paths: Vec::new(),
+        committed: false,
+    };
     let mut output_paths = Vec::new();
     let mut duplicate_paths = Vec::new();
 
@@ -5969,10 +5991,13 @@ pub fn restore_manifest_packages(
             )
         })?;
 
+        created_outputs.created_paths.push(output_path.clone());
         existing_packages.push(output_path.clone());
         output_paths.push(output_path.display().to_string());
     }
 
+    // Every restored file has been validated and finalized.
+    created_outputs.committed = true;
     Ok(RestoreManifestResult {
         destination_folder: destination.display().to_string(),
         package_count: output_paths.len(),
@@ -8844,6 +8869,35 @@ mod remove_selected_tests {
         )));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn failed_multi_package_unmerge_removes_only_new_outputs() {
+        let root = test_dir("unmerge-partial-rollback");
+        let existing = root.join("Existing.package");
+        let newly_created = root.join("FirstRestored.package");
+        std::fs::write(&existing, b"original untouched").unwrap();
+        {
+            let mut cleanup = RestoreOutputsCleanup {
+                created_paths: Vec::new(), committed: false,
+            };
+            std::fs::write(&newly_created, b"partial restored").unwrap();
+            cleanup.created_paths.push(newly_created.clone());
+            // Simulate a later package failing to validate.
+        }
+        assert!(!newly_created.exists());
+        assert_eq!(std::fs::read(&existing).unwrap(), b"original untouched");
+
+        {
+            let mut cleanup = RestoreOutputsCleanup {
+                created_paths: Vec::new(), committed: false,
+            };
+            std::fs::write(&newly_created, b"complete restored").unwrap();
+            cleanup.created_paths.push(newly_created.clone());
+            cleanup.committed = true;
+        }
+        assert_eq!(std::fs::read(&newly_created).unwrap(), b"complete restored");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
