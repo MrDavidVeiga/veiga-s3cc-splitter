@@ -6,7 +6,7 @@
  //! create_new to avoid accidentally overwriting anything.
  use sims3_pack::dbpf::{Package, ResourceEntry};
  use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
- use std::error::Error;
+ use anyhow::Result;
  use std::fs::{File, OpenOptions};
  use std::io::{Read, Seek, SeekFrom, Write};
  use std::path::Path;
@@ -78,7 +78,7 @@
      }
  }
 
- fn run(left_path: &Path, right_path: &Path, report_path: &Path) -> Result<(), Box<dyn Error>> {
+ fn run(left_path: &Path, right_path: &Path, report_path: &Path) -> Result<()> {
      let left = Package::load(left_path)?;
      let right = Package::load(right_path)?;
      let left_bytes = std::fs::metadata(left_path)?.len();
