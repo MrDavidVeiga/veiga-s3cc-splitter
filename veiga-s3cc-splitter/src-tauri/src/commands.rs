@@ -7540,6 +7540,78 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn manifest_only_groups_tones_from_same_unambiguous_original_package() {
+        let root = test_dir("same-original-multiple-tones");
+        let path = root.join("Merged.package");
+        fn simple_tone(img: u64) -> Vec<u8> {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&6u32.to_le_bytes());
+            bytes.extend_from_slice(&16u32.to_le_bytes());
+            bytes.extend_from_slice(&20u32.to_le_bytes());
+            bytes.resize(24, 0);
+            bytes.extend_from_slice(&1u32.to_le_bytes());
+            bytes.extend_from_slice(&TYPE_IMG.to_le_bytes());
+            bytes.extend_from_slice(&0u32.to_le_bytes());
+            bytes.extend_from_slice(&img.to_le_bytes());
+            bytes
+        }
+        let first = test_resource_key(TYPE_SKINTONE, 0, 0x101);
+        let second = test_resource_key(TYPE_SKINTONE, 0, 0x102);
+        let third = test_resource_key(TYPE_SKINTONE, 0, 0x201);
+        let image_a = test_resource_key(TYPE_IMG, 0, 0x501);
+        let image_b = test_resource_key(TYPE_IMG, 0, 0x502);
+        let image_c = test_resource_key(TYPE_IMG, 0, 0x503);
+        let manifest = MergeManifest {
+            version: 2,
+            packages: vec![
+                ManifestPackage {
+                    id: 1,
+                    name: "OneSkinTwoTones.package".to_string(),
+                    original_size: 100,
+                    anchors: vec![ManifestAnchor {kind: "TONE".to_string(), key: first.clone()}],
+                    resources: [&first, &second, &image_a, &image_b].into_iter()
+                        .map(|key| ManifestResource {key: key.clone()}).collect(),
+                    preserved_resources: vec![],
+                },
+                ManifestPackage {
+                    id: 2,
+                    name: "OtherSkin.package".to_string(),
+                    original_size: 100,
+                    anchors: vec![ManifestAnchor {kind: "TONE".to_string(), key: third.clone()}],
+                    resources: [&third, &image_c].into_iter()
+                        .map(|key| ManifestResource {key: key.clone()}).collect(),
+                    preserved_resources: vec![],
+                },
+            ],
+        };
+        write_test_package(&path, &[
+            (TYPE_SKINTONE, 0, 0x101, simple_tone(0x501)),
+            (TYPE_SKINTONE, 0, 0x102, simple_tone(0x502)),
+            (TYPE_SKINTONE, 0, 0x201, simple_tone(0x503)),
+            (TYPE_IMG, 0, 0x501, b"a".to_vec()),
+            (TYPE_IMG, 0, 0x502, b"b".to_vec()),
+            (TYPE_IMG, 0, 0x503, b"c".to_vec()),
+            (MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let selected = tone_group_members(
+            &package,
+            ResourceKeyParts {resource_type: TYPE_SKINTONE, resource_group: 0, instance: 0x101},
+            &BTreeMap::new()
+        ).unwrap();
+        for instance in [0x101, 0x102, 0x501, 0x502] {
+            assert!(selected.iter().any(|x| x.instance == instance),
+                "Lost legitimate same-source resource {instance:016X}");
+        }
+        for instance in [0x201, 0x503] {
+            assert!(!selected.iter().any(|x| x.instance == instance),
+                "Leaked unrelated skin resource {instance:016X}");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn skins_with_identical_display_names_do_not_mix_tone_or_image_dependencies() {
         let root = test_dir("two-skins-same-display-name");
         let path = root.join("OldS3peMerged.package");
