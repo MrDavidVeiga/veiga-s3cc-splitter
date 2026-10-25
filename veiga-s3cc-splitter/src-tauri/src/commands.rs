@@ -2394,14 +2394,21 @@ fn tone_group_members(
             ));
         }
 
-        // A tone ramp's PNG swatch can share its instance with the first
-        // _IMG reference but differ in Type/Group.
-        if let Some(ramp) = references.first().filter(|reference| reference.resource_type == TYPE_IMG) {
-            for image in package.files.iter().filter(|image| {
-                image.resource_type == TYPE_IMAG_PNG && image.instance == ramp.instance
-            }) {
-                found.insert(key_string(image));
-            }
+        // Ramp PNGs share an instance with a referenced _IMG, not necessarily
+        // the FIRST reference in the TONE block. Match only textures actually
+        // present in this DBPF, never by guessed name or by TONE instance.
+        let present_img_instances: HashSet<u64> = references.iter()
+            .filter(|reference| reference.resource_type == TYPE_IMG)
+            .filter(|reference| package.entry_index(
+                reference.resource_type, reference.resource_group, reference.instance
+            ).is_some())
+            .map(|reference| reference.instance)
+            .collect();
+        for image in package.files.iter().filter(|image| {
+            image.resource_type == TYPE_IMAG_PNG
+                && present_img_instances.contains(&image.instance)
+        }) {
+            found.insert(key_string(image));
         }
     }
 
