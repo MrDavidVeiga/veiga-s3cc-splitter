@@ -4953,7 +4953,7 @@ fn unique_restored_output_path(preferred: &Path) -> PathBuf {
 
 fn unique_restore_temp_path(destination: &Path, package_id: u32) -> PathBuf {
     let base = destination.join(format!(
-        ".veiga-unmerge-{}-{package_id}.package",
+        ".veiga-unmerge-{}-{package_id}.s3cctmp",
         std::process::id()
     ));
     if !base.exists() {
@@ -4962,7 +4962,7 @@ fn unique_restore_temp_path(destination: &Path, package_id: u32) -> PathBuf {
 
     for suffix in 2usize.. {
         let candidate = destination.join(format!(
-            ".veiga-unmerge-{}-{package_id}-{suffix}.package",
+            ".veiga-unmerge-{}-{package_id}-{suffix}.s3cctmp",
             std::process::id()
         ));
         if !candidate.exists() {
@@ -5760,6 +5760,9 @@ pub fn restore_manifest_packages(
         }
 
         let temp_path = unique_restore_temp_path(&destination, package_info.id);
+        // Failed restorations must never leave a .package that a later
+        // recursive scan could silently pick up as a real piece of CC.
+        let _temp_cleanup = MergeTempCleanup(temp_path.clone());
         let mut out_pkg = WritablePackage::new(&temp_path, false).map_err(|e| e.to_string())?;
         let mut out_f = OpenOptions::new()
             .read(true)
@@ -8738,6 +8741,24 @@ mod remove_selected_tests {
         )));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unfinished_unmerge_restorations_are_not_selected_as_cc() {
+        let root = test_dir("ignore-unmerge-temp");
+        let original = root.join("Original.package");
+        std::fs::write(&original, b"original").unwrap();
+        let incomplete = unique_restore_temp_path(&root, 1);
+        assert!(incomplete.to_string_lossy().ends_with(".s3cctmp"));
+        std::fs::write(&incomplete, b"partial").unwrap();
+        let mut sources = Vec::new();
+        collect_merge_sources_from_path(&root, &mut sources).unwrap();
+        assert_eq!(sources, vec![original]);
+        {
+            let _cleanup = MergeTempCleanup(incomplete.clone());
+        }
+        assert!(!incomplete.exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
