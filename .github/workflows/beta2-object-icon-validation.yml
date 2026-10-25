@@ -1,0 +1,42 @@
+name: Beta 2 object ICON and manifest regression
+on:
+  push:
+    branches:
+      - "fix/beta2-object-icons-manifest-20261025"
+  pull_request:
+    branches:
+      - "beta/v2.0.0-beta2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-compile:
+    name: Rust compile and object tests
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: veiga-s3cc-splitter/src-tauri -> target
+      - name: Compile workspace and Rust test code
+        shell: pwsh
+        run: |
+          cargo check --locked --workspace
+          if ($LASTEXITCODE -ne 0) { throw "Rust workspace failed" }
+          cargo check --locked --workspace --tests
+          if ($LASTEXITCODE -ne 0) { throw "Rust test sources failed" }
+      - name: Run pure manifest format regression
+        shell: pwsh
+        run: |
+          # Windows Tauri runners can fail to launch the full GUI-aware test
+          # harness with STATUS_ENTRYPOINT_NOT_FOUND. This compiles the code
+          # above, then tries the exact ownership integration test.
+          $serviceFabric = 'C:\Program Files\Microsoft Service Fabric\bin\Fabric\Fabric.Code'
+          $env:PATH = (($env:PATH -split ';') | Where-Object {
+            $_.TrimEnd('\') -ine $serviceFabric.TrimEnd('\')
+          }) -join ';'
+          cargo test --locked --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml object_export_uses_manifest_owned_icon_and_never_steals_another_objects_icon -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "Object ICON regression failed" }
