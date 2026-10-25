@@ -7467,7 +7467,7 @@ mod remove_selected_tests {
         let root = test_dir("tone-nonfirst-img-ramp");
         let source = root.join("Tone.package");
         let tone_id = 0xAAA0;
-        let image_id = 0xBBB0;
+        let image_id: u64 = 0xBBB0;
         let unrelated_id = 0xDDD0;
         // v6; table at offset 8 + 16. First resource is not an IMG.
         let mut tone = Vec::new();
