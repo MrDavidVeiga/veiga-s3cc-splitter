@@ -8227,6 +8227,7 @@ mod remove_selected_tests {
             package_paths: vec![a.display().to_string(), b.display().to_string()],
             destination_folder: out.display().to_string(),
             output_name: "Merged.package".to_string(),
+            allow_overwrite: false,
         }).unwrap();
         let result = WritablePackage::load(&merged.output_path).unwrap();
         assert!(result.entries.windows(2).all(|pair| {
