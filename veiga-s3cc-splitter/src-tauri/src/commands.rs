@@ -6677,13 +6677,15 @@ fn create_clone_package_from_loaded(
     clone_path: &Path,
 ) -> Result<(String, usize), String> {
     let selected: HashSet<String> = selected_keys.iter().cloned().collect();
-    let clone_keys = if include_thumbnails {
-        unique_selected_source_manifest_keys(core_package, selected_keys)
-    } else {
-        None
-    }.map(Ok).unwrap_or_else(|| {
-        expand_selection_for_export(core_package, &selected, include_thumbnails, name_map)
-    })?;
+    // Required source-owned resources must never depend on the optional
+    // "include thumbnails" switch: IMG textures are essential to a skin,
+    // and ICON is part of a source object's original DBPF. The switch only
+    // influences heuristic extras when there is no unambiguous manifest.
+    let clone_keys = unique_selected_source_manifest_keys(core_package, selected_keys)
+        .map(Ok)
+        .unwrap_or_else(|| {
+            expand_selection_for_export(core_package, &selected, include_thumbnails, name_map)
+        })?;
     let original_metadata = complete_source_preserved_metadata(core_package, &clone_keys)?;
     let restores_original_key = original_metadata.iter()
         .any(|(parts, _, _)| parts.resource_type == TYPE_KEY);
@@ -8004,6 +8006,50 @@ mod remove_selected_tests {
             p.resource_type == TYPE_IMAG_PNG && p.instance == image_id
         }));
         assert!(!found.iter().any(|p| p.instance == unrelated_id));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn skin_manifest_restores_img_even_when_optional_thumbnails_disabled() {
+        let root = test_dir("nondefault-full-manifest-clone");
+        let source = root.join("merged.package");
+        let destination = root.join("NonDefault.package");
+        let tone = test_resource_key(TYPE_SKINTONE, 0, 0xAA1);
+        let img1 = test_resource_key(TYPE_IMG, 0, 0xBB1);
+        let img2 = test_resource_key(TYPE_IMG, 0, 0xBB2);
+        let other = test_resource_key(TYPE_IMG, 0, 0xCC1);
+        let manifest = MergeManifest {
+            version: 2,
+            packages: vec![ManifestPackage {
+                id: 1, name: "NonDefault.package".to_string(), original_size: 12_000_000,
+                anchors: vec![ManifestAnchor { kind: "SkinTone".to_string(), key: tone.clone() }],
+                resources: [&tone, &img1, &img2].into_iter()
+                    .map(|key| ManifestResource { key: key.clone() }).collect(),
+                preserved_resources: vec![],
+            }],
+        };
+        write_test_package(&source, &[
+            (TYPE_SKINTONE, 0, 0xAA1, vec![4, 0, 0, 0]),
+            (TYPE_IMG, 0, 0xBB1, vec![0x11; 256 * 1024]),
+            (TYPE_IMG, 0, 0xBB2, vec![0x22; 256 * 1024]),
+            (TYPE_IMG, 0, 0xCC1, vec![0x33; 256 * 1024]),
+            (MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+        ]);
+        let mmap = open_package(&source.display().to_string()).unwrap();
+        let core = parse_package(&mmap).unwrap();
+        let writable = WritablePackage::load(&source).unwrap();
+        let mut reader = File::open(&source).unwrap();
+        create_clone_package_from_loaded(
+            &core, &BTreeMap::new(), &writable, &mut reader,
+            &[tone.clone()], false, false, &destination,
+        ).unwrap();
+        let result = WritablePackage::load(&destination).unwrap();
+        let keys: HashSet<String> = result.entries.iter().map(key_string_from_writable).collect();
+        assert_eq!(keys, HashSet::from([tone, img1, img2]));
+        assert!(!keys.contains(&other));
+        drop(result);
+        drop(core);
+        drop(mmap);
         let _ = std::fs::remove_dir_all(root);
     }
 
