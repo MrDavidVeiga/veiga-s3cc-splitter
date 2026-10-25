@@ -5361,10 +5361,34 @@ fn copy_stored_merge_resource(
 // Automatically discard a failed, partially written merged. Its temporary
 // extension is NOT .package, so folder scans cannot accidentally import it.
 struct MergeTempCleanup(PathBuf);
+
+impl MergeTempCleanup {
+    fn disarm(&mut self) {
+        self.0 = PathBuf::new();
+    }
+}
+
 impl Drop for MergeTempCleanup {
     fn drop(&mut self) {
-        let _ = remove_file(&self.0);
+        if !self.0.as_os_str().is_empty() {
+            let _ = remove_file(&self.0);
+        }
     }
+}
+
+fn reserve_owned_temp(path: &Path) -> Result<MergeTempCleanup, String> {
+    // Unlike a check-then-create, create_new never truncates a file that
+    // another process created at this path before we reserved it.
+    let reservation = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| format!(
+            "O arquivo temporário já existe ou não pôde ser reservado sem substituir dados: {} ({e})",
+            path.display()
+        ))?;
+    drop(reservation);
+    Ok(MergeTempCleanup(path.to_path_buf()))
 }
 
 #[tauri::command]
@@ -5421,7 +5445,7 @@ pub fn merge_packages_with_manifest(
         })
         .find(|candidate| !candidate.exists())
         .ok_or_else(|| "Não foi possível reservar um nome temporário seguro para a mesclagem.".to_string())?;
-    let _temp_cleanup = MergeTempCleanup(temp_path.clone());
+    let _temp_cleanup = reserve_owned_temp(&temp_path)?;
 
     let mut sources = Vec::new();
     let mut source_paths = Vec::new();
@@ -5879,7 +5903,7 @@ pub fn restore_manifest_packages(
         let temp_path = unique_restore_temp_path(&destination, package_info.id);
         // Failed restorations must never leave a .package that a later
         // recursive scan could silently pick up as a real piece of CC.
-        let _temp_cleanup = MergeTempCleanup(temp_path.clone());
+        let _temp_cleanup = reserve_owned_temp(&temp_path)?;
         let mut out_pkg = WritablePackage::new(&temp_path, false).map_err(|e| e.to_string())?;
         let mut out_f = OpenOptions::new()
             .read(true)
@@ -6018,12 +6042,7 @@ fn write_removed_package(
     resources_to_remove: &HashSet<String>,
     temp_path: &Path,
 ) -> Result<(), String> {
-    if temp_path.exists() {
-        return Err(format!(
-            "O arquivo temporário já existe e nunca será apagado ou sobrescrito: {}",
-            temp_path.display()
-        ));
-    }
+    let mut temp_owner = reserve_owned_temp(temp_path)?;
 
     let retained_keys: HashSet<String> = package
         .files
@@ -6152,6 +6171,8 @@ fn write_removed_package(
     out_pkg
         .write_index_and_header()
         .map_err(|e| e.to_string())?;
+    // Ownership passes to the caller for final validation and installation.
+    temp_owner.disarm();
     Ok(())
 }
 
@@ -7331,10 +7352,6 @@ fn remove_selected_from_merged_inner(
     let mut source_file = File::open(&payload.package_path).map_err(|e| e.to_string())?;
 
     let temp_path = unique_remove_temp_path(&destination, stem)?;
-    // Never expose a partially rebuilt package to a recursive CC scan.
-    // A failed write or cancellation will remove only our own temporary.
-    let _temp_cleanup = MergeTempCleanup(temp_path.clone());
-
     progress("Reconstruindo merged", "Gravando os recursos preservados em blocos de 4 MiB.", 25);
     if let Err(error) = write_removed_package(
         app,
@@ -7346,9 +7363,11 @@ fn remove_selected_from_merged_inner(
         &resources_to_remove,
         &temp_path,
     ) {
-        let _ = remove_file(&temp_path);
+        // write_removed_package cleans only the exclusive temporary that it
+        // reserved itself. Never delete an unknown file on reservation failure.
         return Err(error);
     }
+    let _temp_cleanup = MergeTempCleanup(temp_path.clone());
 
     progress("Validando merged", "Conferindo os recursos e o manifesto reconstruídos.", 66);
     if let Err(error) = validate_removed_package(
@@ -8933,7 +8952,7 @@ mod remove_selected_tests {
             &HashSet::new(),
             &temp,
         ).unwrap_err();
-        assert!(error.contains("nunca será apagado"), "{error}");
+        assert!(error.contains("já existe ou não pôde ser reservado"), "{error}");
         assert_eq!(std::fs::read(&temp).unwrap(), b"must remain unchanged");
         let candidate = unique_remove_temp_path(&root, "Original").unwrap();
         assert!(!candidate.exists());
