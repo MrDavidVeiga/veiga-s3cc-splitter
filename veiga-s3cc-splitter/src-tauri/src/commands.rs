@@ -5228,6 +5228,31 @@ pub fn collect_merge_package_files(
     Ok(result)
 }
 
+// Copy the original stored DBPF bytes using a bounded I/O buffer. This avoids
+// a large Vec allocation and reopening the original for every CC resource.
+// Compression flags and uncompressed size stay exactly as in the source index.
+fn copy_stored_merge_resource(
+    source: &mut File,
+    entry: &WritableEntry,
+    output: &mut File,
+) -> Result<u32, String> {
+    let position = output.stream_position()
+        .map_err(|e| format!("Falha ao consultar a posição do merged: {e}"))?;
+    let offset = u32::try_from(position)
+        .map_err(|_| "Merged maior que o limite DBPF de offsets de 32 bits; operação cancelada.".to_string())?;
+    source.seek(SeekFrom::Start(entry.chunk_offset as u64))
+        .map_err(|e| format!("Falha ao acessar o recurso original: {e}"))?;
+    let bytes = std::io::copy(&mut source.take(entry.file_size as u64), output)
+        .map_err(|e| format!("Falha ao copiar recurso original: {e}"))?;
+    if bytes != entry.file_size as u64 {
+        return Err(format!(
+            "Recurso original truncado: esperados {} bytes, lidos {bytes}. O merged temporário não será instalado.",
+            entry.file_size
+        ));
+    }
+    Ok(offset)
+}
+
 #[tauri::command]
 pub fn merge_packages_with_manifest(
     payload: MergePackagesPayload,
@@ -5422,6 +5447,12 @@ pub fn merge_packages_with_manifest(
         .seek(SeekFrom::Start(out_pkg.index_position as u64))
         .map_err(|e| e.to_string())?;
 
+    // Keep one read handle per source instead of reopening on every entry.
+    // Only index metadata is retained; large textures are streamed directly.
+    let mut source_handles: Vec<File> = source_paths.iter()
+        .map(|path| File::open(path)
+            .map_err(|e| format!("Falha ao abrir recurso de {}: {e}", path.display())))
+        .collect::<Result<_, _>>()?;
     let mut written = HashSet::new();
     for (source_index, source) in sources.iter().enumerate() {
         for (entry_index, entry) in source.entries.iter().enumerate() {
@@ -5448,9 +5479,9 @@ pub fn merge_packages_with_manifest(
                 continue;
             }
 
-            let raw = source.get_raw_data(entry).map_err(|e| e.to_string())?;
-            let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
-            out_f.write_all(&raw).map_err(|e| e.to_string())?;
+            let chunk_offset = copy_stored_merge_resource(
+                &mut source_handles[source_index], entry, &mut out_f
+            )?;
             out_pkg.entries.push(WritableEntry {
                 type_id: entry.type_id,
                 group: entry.group,
@@ -5483,11 +5514,9 @@ pub fn merge_packages_with_manifest(
         let (registrar_source_index, registrar_entry_index) = plan.primary_registrar;
         let registrar_source = &sources[registrar_source_index];
         let registrar = &registrar_source.entries[registrar_entry_index];
-        let raw = registrar_source
-            .get_raw_data(registrar)
-            .map_err(|e| format!("Não foi possível copiar o registrar S3SA principal: {e}"))?;
-        let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
-        out_f.write_all(&raw).map_err(|e| e.to_string())?;
+        let chunk_offset = copy_stored_merge_resource(
+            &mut source_handles[registrar_source_index], registrar, &mut out_f
+        )?;
         out_pkg.entries.push(WritableEntry {
             type_id: registrar.type_id,
             group: registrar.group,
@@ -8654,6 +8683,36 @@ mod remove_selected_tests {
         )));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn streamed_merge_copy_preserves_stored_bytes_and_rejects_short_reads() {
+        let source_path = test_path("streamed-merge-original");
+        let output_path = test_path("streamed-merge-output");
+        let stored = b"stored-refpack-bytes-not-recompressed";
+        let mut whole = b"XX".to_vec();
+        whole.extend_from_slice(stored);
+        std::fs::write(&source_path, &whole).unwrap();
+        let mut source = File::open(&source_path).unwrap();
+        let mut dest = OpenOptions::new().read(true).write(true)
+            .create_new(true).open(&output_path).unwrap();
+        let entry = WritableEntry {
+            type_id: TYPE_IMG, group: 0, id1: 0, id2: 1, instance: 1,
+            chunk_offset: 2, file_size: stored.len() as u32,
+            mem_size: (stored.len() + 500) as u32,
+            compressed: 0x5A42, unknown2: 0x1234,
+        };
+        let offset = copy_stored_merge_resource(&mut source, &entry, &mut dest).unwrap();
+        assert_eq!(offset, 0);
+        assert_eq!(std::fs::read(&output_path).unwrap(), stored);
+        let mut truncated = entry.clone();
+        truncated.file_size += 1;
+        assert!(copy_stored_merge_resource(&mut source, &truncated, &mut dest)
+            .unwrap_err().contains("truncado"));
+        drop(dest);
+        drop(source);
+        let _ = std::fs::remove_file(source_path);
+        let _ = std::fs::remove_file(output_path);
     }
 
     #[test]
