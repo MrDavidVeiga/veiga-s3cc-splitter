@@ -4973,6 +4973,23 @@ fn unique_restore_temp_path(destination: &Path, package_id: u32) -> PathBuf {
     unreachable!()
 }
 
+fn unique_remove_temp_path(destination: &Path, stem: &str) -> Result<PathBuf, String> {
+    let stamp = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("Relógio inválido ao criar temporário: {e}"))?
+        .as_nanos();
+    for counter in 0..128u32 {
+        let path = destination.join(format!(
+            ".{stem}.remove-temp-{}-{stamp}-{counter}.s3cctmp",
+            std::process::id()
+        ));
+        if !path.exists() {
+            return Ok(path);
+        }
+    }
+    Err("Não foi possível encontrar um nome temporário de remoção que não exista.".to_string())
+}
+
 fn merger_anchor_kind(resource_type: u32) -> Option<&'static str> {
     match resource_type {
         TYPE_CASP => Some("CASP"),
@@ -5898,7 +5915,10 @@ fn write_removed_package(
     temp_path: &Path,
 ) -> Result<(), String> {
     if temp_path.exists() {
-        remove_file(temp_path).map_err(|e| e.to_string())?;
+        return Err(format!(
+            "O arquivo temporário já existe e nunca será apagado ou sobrescrito: {}",
+            temp_path.display()
+        ));
     }
 
     let retained_keys: HashSet<String> = package
@@ -7198,15 +7218,10 @@ fn remove_selected_from_merged_inner(
     let source_package = WritablePackage::load(&payload.package_path).map_err(|e| e.to_string())?;
     let mut source_file = File::open(&payload.package_path).map_err(|e| e.to_string())?;
 
-    let extension = source_path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or("package");
-    let temp_path = destination.join(format!(
-        ".{stem}.remove-temp-{}.{}",
-        std::process::id(),
-        extension
-    ));
+    let temp_path = unique_remove_temp_path(&destination, stem)?;
+    // Never expose a partially rebuilt package to a recursive CC scan.
+    // A failed write or cancellation will remove only our own temporary.
+    let _temp_cleanup = MergeTempCleanup(temp_path.clone());
 
     progress("Reconstruindo merged", "Gravando os recursos preservados em blocos de 4 MiB.", 25);
     if let Err(error) = write_removed_package(
@@ -8741,6 +8756,37 @@ mod remove_selected_tests {
         )));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn remove_rebuild_never_deletes_or_overwrites_a_preexisting_temp_file() {
+        let root = test_dir("existing-remove-temporary");
+        let source = root.join("Original.package");
+        let temp = root.join(".user-data.s3cctmp");
+        write_test_package(&source, &[
+            (TYPE_XML, 0, 0x1234, b"original".to_vec()),
+        ]);
+        std::fs::write(&temp, b"must remain unchanged").unwrap();
+        let mmap = open_package(&source.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let source_package = WritablePackage::load(&source).unwrap();
+        let mut source_file = File::open(&source).unwrap();
+        let error = write_removed_package(
+            None,
+            Instant::now(),
+            &package,
+            &source_package,
+            &mut source_file,
+            &[],
+            &HashSet::new(),
+            &temp,
+        ).unwrap_err();
+        assert!(error.contains("nunca será apagado"), "{error}");
+        assert_eq!(std::fs::read(&temp).unwrap(), b"must remain unchanged");
+        let candidate = unique_remove_temp_path(&root, "Original").unwrap();
+        assert!(!candidate.exists());
+        assert_eq!(candidate.extension().and_then(|x| x.to_str()), Some("s3cctmp"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
