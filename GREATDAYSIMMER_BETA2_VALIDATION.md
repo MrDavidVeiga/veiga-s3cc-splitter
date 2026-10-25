@@ -47,6 +47,15 @@ Status: experimental, **not merged into official betas**. This file documents te
   `cargo run --release -p sims3-pack --example compare_merges -- "s3pe-merged.package" "splitter-merged.package" "comparison.csv"`
 - **Not yet run on the ~460 MB user files:** the local execution/container service was unavailable, and CI runners do not have access to the user's private Drive binaries. Any claim that the two large merges are byte-identical or that in-game lag is fixed would be premature.
 
+## Independent restore, disk-space, and duplicate-scan hardening
+
+- Duplicate detection during Unmerge now indexes Type/Group/Instance keys first and compares the decoded contents one TGI at a time. This avoids storing an entire 460 MB library of decoded assets from each candidate simultaneously; duplicate TGIs are compared as multisets only within their own group.
+- The generic "Remove selected" reconstruction uses a fresh non-package temporary filename (`.s3cctmp`), cannot delete or overwrite a pre-existing temporary, and cleans up an unfinished output on error. Reversible-source Unmerge also uses protected `.s3cctmp` files.
+- Multi-package Unmerge tracks the finalized files created by that invocation and removes only those new outputs on ordinary runtime failure. Pre-existing packages are never included in this rollback.
+- Windows preflight checks available destination-disk space before Merge, Remove, or Restore, accounting for temporary output(s), backup(s), and a safety allowance. If free space is below the estimate, the operation is blocked **before modifying originals**. If less than 5 GiB remain but the estimate is satisfied, the success dialog shows an EN/PT/ES warning (with guidance that large jobs can need roughly 2.1 GiB extra).
+- Regression coverage includes decoded per-TGI comparison regardless of DBPF index order, refusal to overwrite unrelated temporary files, 5 GiB warning / insufficient-space decisions, and cleanup of partially restored outputs.
+- **Limits:** disk-space calculation is a conservative preflight, not a reservation: other processes can consume space while a task is running. Power loss can interrupt multi-file restore between renames, so complete crash-atomicity is not promised. The low-disk success warning only appears if an operation completes.
+
 ## Remaining validation gates
 
 1. **Real package round trip**: new Windows candidate exports from both s3pe and Veiga merges, and compares source/export Type/Group/Instance and decoded payload hashes. Do not treat packed-byte size differences as corruption by themselves.
