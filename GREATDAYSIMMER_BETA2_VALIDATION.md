@@ -27,6 +27,15 @@ Status: experimental, **not merged into official betas**. This file documents te
 - SuteFlower glasses and SonyaSims/RolloRolls hair variants have genuine divergent THUM/_IMG data under identical TGIs; neither winner may be silently chosen.
 - The overwrite scenario is saving a second merge to the same preexisting filename after a native Save confirmation.
 
+## New independent corrections — 2026-10-25
+
+- TONE selection no longer groups unrelated skins by similar/identical display names such as "Default". In s3pe merges without a trusted Veiga manifest, it includes only the exact selected TONE and its Type/Group/Instance dependencies. When a Veiga manifest uniquely establishes ownership, multiple TONEs from that same source can still be exported together.
+- For skin clones, preserve the original package filename (including NonDefault/Default words verbatim) only when one unique original source is identified by the Veiga manifest; never infer default status or strip substrings.
+- Synthetic regressions now cover two independent skins with the same UI name, multi-TONE ownership within a single original source, and source filename preservation.
+- Experimental build/test workflows cancel outdated runs when newer commits are pushed. The official Beta 2 remains unchanged.
+- The two private large skin merges have known Drive sizes: s3pe **463,872,826 bytes** and Splitter **460,407,376 bytes**. This particular pair is **3,465,450 bytes smaller with Splitter**, so it must NOT be presented as proof of the separately reported ~80 MB larger merged-output case. File sizes are not sufficient to judge resource correctness or game lag.
+- Both files were materialized through authenticated Drive/Library access, but this execution environment did not support processing their complete binary contents. No resource-by-resource conclusion is recorded for these two full merges.
+
 ## Remaining validation gates
 
 1. **Real package round trip**: new Windows candidate exports from both s3pe and Veiga merges, and compares source/export Type/Group/Instance and decoded payload hashes. Do not treat packed-byte size differences as corruption by themselves.
