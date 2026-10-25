@@ -1,5 +1,6 @@
 mod commands;
 mod merge_manifest;
+mod tone_dependencies;
 mod system_appearance;
 
 #[cfg(not(test))]
