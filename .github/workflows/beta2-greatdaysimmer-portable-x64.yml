@@ -46,6 +46,12 @@ jobs:
         run: |
           npm run tauri build -- --no-bundle
           if ($LASTEXITCODE -ne 0) { throw 'Tauri Windows x64 build failed' }
+      - name: Build read-only DBPF merge comparison executable
+        shell: pwsh
+        run: |
+          cargo build --locked --release -p sims3-pack --example compare_merges
+          if ($LASTEXITCODE -ne 0) { throw 'DBPF audit executable build failed' }
+
       - name: Verify executable and prepare portable candidate
         shell: pwsh
         run: |
@@ -68,6 +74,20 @@ jobs:
           Write-Host "Verified $($exe.Name), bytes: $($exe.Length)"
           $hash = (Get-FileHash -LiteralPath $exe.FullName -Algorithm SHA256).Hash
           "SHA256: $hash" | Set-Content -LiteralPath (Join-Path $out 'SHA256.txt')
+      - name: Verify read-only audit binary
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD 'target\release\examples\compare_merges.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "DBPF comparison executable missing: $exe"
+          }
+          Write-Host "Read-only DBPF analyzer verified: $((Get-Item $exe).Length) bytes"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GreatDaySimmer-DBPF-Audit-Windows-x64
+          path: target/release/examples/compare_merges.exe
+          if-no-files-found: error
+          retention-days: 30
       - uses: actions/upload-artifact@v4
         with:
           name: GreatDaySimmer-Beta2-Windows-x64-Experimental
