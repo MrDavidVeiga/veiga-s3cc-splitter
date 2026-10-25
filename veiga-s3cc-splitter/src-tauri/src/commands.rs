@@ -8114,6 +8114,48 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn merged_index_is_sorted_and_game_manifest_is_not_tuning_xml() {
+        let root = test_dir("sorted-opaque-merge");
+        let a = root.join("A.package");
+        let b = root.join("B.package");
+        let out = root.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        // Deliberately place high TGI before low TGI in the source.
+        write_test_package(&a, &[
+            (TYPE_STBL, 0, 0x9999, b"Catalog name".to_vec()),
+            (TYPE_OBJD, 0, 0x8888, b"objd".to_vec()),
+        ]);
+        write_test_package(&b, &[(TYPE_CASP, 0, 0x7777, b"casp".to_vec())]);
+
+        let merged = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![a.display().to_string(), b.display().to_string()],
+            destination_folder: out.display().to_string(),
+            output_name: "Merged.package".to_string(),
+        }).unwrap();
+        let result = WritablePackage::load(&merged.output_path).unwrap();
+        assert!(result.entries.windows(2).all(|pair| {
+            (pair[0].type_id, pair[0].group, pair[0].instance)
+                <= (pair[1].type_id, pair[1].group, pair[1].instance)
+        }));
+        let manifest_entry = result.entries.iter()
+            .find(|e| is_manifest_tgi(e.type_id, e.group, e.instance))
+            .unwrap();
+        assert_eq!(manifest_entry.type_id, MANIFEST_TYPE);
+        assert_ne!(manifest_entry.type_id, TYPE_XML);
+        for (ty, instance, expected) in [
+            (TYPE_STBL, 0x9999, b"Catalog name".as_slice()),
+            (TYPE_OBJD, 0x8888, b"objd".as_slice()),
+            (TYPE_CASP, 0x7777, b"casp".as_slice()),
+        ] {
+            let entry = result.entries.iter()
+                .find(|e| e.type_id == ty && e.instance == instance).unwrap();
+            assert_eq!(result.get_uncompressed_data(entry).unwrap(), expected);
+        }
+        drop(result);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn reversible_merger_rejects_conflicting_tgi_data() {
         let root = test_dir("merge-conflict");
         let source_a = root.join("A.package");
