@@ -5240,6 +5240,11 @@ fn copy_stored_merge_resource(
         .map_err(|e| format!("Falha ao consultar a posição do merged: {e}"))?;
     let offset = u32::try_from(position)
         .map_err(|_| "Merged maior que o limite DBPF de offsets de 32 bits; operação cancelada.".to_string())?;
+    let resource_end = position.checked_add(entry.file_size as u64)
+        .ok_or_else(|| "Overflow ao calcular tamanho do merged DBPF.".to_string())?;
+    if resource_end > u32::MAX as u64 {
+        return Err("O merged ultrapassaria o limite de offsets de 32 bits do formato DBPF; nenhuma substituição foi realizada.".to_string());
+    }
     source.seek(SeekFrom::Start(entry.chunk_offset as u64))
         .map_err(|e| format!("Falha ao acessar o recurso original: {e}"))?;
     let bytes = std::io::copy(&mut source.take(entry.file_size as u64), output)
@@ -5558,7 +5563,18 @@ pub fn merge_packages_with_manifest(
     // Sorting the index does not reorder any compressed payload or chunk offset.
     // Keep DBPF lookup deterministic and avoid arbitrary source-order entries.
     out_pkg.entries.sort_by_key(|entry| (entry.type_id, entry.group, entry.instance));
-    out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+    let index_start = out_f.stream_position().map_err(|e| e.to_string())?;
+    let index_size = 4u64 + (out_pkg.entries.len() as u64) * 32;
+    let index_end = index_start.checked_add(index_size)
+        .ok_or_else(|| "Overflow no índice DBPF do merged.".to_string())?;
+    if index_end > u32::MAX as u64 {
+        return Err(format!(
+            "O merged ({} bytes incluindo índice) ultrapassaria o limite DBPF de 32 bits; nenhum package de origem foi modificado.",
+            index_end
+        ));
+    }
+    out_pkg.index_position = u32::try_from(index_start)
+        .map_err(|_| "Offset do índice DBPF inválido.".to_string())?;
     out_pkg
         .write_index_and_header()
         .map_err(|e| e.to_string())?;
@@ -8709,6 +8725,11 @@ mod remove_selected_tests {
         truncated.file_size += 1;
         assert!(copy_stored_merge_resource(&mut source, &truncated, &mut dest)
             .unwrap_err().contains("truncado"));
+        // A sparse seek is enough to simulate a near-4-GiB DBPF without
+        // allocating the file's intervening bytes on disk.
+        dest.seek(SeekFrom::Start(u32::MAX as u64 - 2)).unwrap();
+        assert!(copy_stored_merge_resource(&mut source, &entry, &mut dest)
+            .unwrap_err().contains("32 bits"));
         drop(dest);
         drop(source);
         let _ = std::fs::remove_file(source_path);
