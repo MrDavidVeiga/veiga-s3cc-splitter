@@ -47,6 +47,7 @@ const translations = {
     mergerBusy: "Merging packages...",
     mergerSuccess: (result) => `Merge completed: ${result.packageCount} ${countForm(result.packageCount, "original package", "original packages")}, ${result.resourceCount} ${countForm(result.resourceCount, "unique resource", "unique resources")}, ${result.sharedResources} ${countForm(result.sharedResources, "shared resource", "shared resources")}.`,
     mergerBackup: (path) => `Original merged package preserved as backup: ${path}`,
+    lowDiskWarning: (bytes) => `Low disk space: ${(Number(bytes) / (1024 ** 3)).toFixed(2)} GiB free. Keeping at least 5 GiB available is recommended; large operations can require approximately 2.1 GiB of additional working space.`,
     mergerError: "Merge failed:",
     restoreOriginals: "Unmerge",
     restoreBusyTitle: "Unmerging...",
@@ -193,6 +194,7 @@ const translations = {
     mergerBusy: "Mesclando packages...",
     mergerSuccess: (result) => `Mesclagem concluída: ${result.packageCount} ${countForm(result.packageCount, "package original", "packages originais")}, ${result.resourceCount} ${countForm(result.resourceCount, "recurso único", "recursos únicos")}, ${result.sharedResources} ${countForm(result.sharedResources, "recurso compartilhado", "recursos compartilhados")}.`,
     mergerBackup: (path) => `Package anterior preservado em backup: ${path}`,
+    lowDiskWarning: (bytes) => `Pouco espaço em disco: ${(Number(bytes) / (1024 ** 3)).toFixed(2)} GiB livres. Recomenda-se manter pelo menos 5 GiB disponíveis; operações grandes podem precisar de aproximadamente 2,1 GiB de espaço adicional.`,
     mergerError: "Falha ao mesclar:",
     restoreOriginals: "Desmesclar",
     restoreBusyTitle: "Desmesclando...",
@@ -339,6 +341,7 @@ const translations = {
     mergerBusy: "Fusionando packages...",
     mergerSuccess: (result) => `Fusión completada: ${result.packageCount} ${countForm(result.packageCount, "package original", "packages originales")}, ${result.resourceCount} ${countForm(result.resourceCount, "recurso único", "recursos únicos")}, ${result.sharedResources} ${countForm(result.sharedResources, "recurso compartido", "recursos compartidos")}.`,
     mergerBackup: (path) => `Package anterior conservado como copia de seguridad: ${path}`,
+    lowDiskWarning: (bytes) => `Poco espacio en disco: ${(Number(bytes) / (1024 ** 3)).toFixed(2)} GiB libres. Se recomienda mantener al menos 5 GiB disponibles; las operaciones grandes pueden necesitar aproximadamente 2,1 GiB de espacio adicional.`,
     mergerError: "Error al fusionar:",
     restoreOriginals: "Desfusionar",
     restoreBusyTitle: "Desfusionando...",
@@ -1360,7 +1363,11 @@ async function runMerger() {
     state.mergerResult = result;
     await appModal.showSuccess({
       titleText: t("modalSuccessTitle"),
-      messageText: [t("mergerSuccess", result), result.backupPath ? t("mergerBackup", result.backupPath) : ""].filter(Boolean).join("\n"),
+      messageText: [
+         t("mergerSuccess", result),
+         result.backupPath ? t("mergerBackup", result.backupPath) : "",
+         result.diskFreeBytesWarning != null ? t("lowDiskWarning", result.diskFreeBytesWarning) : "",
+       ].filter(Boolean).join("\n"),
       primaryLabel: t("modalOk"),
     });
     await revealItemInDir(result.outputPath);
@@ -1393,7 +1400,10 @@ async function restoreManifestPackages() {
     });
     await appModal.showSuccess({
       titleText: t("modalSuccessTitle"),
-      messageText: t("restoreSuccess", result),
+      messageText: [
+        t("restoreSuccess", result),
+        result.diskFreeBytesWarning != null ? t("lowDiskWarning", result.diskFreeBytesWarning) : "",
+      ].filter(Boolean).join("\n\n"),
       primaryLabel: t("modalOk"),
     });
     const revealPath = result.outputPaths?.[0] || result.duplicatePaths?.[0];
@@ -1470,7 +1480,10 @@ async function removeSelectionFromMerged() {
     clearBusy();
     await appModal.showSuccess({
       titleText: t("modalSuccessTitle"),
-      messageText: t("removeSuccess", result),
+      messageText: [
+        t("removeSuccess", result),
+        result.diskFreeBytesWarning != null ? t("lowDiskWarning", result.diskFreeBytesWarning) : "",
+      ].filter(Boolean).join("\n\n"),
       primaryLabel: t("modalOk"),
     });
     await revealItemInDir(result.outputPath);
