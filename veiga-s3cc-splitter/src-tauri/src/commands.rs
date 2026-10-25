@@ -9145,6 +9145,9 @@ mod remove_selected_tests {
             .unwrap_err().contains("32 bits"));
         assert!(checked_dbpf_resource_offset(&mut file, 0x8000_0000)
             .unwrap_err().contains("31 bits"));
+        // The empty index is 4 bytes; MAX-8 is valid, MAX-2 is not.
+        assert!(checked_dbpf_index_position(&package, &mut file).is_ok());
+        file.seek(SeekFrom::Start(u32::MAX as u64 - 2)).unwrap();
         assert!(checked_dbpf_index_position(&package, &mut file)
             .unwrap_err().contains("32 bits"));
         file.seek(SeekFrom::Start(96)).unwrap();
