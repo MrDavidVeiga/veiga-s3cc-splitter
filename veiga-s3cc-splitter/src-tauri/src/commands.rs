@@ -4343,7 +4343,7 @@ pub fn merge_packages_with_manifest(
             )))
             .find(|candidate| !candidate.exists())
             .ok_or_else(|| "Não foi possível obter um nome de backup exclusivo; o original foi preservado.".to_string())?;
-        replace_source_with_rollback(&output_path, &temp_path, &backup_path)?;
+        replace_merged_with_backup(&output_path, &temp_path, &backup_path)?;
         Some(backup_path.display().to_string())
     } else {
         // Refuse to overwrite a file that appeared while the merge was running.
@@ -4712,6 +4712,42 @@ fn validate_removed_package(
     let mmap = open_package(&output_path.display().to_string())?;
     let _parsed = parse_package(&mmap)?;
     Ok(())
+}
+
+// Overwriting an existing merged is different from rebuilding the same source.
+// The third argument is a permanent backup path, NOT the rebuilt destination.
+fn replace_merged_with_backup(
+    destination: &Path,
+    validated_temp: &Path,
+    permanent_backup: &Path,
+) -> Result<(), String> {
+    if !destination.exists() {
+        return Err("O merged original desapareceu antes da substituição; operação cancelada.".to_string());
+    }
+    if permanent_backup.exists() {
+        return Err(format!(
+            "O backup já existe e nunca será substituído: {}",
+            permanent_backup.display()
+        ));
+    }
+    // The temporary merged has already passed DBPF and manifest validation.
+    // Moving the source rather than copying avoids the large-file bottleneck.
+    rename(destination, permanent_backup)
+        .map_err(|error| format!("Não foi possível criar o backup do merged: {error}"))?;
+
+    if let Err(error) = rename(validated_temp, destination) {
+        match rename(permanent_backup, destination) {
+            Ok(()) => Err(format!(
+                "Não foi possível instalar o novo merged; o original foi restaurado: {error}"
+            )),
+            Err(rollback_error) => Err(format!(
+                "Falha ao instalar o merged ({error}) e ao restaurar o original ({rollback_error}). O arquivo original continua preservado no backup: {}",
+                permanent_backup.display()
+            )),
+        }
+    } else {
+        Ok(())
+    }
 }
 
 fn replace_source_with_rollback(
