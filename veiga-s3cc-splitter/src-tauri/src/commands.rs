@@ -4835,49 +4835,78 @@ fn files_are_identical(
 }
 
 
-fn package_tgi_payload_signature(
-    path: &Path,
-) -> Result<Vec<(u32, u32, u64, Vec<u8>)>, String> {
-    let package = WritablePackage::load(path)
-        .map_err(|e| format!("Não foi possível analisar {} para detectar duplicados: {e}", path.display()))?;
-    let mut signature = Vec::new();
-
-    for entry in &package.entries {
+// Compare only one TGI group at a time instead of retaining every
+// decompressed resource from both packages in RAM. This matters for objects
+// and skins containing hundreds of MiB of texture payloads.
+fn package_tgi_entry_groups(
+    package: &WritablePackage,
+) -> BTreeMap<(u32, u32, u64), Vec<usize>> {
+    let mut groups: BTreeMap<(u32, u32, u64), Vec<usize>> = BTreeMap::new();
+    for (index, entry) in package.entries.iter().enumerate() {
         let parts = ResourceKeyParts {
             resource_type: entry.type_id,
             resource_group: entry.group,
             instance: entry.instance,
         };
-        if relation_ignored_resource(parts) {
-            continue;
+        if !relation_ignored_resource(parts) {
+            groups
+                .entry((entry.type_id, entry.group, entry.instance))
+                .or_default()
+                .push(index);
         }
-
-        let data = package.get_uncompressed_data(entry).map_err(|e| {
-            format!(
-                "Não foi possível ler o recurso {} de {} durante a detecção de duplicados: {e}",
-                key_string_from_writable(entry),
-                path.display()
-            )
-        })?;
-        signature.push((entry.type_id, entry.group, entry.instance, data));
     }
-
-    signature.sort();
-    Ok(signature)
+    groups
 }
 
 fn packages_have_same_tgi_payloads(left: &Path, right: &Path) -> Result<bool, String> {
-    let left_signature = package_tgi_payload_signature(left)?;
-    if left_signature.is_empty() {
+    let a = WritablePackage::load(left).map_err(|e| {
+        format!("Não foi possível analisar {}: {e}", left.display())
+    })?;
+    let b = WritablePackage::load(right).map_err(|e| {
+        format!("Não foi possível analisar {}: {e}", right.display())
+    })?;
+    let a_groups = package_tgi_entry_groups(&a);
+    let b_groups = package_tgi_entry_groups(&b);
+    if a_groups.is_empty() || a_groups.len() != b_groups.len() {
         return Ok(false);
     }
 
-    let right_signature = package_tgi_payload_signature(right)?;
-    if right_signature.is_empty() {
-        return Ok(false);
+    for (key, a_indices) in &a_groups {
+        let Some(b_indices) = b_groups.get(key) else {
+            return Ok(false);
+        };
+        if a_indices.len() != b_indices.len() {
+            return Ok(false);
+        }
+        // The typical case has just one resource per TGI. Comparing it
+        // independently avoids storing the contents of unrelated resources.
+        if a_indices.len() == 1 {
+            let lhs = a.get_uncompressed_data(&a.entries[a_indices[0]])
+                .map_err(|e| format!("Falha ao ler {} de {}: {e}", a.entries[a_indices[0]].key_string(), left.display()))?;
+            let rhs = b.get_uncompressed_data(&b.entries[b_indices[0]])
+                .map_err(|e| format!("Falha ao ler {} de {}: {e}", b.entries[b_indices[0]].key_string(), right.display()))?;
+            if lhs != rhs {
+                return Ok(false);
+            }
+        } else {
+            // Malformed/legacy DBPFs can contain repeated TGIs. Keep the
+            // previous multiset semantics without loading other TGI groups.
+            let mut lhs = a_indices.iter()
+                .map(|&i| a.get_uncompressed_data(&a.entries[i])
+                    .map_err(|e| format!("Falha ao ler recurso duplicado de {}: {e}", left.display())))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut rhs = b_indices.iter()
+                .map(|&i| b.get_uncompressed_data(&b.entries[i])
+                    .map_err(|e| format!("Falha ao ler recurso duplicado de {}: {e}", right.display())))
+                .collect::<Result<Vec<_>, _>>()?;
+            lhs.sort();
+            rhs.sort();
+            if lhs != rhs {
+                return Ok(false);
+            }
+        }
     }
-
-    Ok(left_signature == right_signature)
+    Ok(true)
 }
 
 fn existing_package_paths(destination: &Path) -> Result<Vec<PathBuf>, String> {
@@ -9058,6 +9087,29 @@ mod remove_selected_tests {
         assert_eq!(std::fs::read(&backup).unwrap(), original);
         assert!(!temp.exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn duplicate_detection_compares_decoded_tgis_without_caring_about_index_order() {
+        let root = test_dir("duplicates-streamed-signature");
+        let a = root.join("A.package");
+        let b = root.join("B.package");
+        let changed = root.join("C.package");
+        write_test_package(&a, &[
+            (TYPE_IMG, 0, 0x1111, vec![17; 96 * 1024]),
+            (TYPE_OBJD, 0, 0x2222, b"same objd".to_vec()),
+        ]);
+        write_test_package(&b, &[
+            (TYPE_OBJD, 0, 0x2222, b"same objd".to_vec()),
+            (TYPE_IMG, 0, 0x1111, vec![17; 96 * 1024]),
+        ]);
+        write_test_package(&changed, &[
+            (TYPE_OBJD, 0, 0x2222, b"same objd".to_vec()),
+            (TYPE_IMG, 0, 0x1111, vec![18; 96 * 1024]),
+        ]);
+        assert!(packages_have_same_tgi_payloads(&a, &b).unwrap());
+        assert!(!packages_have_same_tgi_payloads(&a, &changed).unwrap());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
