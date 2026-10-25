@@ -6260,6 +6260,58 @@ fn read_uncompressed_writable_entry(
     .map_err(|e| e.to_string())
 }
 
+// Preserve original package-local metadata when (and only when) a clone is
+// a complete, isolated source from a reversible Veiga merge. KEY/NMAP and the
+// Package Manifest refer to the full source, so copying them into a partial
+// selection or across source boundaries would create misleading references.
+fn complete_source_preserved_metadata(
+    package: &DBPF<'_>,
+    clone_keys: &HashSet<String>,
+) -> Result<Vec<(ResourceKeyParts, Vec<u8>, u16)>, String> {
+    let Some(manifest) = read_merge_manifest_from_dbpf(package)? else {
+        return Ok(Vec::new());
+    };
+    let actual: HashSet<&str> = clone_keys.iter()
+        .filter(|key| parse_key(key).map(|p| p.resource_type != TYPE_KEY).unwrap_or(true))
+        .map(String::as_str)
+        .collect();
+    let mut exact_sources = manifest.packages.iter().filter(|source| {
+        let expected: HashSet<&str> = source.resources.iter()
+            .map(|resource| resource.key.as_str())
+            .collect();
+        !expected.is_empty() && actual == expected
+    });
+    let Some(source) = exact_sources.next() else {
+        return Ok(Vec::new());
+    };
+    if exact_sources.next().is_some() {
+        // Two manifests claiming the exact same closure are ambiguous.
+        return Ok(Vec::new());
+    }
+
+    let mut seen = HashSet::new();
+    let mut restored = Vec::new();
+    for preserved in &source.preserved_resources {
+        let parts = parse_key(&preserved.key)?;
+        if !is_per_source_metadata_type(parts.resource_type)
+            || !seen.insert(preserved.key.clone())
+            || package.entry_index(parts.resource_type, parts.resource_group, parts.instance).is_some()
+        {
+            return Err(format!(
+                "Metadado de origem ambiguo ou duplicado em {}: {}",
+                source.name, preserved.key
+            ));
+        }
+        let bytes = STANDARD.decode(&preserved.data_base64)
+            .map_err(|error| format!(
+                "Metadado de {} corrompido ({}): {error}",
+                source.name, preserved.key
+            ))?;
+        restored.push((parts, bytes, preserved.unknown2));
+    }
+    Ok(restored)
+}
+
 fn create_clone_package_from_loaded(
     core_package: &DBPF<'_>,
     name_map: &BTreeMap<u64, String>,
@@ -6273,6 +6325,9 @@ fn create_clone_package_from_loaded(
     let selected: HashSet<String> = selected_keys.iter().cloned().collect();
     let clone_keys =
         expand_selection_for_export(core_package, &selected, include_thumbnails, name_map)?;
+    let original_metadata = complete_source_preserved_metadata(core_package, &clone_keys)?;
+    let restores_original_key = original_metadata.iter()
+        .any(|(parts, _, _)| parts.resource_type == TYPE_KEY);
 
     if let Some(parent) = clone_path.parent() {
         create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -6320,7 +6375,10 @@ fn create_clone_package_from_loaded(
         count += 1;
     }
 
-    if let Some(raw) = filtered_key_data.filter(|raw| !raw.is_empty()) {
+    // Full-source exports recover the original KEY and Package Manifest
+    // verbatim (decoded payload); all other clones keep the filtered KEY.
+    if !restores_original_key {
+        if let Some(raw) = filtered_key_data.filter(|raw| !raw.is_empty()) {
         if let Some(template) = source_package
             .entries
             .iter()
@@ -6343,6 +6401,21 @@ fn create_clone_package_from_loaded(
             count += 1;
         }
     }
+    }
+
+    for (parts, data, unknown2) in original_metadata {
+        append_uncompressed_resource(
+            &mut out_pkg,
+            &mut out_f,
+            parts.resource_type,
+            parts.resource_group,
+            parts.instance,
+            &data,
+            unknown2,
+        )?;
+        count += 1;
+    }
+
 
     out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
     out_pkg
