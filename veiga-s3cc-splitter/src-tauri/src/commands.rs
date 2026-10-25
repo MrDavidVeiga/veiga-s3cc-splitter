@@ -7282,6 +7282,68 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn object_export_uses_manifest_owned_icon_and_never_steals_another_objects_icon() {
+        use crate::merge_manifest::LEGACY_MANIFEST_TYPE;
+
+        for manifest_type in [MANIFEST_TYPE, LEGACY_MANIFEST_TYPE] {
+            let path = test_path("two-object-icons-owned-by-manifest");
+            let object_a = test_resource_key(TYPE_OBJD, 0, 0xA0A0);
+            let object_b = test_resource_key(TYPE_OBJD, 0, 0xB0B0);
+            let icon_a = test_resource_key(TYPE_ICON, 0, 0xC0C0);
+            let icon_b = test_resource_key(TYPE_ICON, 0, 0xD0D0);
+            let manifest = MergeManifest {
+                version: 2,
+                packages: vec![
+                    ManifestPackage {
+                        id: 1,
+                        name: "Object A.package".to_string(),
+                        original_size: 500,
+                        anchors: vec![ManifestAnchor {kind: "OBJD".to_string(), key: object_a.clone()}],
+                        resources: vec![
+                            ManifestResource {key: object_a.clone()},
+                            ManifestResource {key: icon_a.clone()},
+                        ],
+                        preserved_resources: vec![],
+                    },
+                    ManifestPackage {
+                        id: 2,
+                        name: "Object B.package".to_string(),
+                        original_size: 500,
+                        anchors: vec![ManifestAnchor {kind: "OBJD".to_string(), key: object_b.clone()}],
+                        resources: vec![
+                            ManifestResource {key: object_b.clone()},
+                            ManifestResource {key: icon_b.clone()},
+                        ],
+                        preserved_resources: vec![],
+                    },
+                ],
+            };
+            write_test_package(&path, &[
+                (TYPE_OBJD, 0, 0xA0A0, b"object-a".to_vec()),
+                (TYPE_OBJD, 0, 0xB0B0, b"object-b".to_vec()),
+                (TYPE_ICON, 0, 0xC0C0, b"icon-a".to_vec()),
+                (TYPE_ICON, 0, 0xD0D0, b"icon-b".to_vec()),
+                (manifest_type, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+            ]);
+            let mmap = open_package(&path.display().to_string()).unwrap();
+            let package = parse_package(&mmap).unwrap();
+            let keys = expand_selection_for_export(
+                &package,
+                &HashSet::from([object_a.clone()]),
+                true,
+                &BTreeMap::new(),
+            ).unwrap();
+            assert!(keys.contains(&object_a), "object must be retained");
+            assert!(keys.contains(&icon_a), "correct ICON must be retained");
+            assert!(!keys.contains(&icon_b), "unrelated ICON must not leak");
+            assert!(!keys.contains(&object_b), "unrelated object must not leak");
+            drop(package);
+            drop(mmap);
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
     fn uses_thumbnail_referenced_by_resource_in_same_package() {
         let path = test_path("embedded-casp-thumb");
         let casp_id = 0x1000_1234_5678_0001u64;
