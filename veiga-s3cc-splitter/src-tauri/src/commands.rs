@@ -2363,6 +2363,15 @@ fn tone_group_members(
                 candidate.instance
             )
         })?;
+
+        // A TONE can refer to base-game textures not present in this DBPF.
+        // However, when ALL its referenced _IMG resources are absent, we cannot
+        // certify an independent package, as reproduced by GreatDaySimmer's
+        // s3pe-merged skin exports (some contain only one TONE).
+        let referenced_image_count = references.iter()
+            .filter(|reference| reference.resource_type == TYPE_IMG)
+            .count();
+        let mut matching_image_count = 0usize;
         for reference in &references {
             if let Some(index) = package.entry_index(
                 reference.resource_type,
@@ -2370,7 +2379,16 @@ fn tone_group_members(
                 reference.instance,
             ) {
                 found.insert(key_string(&package.files[index]));
+                if reference.resource_type == TYPE_IMG {
+                    matching_image_count += 1;
+                }
             }
+        }
+        if referenced_image_count > 0 && matching_image_count == 0 {
+            return Err(format!(
+                "Skin TONE 0x{:016X} references {} _IMG entries, but none exist in the opened package. Cannot safely export an independent skin; source may rely on external resources or may already be incomplete.",
+                candidate.instance, referenced_image_count
+            ));
         }
 
         // A tone ramp's PNG swatch can share its instance with the first
