@@ -5440,6 +5440,9 @@ pub fn merge_packages_with_manifest(
         0,
     )?;
 
+    // Sorting the index does not reorder any compressed payload or chunk offset.
+    // Keep DBPF lookup deterministic and avoid arbitrary source-order entries.
+    out_pkg.entries.sort_by_key(|entry| (entry.type_id, entry.group, entry.instance));
     out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
     out_pkg
         .write_index_and_header()
@@ -5808,6 +5811,9 @@ fn write_removed_package(
         }
     }
 
+    // Sorting the index does not reorder any compressed payload or chunk offset.
+    // Keep DBPF lookup deterministic and avoid arbitrary source-order entries.
+    out_pkg.entries.sort_by_key(|entry| (entry.type_id, entry.group, entry.instance));
     out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
     out_pkg
         .write_index_and_header()
