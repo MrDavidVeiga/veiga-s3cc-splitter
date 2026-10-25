@@ -36,6 +36,17 @@ Status: experimental, **not merged into official betas**. This file documents te
 - The two private large skin merges have known Drive sizes: s3pe **463,872,826 bytes** and Splitter **460,407,376 bytes**. This particular pair is **3,465,450 bytes smaller with Splitter**, so it must NOT be presented as proof of the separately reported ~80 MB larger merged-output case. File sizes are not sufficient to judge resource correctness or game lag.
 - Both files were materialized through authenticated Drive/Library access, but this execution environment did not support processing their complete binary contents. No resource-by-resource conclusion is recorded for these two full merges.
 
+## Merge streaming and private-file comparator
+
+- The Merger now copies stored compressed resource bytes using bounded streaming I/O and persistent per-source read handles. It does not decompress/recompress assets during the copy stage; the source index's `compressed`, `mem_size`, and `unknown2` metadata are carried forward verbatim.
+- Prevent 32-bit DBPF resource/index-offset overflow before publishing a merged output.
+- Incomplete merges use `.s3cctmp` instead of `.package` and are removed by a scope guard on error; recursive CC discovery will not import them.
+- Tests cover exact stored-byte copying, truncated-input failure, 32-bit overflow, and exclusion of abandoned merge temporaries.
+- Read-only audit utility: `sims3-pack/examples/compare_merges.rs`. It compares every Type/Group/Instance and emits `only_s3pe`, `only_splitter`, `same_stored`, `same_decoded_diff_storage`, `same_decoded_metadata_diff`, `different_decoded`, `duplicate_tgi`, or error classifications. This separates real resource differences from mere compression/metadata differences. Never uploads or rewrites source CCs, and refuses to overwrite an existing report.
+- Future private local invocation (when the files are available to the execution environment):
+  `cargo run --release -p sims3-pack --example compare_merges -- "s3pe-merged.package" "splitter-merged.package" "comparison.csv"`
+- **Not yet run on the ~460 MB user files:** the local execution/container service was unavailable, and CI runners do not have access to the user's private Drive binaries. Any claim that the two large merges are byte-identical or that in-game lag is fixed would be premature.
+
 ## Remaining validation gates
 
 1. **Real package round trip**: new Windows candidate exports from both s3pe and Veiga merges, and compares source/export Type/Group/Instance and decoded payload hashes. Do not treat packed-byte size differences as corruption by themselves.
