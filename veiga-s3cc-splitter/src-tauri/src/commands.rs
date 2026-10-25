@@ -5258,6 +5258,15 @@ fn copy_stored_merge_resource(
     Ok(offset)
 }
 
+// Automatically discard a failed, partially written merged. Its temporary
+// extension is NOT .package, so folder scans cannot accidentally import it.
+struct MergeTempCleanup(PathBuf);
+impl Drop for MergeTempCleanup {
+    fn drop(&mut self) {
+        let _ = remove_file(&self.0);
+    }
+}
+
 #[tauri::command]
 pub fn merge_packages_with_manifest(
     payload: MergePackagesPayload,
@@ -5305,13 +5314,14 @@ pub fn merge_packages_with_manifest(
     let temp_path = (0..128)
         .map(|counter| {
             destination.join(format!(
-                ".{}.merge-temp-{}-{stamp}-{counter}.package",
+                ".{}.merge-temp-{}-{stamp}-{counter}.s3cctmp",
                 output_name.trim_end_matches(".package"),
                 std::process::id()
             ))
         })
         .find(|candidate| !candidate.exists())
         .ok_or_else(|| "Não foi possível reservar um nome temporário seguro para a mesclagem.".to_string())?;
+    let _temp_cleanup = MergeTempCleanup(temp_path.clone());
 
     let mut sources = Vec::new();
     let mut source_paths = Vec::new();
@@ -8699,6 +8709,19 @@ mod remove_selected_tests {
         )));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unfinished_merger_temporaries_are_not_selected_as_game_packages() {
+        let root = test_dir("ignore-merge-temp");
+        let input = root.join("Original.package");
+        let incomplete = root.join(".Merged.merge-temp-1234.s3cctmp");
+        std::fs::write(&input, b"original-package").unwrap();
+        std::fs::write(&incomplete, b"partial-do-not-import").unwrap();
+        let mut paths = Vec::new();
+        collect_merge_sources_from_path(&root, &mut paths).unwrap();
+        assert_eq!(paths, vec![input]);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
