@@ -6583,6 +6583,41 @@ fn read_uncompressed_writable_entry(
 // a complete, isolated source from a reversible Veiga merge. KEY/NMAP and the
 // Package Manifest refer to the full source, so copying them into a partial
 // selection or across source boundaries would create misleading references.
+// When an export selection unequivocally identifies one original package,
+// its reversible manifest is the authoritative resource ownership list.
+// Heuristic thumbnail/texture discovery can attach CC from other sources, so
+// bypass it for a complete-source clone. Multiple/no owners fall back to the
+// ordinary per-resource export without inventing ownership.
+fn unique_selected_source_manifest_keys(
+    package: &DBPF<'_>,
+    selected_keys: &[String],
+) -> Option<HashSet<String>> {
+    let manifest = read_valid_merge_manifest_from_dbpf(package)?;
+    let selected: HashSet<&str> = selected_keys.iter()
+        .flat_map(|key| key.split("||"))
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .collect();
+    if selected.is_empty() {
+        return None;
+    }
+    let mut matches = manifest.packages.iter().filter(|source| {
+        !source.anchors.is_empty()
+            && selected.iter().all(|key| source.anchors.iter().any(|a| a.key == *key))
+    });
+    let source = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    let source_keys: HashSet<String> = source.resources.iter()
+        .map(|resource| resource.key.clone())
+        .collect();
+    if source_keys.is_empty() || !selected.iter().all(|key| source_keys.contains(*key)) {
+        return None;
+    }
+    Some(source_keys)
+}
+
 fn complete_source_preserved_metadata(
     package: &DBPF<'_>,
     clone_keys: &HashSet<String>,
@@ -6642,8 +6677,13 @@ fn create_clone_package_from_loaded(
     clone_path: &Path,
 ) -> Result<(String, usize), String> {
     let selected: HashSet<String> = selected_keys.iter().cloned().collect();
-    let clone_keys =
-        expand_selection_for_export(core_package, &selected, include_thumbnails, name_map)?;
+    let clone_keys = if include_thumbnails {
+        unique_selected_source_manifest_keys(core_package, selected_keys)
+    } else {
+        None
+    }.map(Ok).unwrap_or_else(|| {
+        expand_selection_for_export(core_package, &selected, include_thumbnails, name_map)
+    })?;
     let original_metadata = complete_source_preserved_metadata(core_package, &clone_keys)?;
     let restores_original_key = original_metadata.iter()
         .any(|(parts, _, _)| parts.resource_type == TYPE_KEY);
@@ -7964,6 +8004,76 @@ mod remove_selected_tests {
             p.resource_type == TYPE_IMAG_PNG && p.instance == image_id
         }));
         assert!(!found.iter().any(|p| p.instance == unrelated_id));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reversible_object_clone_rejects_unowned_images_and_restores_original_icon() {
+        let root = test_dir("manifest-owner-closure-extra-img");
+        let merged_path = root.join("MergedObjects.package");
+        let out_path = root.join("Slippers.package");
+        let obj = test_resource_key(TYPE_OBJD, 0, 0xA001);
+        let icon = test_resource_key(TYPE_ICON, 0, 0xB001);
+        let image = test_resource_key(TYPE_IMG, 0, 0xC001);
+        let other_obj = test_resource_key(TYPE_OBJD, 0, 0xA002);
+        let other_img = test_resource_key(TYPE_IMG, 0, 0xC002);
+        let ghost_img = test_resource_key(TYPE_IMG, 0, 0xDEAD);
+        let original_metadata = b"<PackageManifest name='Slippers'/>";
+        let source = MergeManifest {
+            version: 2,
+            packages: vec![
+                ManifestPackage {
+                    id: 1, name: "Slippers.package".to_string(), original_size: 1000,
+                    anchors: vec![ManifestAnchor { kind: "OBJD".to_string(), key: obj.clone() }],
+                    resources: [&obj, &icon, &image].into_iter()
+                        .map(|key| ManifestResource { key: key.clone() }).collect(),
+                    preserved_resources: vec![ManifestPreservedResource {
+                        key: test_resource_key(TYPE_PACKAGE_MANIFEST, 0, 0),
+                        data_base64: STANDARD.encode(original_metadata),
+                        unknown2: 0,
+                    }],
+                },
+                ManifestPackage {
+                    id: 2, name: "Other.package".to_string(), original_size: 100,
+                    anchors: vec![ManifestAnchor { kind: "OBJD".to_string(), key: other_obj.clone() }],
+                    resources: [&other_obj, &other_img].into_iter()
+                        .map(|key| ManifestResource { key: key.clone() }).collect(),
+                    preserved_resources: vec![],
+                },
+            ],
+        };
+        write_test_package(&merged_path, &[
+            (TYPE_OBJD, 0, 0xA001, b"slippers".to_vec()),
+            (TYPE_ICON, 0, 0xB001, b"real-source-icon".to_vec()),
+            (TYPE_IMG, 0, 0xC001, b"source-texture".to_vec()),
+            (TYPE_OBJD, 0, 0xA002, b"other-object".to_vec()),
+            (TYPE_IMG, 0, 0xC002, b"unrelated-texture".to_vec()),
+            (TYPE_IMG, 0, 0xDEAD, b"unclaimed-image".to_vec()),
+            (MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE, source.to_xml_bytes()),
+        ]);
+        let mmap = open_package(&merged_path.display().to_string()).unwrap();
+        let core = parse_package(&mmap).unwrap();
+        let selected = vec![obj.clone()];
+        let keys = unique_selected_source_manifest_keys(&core, &selected).unwrap();
+        assert_eq!(keys, HashSet::from([obj.clone(), icon.clone(), image.clone()]));
+        let writable = WritablePackage::load(&merged_path).unwrap();
+        let mut handle = File::open(&merged_path).unwrap();
+        create_clone_package_from_loaded(
+            &core, &BTreeMap::new(), &writable, &mut handle,
+            &selected, true, false, &out_path,
+        ).unwrap();
+        let output = WritablePackage::load(&out_path).unwrap();
+        let keys: HashSet<String> = output.entries.iter().map(key_string_from_writable).collect();
+        assert!(keys.contains(&obj));
+        assert!(keys.contains(&icon));
+        assert!(keys.contains(&image));
+        assert!(keys.contains(&test_resource_key(TYPE_PACKAGE_MANIFEST, 0, 0)));
+        assert!(!keys.contains(&other_obj));
+        assert!(!keys.contains(&other_img));
+        assert!(!keys.contains(&ghost_img));
+        let original_manifest = output.entries.iter()
+            .find(|e| e.type_id == TYPE_PACKAGE_MANIFEST).unwrap();
+        assert_eq!(output.get_uncompressed_data(original_manifest).unwrap(), original_metadata);
         let _ = std::fs::remove_dir_all(root);
     }
 
