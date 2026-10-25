@@ -53,6 +53,12 @@ jobs:
           cargo check --locked --workspace --tests
           if ($LASTEXITCODE -ne 0) { throw 'Workspace test check failed' }
 
+      - name: Test read-only per-TGI DBPF comparator
+        shell: pwsh
+        run: |
+          cargo test --locked -p sims3-pack --example compare_merges -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'DBPF comparison regression failed' }
+
       - name: Test pure binary TONE reader
         shell: pwsh
         run: |
