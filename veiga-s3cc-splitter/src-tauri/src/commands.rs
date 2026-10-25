@@ -5816,6 +5816,10 @@ pub fn restore_manifest_packages(
     }
 
     let source = WritablePackage::load(&payload.package_path).map_err(|e| e.to_string())?;
+    // A single source handle is reused across all restored assets; even a very
+    // large compressed resource is copied with bounded memory consumption.
+    let mut source_file = File::open(&payload.package_path)
+        .map_err(|e| format!("Falha ao abrir merged original: {e}"))?;
     let manifest = read_merge_manifest_from_writable(&source)?
         .ok_or_else(|| "Este package não contém um Veiga Merge Manifest.".to_string())?;
     let destination = PathBuf::from(&payload.destination_folder);
@@ -5926,9 +5930,10 @@ pub fn restore_manifest_packages(
                 )
             })?;
             let entry = &source.entries[entry_index];
-            let raw = source.get_raw_data(entry).map_err(|e| e.to_string())?;
-            let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
-            out_f.write_all(&raw).map_err(|e| e.to_string())?;
+            // Preserve stored DBPF bytes and compression flags verbatim.
+            let chunk_offset = copy_stored_merge_resource(
+                &mut source_file, entry, &mut out_f
+            )?;
             out_pkg.entries.push(WritableEntry {
                 type_id: entry.type_id,
                 group: entry.group,
@@ -9100,6 +9105,55 @@ mod remove_selected_tests {
         assert!(error.contains("4 bytes"));
         assert!(!destination.join("Conflict.package").exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn large_manifest_restore_preserves_exact_payloads_and_index_metadata() {
+        let root = test_dir("large-restore-streaming");
+        let source_a = root.join("LargeA.package");
+        let source_b = root.join("LargeB.package");
+        let merged_root = root.join("merged");
+        let restored_root = root.join("restored");
+        std::fs::create_dir_all(&merged_root).unwrap();
+        std::fs::create_dir_all(&restored_root).unwrap();
+        let mut big = vec![0u8; 12 * 1024 * 1024 + 13];
+        for (i, byte) in big.iter_mut().enumerate() {
+            *byte = (i % 251) as u8;
+        }
+        write_test_package(&source_a, &[
+            (TYPE_IMG, 0, 0xEE01, big.clone()),
+            (TYPE_OBJD, 0, 0xAA01, b"LargeObject".to_vec()),
+        ]);
+        write_test_package(&source_b, &[
+            (TYPE_OBJD, 0, 0xAA02, b"SecondObject".to_vec()),
+        ]);
+        let merged = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![source_a.display().to_string(), source_b.display().to_string()],
+            destination_folder: merged_root.display().to_string(),
+            output_name: "Merged.package".to_string(),
+            allow_overwrite: false,
+        }).unwrap();
+        let restored = restore_manifest_packages(RestoreManifestPayload {
+            package_path: merged.output_path,
+            destination_folder: restored_root.display().to_string(),
+        }).unwrap();
+        assert_eq!(restored.package_count, 2);
+        let original = WritablePackage::load(&source_a).unwrap();
+        let result = WritablePackage::load(restored_root.join("LargeA.package")).unwrap();
+        for entry in &original.entries {
+            let back = result.entries.iter().find(|r| {
+                (r.type_id, r.group, r.instance) == (entry.type_id, entry.group, entry.instance)
+            }).unwrap();
+            assert_eq!(back.file_size, entry.file_size);
+            assert_eq!(back.mem_size, entry.mem_size);
+            assert_eq!(back.compressed, entry.compressed);
+            assert_eq!(back.unknown2, entry.unknown2);
+            assert_eq!(
+                original.get_uncompressed_data(entry).unwrap(),
+                result.get_uncompressed_data(back).unwrap()
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
