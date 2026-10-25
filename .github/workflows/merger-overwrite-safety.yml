@@ -82,3 +82,5 @@ jobs:
           }) -join ';'
           cargo test --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml merger_requires_explicit_consent_and_preserves_replaced_output_in_a_backup --locked -- --nocapture
           if ($LASTEXITCODE -ne 0) { throw 'Merger safety regression failed' }
+          cargo test --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml replacing_merged_ --locked -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Merger rollback regression failed' }
