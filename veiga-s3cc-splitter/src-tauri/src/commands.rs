@@ -2825,29 +2825,48 @@ fn build_skintone_group_items(
     query: &str,
     name_map: &BTreeMap<u64, String>,
 ) -> Vec<ResourceItem> {
-    let mut groups: HashMap<String, Vec<&DBPFEntry<'_>>> = HashMap::new();
+    // A display name is NOT an ownership identifier: unrelated non-default
+    // skins in an s3pe merge can both be called "Default". The UI must not
+    // pre-combine their selection keys, even though TONE expansion itself
+    // resolves dependencies by exact TGI. Group only when a trusted reversible
+    // manifest uniquely proves both TONEs came from the SAME original source.
+    let manifest = read_merge_manifest_from_dbpf(package).ok().flatten();
+    let mut groups: BTreeMap<String, (String, Vec<&DBPFEntry<'_>>)> = BTreeMap::new();
 
-    for entry in package
-        .files
-        .iter()
-        .filter(|entry| entry.resource_type == TYPE_SKINTONE)
-    {
-        let base = tone_display_name(entry, name_map);
-        groups.entry(base).or_default().push(entry);
+    for entry in package.files.iter().filter(|entry| entry.resource_type == TYPE_SKINTONE) {
+        let tone_key = key_string(entry);
+        let display_name = tone_display_name(entry, name_map);
+        let owners: Vec<_> = manifest.as_ref().map(|manifest| {
+            manifest.packages.iter().enumerate()
+                .filter(|(_, source)| source.resources.iter().any(|r| r.key == tone_key))
+                .collect()
+        }).unwrap_or_default();
+
+        let (group_id, label) = if owners.len() == 1 {
+            let (source_index, source) = owners[0];
+            let name = source.name.trim();
+            (
+                format!("manifest-source:{source_index}"),
+                if name.is_empty() { display_name } else { name.to_string() },
+            )
+        } else {
+            // Missing or ambiguous provenance: do not merge separate skins by
+            // UI label, even when the labels and resource groups coincide.
+            (format!("individual-tone:{tone_key}"), display_name)
+        };
+        groups.entry(group_id).or_insert_with(|| (label, Vec::new())).1.push(entry);
     }
 
     let mut items = Vec::new();
-    for (base, mut entries) in groups {
-        entries.sort_by_key(|entry| entry.instance);
+    for (_, (label, mut entries)) in groups {
+        entries.sort_by_key(|entry| (entry.resource_group, entry.instance));
         let first = entries[0];
-        let keys: Vec<String> = entries.iter().map(|entry| key_string(entry)).collect();
-        let joined_key = keys.join("||");
+        let joined_key = entries.iter().map(|entry| key_string(entry))
+            .collect::<Vec<_>>().join("||");
         let details = if entries.len() > 1 {
             format!(
-                "{} arquivos TONE agrupados • Type 0x{:08X} • Group 0x{:08X}",
-                entries.len(),
-                first.resource_type,
-                first.resource_group
+                "{} TONEs da mesma origem confirmada • Type 0x{:08X} • Group 0x{:08X}",
+                entries.len(), first.resource_type, first.resource_group
             )
         } else {
             format!(
@@ -2856,7 +2875,7 @@ fn build_skintone_group_items(
             )
         };
         let item = ResourceItem {
-            label: base,
+            label,
             key: joined_key,
             kind: kind_from_type(first.resource_type).to_string(),
             details,
@@ -2867,7 +2886,8 @@ fn build_skintone_group_items(
         }
     }
 
-    items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase())
+        .then_with(|| a.key.cmp(&b.key)));
     items
 }
 
@@ -7917,6 +7937,13 @@ mod remove_selected_tests {
             assert!(!selected.iter().any(|x| x.instance == instance),
                 "Leaked unrelated skin resource {instance:016X}");
         }
+        let items = build_skintone_group_items(&package, "", &BTreeMap::new());
+        assert_eq!(items.len(), 2, "Distinct manifest sources must remain separate UI items");
+        let owned = items.iter().find(|item| item.key == format!("{first}||{second}"))
+            .expect("Two TONEs with the same proven original owner form one UI item");
+        assert_eq!(owned.label, "OneSkinTwoTones.package");
+        assert!(!owned.key.contains(&third), "An unrelated TONE must never enter that UI item");
+        assert!(items.iter().any(|item| item.key == third));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -7961,6 +7988,13 @@ mod remove_selected_tests {
         assert!(found.iter().any(|p| p.resource_type == TYPE_IMG && p.instance == 0x501));
         assert!(!found.iter().any(|p| p.instance == 0x202 || p.instance == 0x502),
             "Identically named but unrelated skin resources must never leak");
+        let items = build_skintone_group_items(&package, "", &name_map);
+        assert_eq!(items.len(), 2,
+            "The UI must not group unrelated non-default skins sharing the Default label");
+        assert!(items.iter().all(|item| !item.key.contains("||")),
+            "Each unowned TONE must remain a distinct selectable item");
+        assert!(items.iter().any(|item| item.key == test_resource_key(TYPE_SKINTONE, 0, 0x101)));
+        assert!(items.iter().any(|item| item.key == test_resource_key(TYPE_SKINTONE, 0, 0x202)));
         let _ = std::fs::remove_dir_all(root);
     }
 
