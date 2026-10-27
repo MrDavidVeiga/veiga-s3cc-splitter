@@ -198,6 +198,19 @@ impl Package {
                     data_end
                 );
             }
+            // Non-empty resource payloads cannot occupy the DBPF header or
+            // the index itself. A corrupt offset that points into index bytes
+            // must not be exported as if it were valid object/skin content.
+            // Different resources sharing a data region are not rejected.
+            if file_size != 0 && ((chunk_offset as u64) < DBPF_HEADER_SIZE
+                || ((chunk_offset as u64) < index_end
+                    && data_end > index_position as u64))
+            {
+                bail!(
+                    "Corrupted: resource {} overlaps the DBPF header or index",
+                    instance
+                );
+            }
 
             entries.push(ResourceEntry {
                 type_id,
@@ -525,6 +538,36 @@ mod tests {
         assert_eq!(package.entries.len(), 1);
         assert_eq!(package.get_raw_data(&package.entries[0]).unwrap(), b"DATA");
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn rejects_resource_overlapping_header_or_index_without_modifying_source() {
+        for (name, offset) in [("header", 92u32), ("index", 100u32)] {
+            let path = temp_path(&format!("bad-{name}-offset.package"));
+            let entries = [[0x00B2_D882, 0, 0, 0x1234, offset, 4, 4, 0]];
+            let fixture = shared_index_fixture(0, [0; 8], &entries, b"data");
+            std::fs::write(&path, &fixture).unwrap();
+            let error = Package::load(&path).unwrap_err();
+            assert!(error.to_string().contains("overlaps"), "{error}");
+            assert_eq!(std::fs::read(&path).unwrap(), fixture,
+                "Rejecting a corrupt package must not rewrite input bytes");
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn accepts_two_entries_sharing_identical_stored_region() {
+        let path = temp_path("shared-stored-chunk.package");
+        let entries = [
+            [0x00B2_D882, 0, 0, 0x101, 96, 4, 4, 0],
+            [0x00B2_D882, 0, 0, 0x102, 96, 4, 4, 0],
+        ];
+        std::fs::write(&path, shared_index_fixture(0, [0; 8], &entries, b"data")).unwrap();
+        let package = Package::load(&path).expect("Shared resource byte spans are allowed");
+        assert_eq!(package.entries.len(), 2);
+        assert_eq!(package.get_raw_data(&package.entries[0]).unwrap(), b"data");
+        assert_eq!(package.get_raw_data(&package.entries[1]).unwrap(), b"data");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

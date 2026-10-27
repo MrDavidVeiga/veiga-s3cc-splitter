@@ -31,9 +31,11 @@ pub fn uncompress_stream(mut input: &[u8], file_size: usize, mem_size: usize) ->
         bail!("resource indicates uncompressed size 0x{real_size:X} but index says 0x{mem_size:X}");
     }
 
-    let mut out = Vec::with_capacity(mem_size);
+    // The index can be corrupt and claim an enormous uncompressed size.
+    // Grow only for bytes actually decoded; never preallocate that claim.
+    let mut out = Vec::new();
     while !input.is_empty() {
-        dechunk(&mut input, &mut out).context("dechunk failed")?;
+        dechunk(&mut input, &mut out, mem_size).context("dechunk failed")?;
     }
     if out.len() != mem_size {
         bail!(
@@ -45,7 +47,7 @@ pub fn uncompress_stream(mut input: &[u8], file_size: usize, mem_size: usize) ->
     Ok(out)
 }
 
-fn dechunk(input: &mut &[u8], out: &mut Vec<u8>) -> Result<()> {
+fn dechunk(input: &mut &[u8], out: &mut Vec<u8>, declared_size: usize) -> Result<()> {
     if input.is_empty() {
         bail!("unexpected EOF (no packing byte)");
     }
@@ -101,6 +103,16 @@ fn dechunk(input: &mut &[u8], out: &mut Vec<u8>) -> Result<()> {
         datalen = (packing & 0x03) as usize;
     }
 
+    // A malformed RefPack command must not write past the decoded size
+    // declared by the DBPF index (including back-reference copies).
+    let next_size = out.len().checked_add(datalen)
+        .and_then(|len| len.checked_add(copy_size))
+        .ok_or_else(|| anyhow::anyhow!("Corrupted: RefPack output size overflow"))?;
+    if next_size > declared_size {
+        bail!("Corrupted: RefPack chunk would decode {} bytes, exceeding declared {} bytes",
+            next_size, declared_size);
+    }
+
     if datalen > 0 {
         if input.len() < datalen {
             bail!("unexpected EOF reading literal data");
@@ -142,5 +154,36 @@ fn copy_b(out: &mut Vec<u8>, offset: usize, mut len: usize) {
         let b = out[out.len() - offset];
         out.push(b);
         len -= 1;
+    }
+}
+
+#[cfg(test)]
+mod safety_tests {
+    use super::uncompress_stream;
+
+    #[test]
+    fn decodes_valid_refpack_literal_without_extra_output() {
+        let packed = [0x00, 0xFB, 0, 0, 3, 0xFF, b'c', b'a', b't'];
+        assert_eq!(uncompress_stream(&packed, packed.len(), 3).unwrap(), b"cat");
+    }
+
+    #[test]
+    fn rejects_literal_expansion_past_claimed_length() {
+        let packed = [0x00, 0xFB, 0, 0, 3, 0xE0, b'a', b'b', b'c', b'd'];
+        let error = uncompress_stream(&packed, packed.len(), 3).unwrap_err();
+        assert!(error.to_string().contains("dechunk failed"));
+        assert!(format!("{error:#}").contains("exceeding declared"));
+    }
+
+    #[test]
+    fn rejects_backreference_expansion_past_claimed_length() {
+        let packed = [0x00, 0xFB, 0, 0, 3, 0xFF, b'c', b'a', b't', 0x00, 0x00];
+        assert!(uncompress_stream(&packed, packed.len(), 3).is_err());
+    }
+
+    #[test]
+    fn rejects_truncated_payload_without_panicking() {
+        let packed = [0x00, 0xFB, 0, 0, 3, 0xFF, b'a'];
+        assert!(uncompress_stream(&packed, packed.len(), 3).is_err());
     }
 }
