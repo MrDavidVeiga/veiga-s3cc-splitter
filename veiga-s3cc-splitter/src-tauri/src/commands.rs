@@ -4265,6 +4265,27 @@ fn relation_ignored_resource(parts: ResourceKeyParts) -> bool {
         || is_manifest_tgi(parts.resource_type, parts.resource_group, parts.instance)
 }
 
+// Content-identical OBJD bytes do not prove two catalog entries represent the
+// same object. A wall-mounted frame and its floor-leaning variant can reuse the
+// same textures and metadata but still have different catalog TGIs. Only compare
+// their logical payloads as duplicates when the OBJD roots in the *selection*
+// have the same Type/Group/Instance identities. This is deliberately derived
+// from the selected anchors, not from shared dependencies discovered later.
+fn object_catalog_anchor_tgis(item: &ResourceItem) -> Option<Vec<(u32, u32, u64)>> {
+    let mut anchors: Vec<_> = item.key
+        .split("||")
+        .filter_map(|key| parse_key(key.trim()).ok())
+        .filter(|parts| parts.resource_type == TYPE_OBJD)
+        .map(|parts| (parts.resource_type, parts.resource_group, parts.instance))
+        .collect();
+    if anchors.is_empty() {
+        return None;
+    }
+    anchors.sort_unstable();
+    anchors.dedup();
+    Some(anchors)
+}
+
 fn relation_hash_pair(data: &[u8]) -> (u64, u64) {
     let mut a = 0xcbf29ce484222325u64;
     let mut b = 0x84222325cbf29ce4u64 ^ data.len() as u64;
@@ -4461,6 +4482,9 @@ fn build_resource_relations(
     let mut atom_cache: HashMap<usize, LogicalAtomKey> = HashMap::new();
     let mut profiles: Vec<Option<LogicalProfile>> = vec![None; items.len()];
     let mut relations: Vec<ResourceRelation> = vec![ResourceRelation::default(); items.len()];
+    // Root catalog TGIs are identity evidence, unlike shared IMG/THUM payloads.
+    // Keep legacy content comparison for non-object types unchanged.
+    let object_roots: Vec<_> = items.iter().map(object_catalog_anchor_tgis).collect();
 
     for (item_index, item) in items.iter().enumerate() {
         let Ok((profile, conflict_count)) = logical_profile_for_item(
@@ -4507,7 +4531,9 @@ fn build_resource_relations(
                     continue;
                 };
 
-                if logical_profiles_exactly_equal(package, seed_profile, candidate_profile) {
+                if object_roots[seed] == object_roots[candidate]
+                    && logical_profiles_exactly_equal(package, seed_profile, candidate_profile)
+                {
                     exact_group.push(candidate);
                 } else {
                     keep.push(candidate);
@@ -8706,6 +8732,110 @@ mod remove_selected_tests {
         assert!(relations.is_empty());
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn object_variants_with_identical_payloads_but_distinct_catalog_tgis_are_not_duplicates() {
+        // GreatDaySimmer regression: wall-hanging and leaning picture-frame
+        // variants can reuse exact bytes without being interchangeable CC.
+        let root = test_dir("object-wall-vs-floor-variant");
+        let path = root.join("Frames.package");
+        let wall = 0x1000_1111_2222_3333u64;
+        let leaning = 0x2000_1111_2222_3333u64;
+        let shared_payload = b"same-frame-metadata".to_vec();
+        write_test_package(&path, &[
+            (TYPE_OBJD, 0, wall, shared_payload.clone()),
+            (TYPE_OBJD, 0, leaning, shared_payload),
+            (TYPE_IMG, 0, 0x7777, vec![1u8; 64]),
+        ]);
+
+        for mode in ["object", "all"] {
+            let scan = scan_package_resources_inner(None, ScanPayload {
+                package_path: path.display().to_string(),
+                resource_type: mode.to_string(),
+                search: None,
+            }).unwrap();
+            let items: Vec<_> = scan.items.iter()
+                .filter(|item| item.key.starts_with(&format!("0x{TYPE_OBJD:08X}-")))
+                .collect();
+            assert_eq!(items.len(), 2, "Both frame variants should be selectable");
+            assert_ne!(items[0].key, items[1].key);
+            for item in items {
+                let relation = relation_for(&scan, &item.key);
+                assert_eq!(relation.duplicate_count, 0,
+                    "Distinct frame OBJD identities must not be flagged as duplicates");
+                assert_eq!(relation.tgi_conflict_count, 0);
+            }
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn manifest_owned_object_variants_with_same_bytes_are_not_duplicates() {
+        let root = test_dir("manifest-two-object-variants");
+        let path = root.join("MergedFrames.package");
+        let wall = test_resource_key(TYPE_OBJD, 0, 0xB001);
+        let leaning = test_resource_key(TYPE_OBJD, 0, 0xB002);
+        let img = test_resource_key(TYPE_IMG, 0, 0xC001);
+        let mk_source = |id, name: &str, objd: &String| ManifestPackage {
+            id,
+            name: name.to_string(),
+            original_size: 100,
+            anchors: vec![ManifestAnchor { kind: "OBJD".to_string(), key: objd.clone() }],
+            resources: [objd, &img].into_iter()
+                .map(|key| ManifestResource {key: key.clone()}).collect(),
+            preserved_resources: Vec::new(),
+        };
+        let manifest = MergeManifest {
+            version: 2,
+            packages: vec![
+                mk_source(1, "Frame_Wall.package", &wall),
+                mk_source(2, "Frame_Leaning.package", &leaning),
+            ],
+        };
+        write_test_package(&path, &[
+            (TYPE_OBJD, 0, 0xB001, b"same-catalog-payload".to_vec()),
+            (TYPE_OBJD, 0, 0xB002, b"same-catalog-payload".to_vec()),
+            (TYPE_IMG, 0, 0xC001, b"shared-texture".to_vec()),
+            (MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+        ]);
+        let scan = scan_package_resources_inner(None, ScanPayload {
+            package_path: path.display().to_string(),
+            resource_type: "all".to_string(),
+            search: None,
+        }).unwrap();
+        assert_eq!(scan.items.len(), 2);
+        assert!(scan.items.iter().any(|item| item.label == "Frame_Wall.package"));
+        assert!(scan.items.iter().any(|item| item.label == "Frame_Leaning.package"));
+        for item in &scan.items {
+            assert_eq!(relation_for(&scan, &item.key).duplicate_count, 0,
+                "A source manifest must not merge catalog variants by matching bytes");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn repeated_exact_objd_tgi_with_identical_bytes_is_still_reported() {
+        let root = test_dir("repeated-objd-same-tgi");
+        let path = root.join("RepeatedOBJD.package");
+        let tgi = 0x2222_3333_4444_5555u64;
+        write_test_package(&path, &[
+            (TYPE_OBJD, 0, tgi, b"identical".to_vec()),
+            (TYPE_OBJD, 0, tgi, b"identical".to_vec()),
+        ]);
+        let scan = scan_package_resources_inner(None, ScanPayload {
+            package_path: path.display().to_string(),
+            resource_type: "object".to_string(),
+            search: None,
+        }).unwrap();
+        assert_eq!(scan.items.len(), 2);
+        for item in &scan.items {
+            let relation = relation_for(&scan, &item.key);
+            assert_eq!(relation.duplicate_count, 2,
+                "Repeated identical catalog TGI must still flag genuine duplicates");
+            assert_eq!(relation.tgi_conflict_count, 0);
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
