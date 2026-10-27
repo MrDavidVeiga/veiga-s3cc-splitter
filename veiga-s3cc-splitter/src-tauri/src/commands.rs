@@ -13,6 +13,7 @@ use memmap::Mmap;
 use num_traits::ToPrimitive;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sims3_core::dbpf::filetypes::{resource_is_png, ResourceType};
 use sims3_core::dbpf::{DBPFEntry, DBPF};
 use sims3_pack::dbpf::{Package as WritablePackage, ResourceEntry as WritableEntry};
@@ -5379,6 +5380,12 @@ pub fn collect_merge_package_files(
 // Copy the original stored DBPF bytes using a bounded I/O buffer. This avoids
 // a large Vec allocation and reopening the original for every CC resource.
 // Compression flags and uncompressed size stay exactly as in the source index.
+// Hash decoded payloads rather than compressed storage: identical resources may
+// use different compression and are not divergent-TGI conflicts.
+fn sha256_hex(decoded: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(decoded))
+}
+
 fn copy_stored_merge_resource(
     source: &mut File,
     entry: &WritableEntry,
@@ -5556,10 +5563,12 @@ pub fn merge_packages_with_manifest(
                     // recolors and overrides can deliberately share TGI values.
                     let left = source_paths[previous_source].display();
                     let right = source_paths[source_index].display();
+                    let sha_a = sha256_hex(&previous_data);
+                    let sha_b = sha256_hex(&current_data);
                     return Err(format!(
                         "Conflito de TGI: {key} ({kind}, Type 0x{type_id:08X}, Group 0x{group:08X}, Instance 0x{instance:016X}).\n\
-                         Origem A: {left}\n  Tamanho descompactado: {size_a} bytes\n\
-                         Origem B: {right}\n  Tamanho descompactado: {size_b} bytes\n\
+                         Origem A: {left}\n  Tamanho descompactado: {size_a} bytes\n  SHA-256 descompactado: {sha_a}\n\
+                         Origem B: {right}\n  Tamanho descompactado: {size_b} bytes\n  SHA-256 descompactado: {sha_b}\n\
                          Os dois recursos têm a mesma identidade, mas conteúdos diferentes. O merge foi cancelado sem substituir nenhum original. Separe os CCs, ou decida qual override/recolor deve prevalecer antes de criar um merged.",
                         kind = kind_from_type(entry.type_id),
                         type_id = entry.type_id,
@@ -9641,6 +9650,46 @@ mod remove_selected_tests {
         ]);
         assert!(packages_have_same_tgi_payloads(&a, &b).unwrap());
         assert!(!packages_have_same_tgi_payloads(&a, &changed).unwrap());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn divergent_img_tgi_reports_both_sha256_hashes_and_preserves_inputs() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let root = test_dir("merger-tgi-sha256");
+        let source_a = root.join("Texture_A.package");
+        let source_b = root.join("Texture_B.package");
+        let destination = root.join("output");
+        std::fs::create_dir_all(&destination).unwrap();
+        let pixels_a = b"first-real-texture".to_vec();
+        let pixels_b = b"second-real-texture".to_vec();
+        let tgi = 0xABCDEFu64;
+        write_test_package(&source_a, &[(TYPE_IMG, 0, tgi, pixels_a.clone())]);
+        write_test_package(&source_b, &[(TYPE_IMG, 0, tgi, pixels_b.clone())]);
+        let bytes_a = std::fs::read(&source_a).unwrap();
+        let bytes_b = std::fs::read(&source_b).unwrap();
+
+        let error = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![source_a.display().to_string(), source_b.display().to_string()],
+            destination_folder: destination.display().to_string(),
+            output_name: "Merged.package".to_string(),
+            allow_overwrite: false,
+        }).unwrap_err();
+
+        assert!(error.contains("Conflito de TGI"), "{error}");
+        assert!(error.contains("Type 0x00B2D882"), "{error}");
+        assert!(error.contains("Instance 0x0000000000ABCDEF"), "{error}");
+        assert!(error.contains(&source_a.display().to_string()), "{error}");
+        assert!(error.contains(&source_b.display().to_string()), "{error}");
+        assert!(error.contains(&sha256_hex(&pixels_a)), "{error}");
+        assert!(error.contains(&sha256_hex(&pixels_b)), "{error}");
+        assert_eq!(error.matches("SHA-256 descompactado:").count(), 2);
+        assert_eq!(std::fs::read(&source_a).unwrap(), bytes_a);
+        assert_eq!(std::fs::read(&source_b).unwrap(), bytes_b);
+        assert!(!destination.join("Merged.package").exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
