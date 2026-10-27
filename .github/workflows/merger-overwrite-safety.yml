@@ -1,0 +1,87 @@
+name: GreatDaySimmer Merger overwrite safety
+on:
+  push:
+    branches:
+      - "fix/beta1-merger-safe-overwrite-20261022"
+      - "fix/beta2-merger-safe-overwrite-20261022"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify JS frontend and build
+        working-directory: veiga-s3cc-splitter
+        run: |
+          npm ci
+          node --test src/*.test.mjs
+          npm run build
+
+  merger-rust:
+    name: Rust Merger safety and DBPF validation
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: veiga-s3cc-splitter/src-tauri -> target
+      - name: Embed Common Controls v6 in Tauri unit-test executables
+        shell: pwsh
+        run: |
+          # Tauri embeds its Common Controls v6 manifest in the app exe, but
+          # cargo's library test harness is a separate exe without that manifest.
+          # Without it, a test harness importing TaskDialogIndirect from comctl32
+          # exits before any tests run (0xC0000139). Keep the tests enabled.
+          # Match the exact package selection of the command run below.
+          # Using --workspace here makes Cargo build a differently hashed exe,
+          # leaving the subsequently executed harness without the v6 manifest.
+          cargo test --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml --locked --no-run
+          if ($LASTEXITCODE -ne 0) { throw 'Rust tests did not compile' }
+
+          $sdkBin = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+          $mt = Get-ChildItem -LiteralPath $sdkBin -Filter mt.exe -File -Recurse |
+            Where-Object { $_.DirectoryName -match '\\x64$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $mt) { throw 'Windows SDK x64 mt.exe was not found' }
+
+          $manifestPath = Join-Path $env:RUNNER_TEMP 'splitter-rust-tests.manifest'
+          @'
+          <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+            <assemblyIdentity type="win32" name="Veiga.S3CC.Splitter.RustTests" version="1.0.0.0" processorArchitecture="*" />
+            <dependency>
+              <dependentAssembly>
+                <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*" />
+              </dependentAssembly>
+            </dependency>
+          </assembly>
+          '@ | Set-Content -LiteralPath $manifestPath -Encoding utf8
+
+          $testExecutables = @(Get-ChildItem -LiteralPath 'target\debug\deps' -Filter 'veiga_s3cc_splitter*.exe' -File)
+          if ($testExecutables.Count -eq 0) { throw 'Splitter Rust test executables were not found' }
+          foreach ($testExe in $testExecutables) {
+            Write-Host "Embedding Common Controls v6 manifest: $($testExe.Name)"
+            & $mt.FullName '-nologo' '-manifest' $manifestPath "-outputresource:$($testExe.FullName);#1"
+            if ($LASTEXITCODE -ne 0) { throw "Failed to embed manifest into $($testExe.FullName)" }
+          }
+
+      - name: Test confirmed replacement, rolling backups and source protection
+        shell: pwsh
+        run: |
+          # Keep the Service Fabric DLL directory out of the Tauri test loader.
+          $serviceFabric = 'C:\Program Files\Microsoft Service Fabric\bin\Fabric\Fabric.Code'
+          $env:PATH = (($env:PATH -split ';') | Where-Object {
+            $_.TrimEnd('\') -ine $serviceFabric.TrimEnd('\')
+          }) -join ';'
+          cargo test --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml merger_requires_explicit_consent_and_preserves_replaced_output_in_a_backup --locked -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Merger safety regression failed' }

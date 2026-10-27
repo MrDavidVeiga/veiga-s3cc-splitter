@@ -13,12 +13,14 @@ use memmap::Mmap;
 use num_traits::ToPrimitive;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sims3_core::dbpf::filetypes::{resource_is_png, ResourceType};
 use sims3_core::dbpf::{DBPFEntry, DBPF};
 use sims3_pack::dbpf::{Package as WritablePackage, ResourceEntry as WritableEntry};
 use tauri::{AppHandle, Emitter, Manager};
 use zip::write::FileOptions;
 
+use crate::tone_dependencies::parse_tone_references;
 use crate::merge_manifest::{
     is_manifest_tgi, read_from_dbpf as read_merge_manifest_from_dbpf,
     read_from_writable as read_merge_manifest_from_writable, ManifestAnchor, ManifestPackage,
@@ -231,6 +233,8 @@ pub struct MergePackagesPayload {
     pub package_paths: Vec<String>,
     pub destination_folder: String,
     pub output_name: String,
+    #[serde(default)]
+    pub allow_overwrite: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -243,9 +247,11 @@ pub struct CollectMergeSourcesPayload {
 #[serde(rename_all = "camelCase")]
 pub struct MergePackagesResult {
     pub output_path: String,
+    pub backup_path: Option<String>,
     pub package_count: usize,
     pub resource_count: usize,
     pub shared_resources: usize,
+    pub disk_free_bytes_warning: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -263,6 +269,7 @@ pub struct RestoreManifestResult {
     pub duplicate_count: usize,
     pub output_paths: Vec<String>,
     pub duplicate_paths: Vec<String>,
+    pub disk_free_bytes_warning: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -303,6 +310,7 @@ pub struct RemoveSelectionResult {
     pub removed_manifest_packages: usize,
     pub shared_resources_preserved: usize,
     pub selected_resources_preserved: usize,
+    pub disk_free_bytes_warning: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -2336,50 +2344,101 @@ fn tone_group_members(
     package: &DBPF<'_>,
     tone: ResourceKeyParts,
     name_map: &BTreeMap<u64, String>,
-) -> Vec<ResourceKeyParts> {
-    let Some(entry) = package.files.iter().find(|entry| {
+) -> Result<Vec<ResourceKeyParts>, String> {
+    let entry = package.files.iter().find(|entry| {
         entry.resource_type == tone.resource_type
             && entry.resource_group == tone.resource_group
             && entry.instance == tone.instance
-    }) else {
-        return Vec::new();
-    };
+    }).ok_or_else(|| format!("Selected TONE resource not found: {}", key_string_from_parts(tone)))?;
 
-    let base = tone_display_name(entry, name_map);
+    let _ = (entry, name_map);
     let mut found = HashSet::new();
 
-    let tone_instances: Vec<u64> = package
-        .files
-        .iter()
-        .filter(|candidate| candidate.resource_type == TYPE_SKINTONE)
-        .filter(|candidate| tone_display_name(candidate, name_map).eq_ignore_ascii_case(&base))
-        .map(|candidate| {
-            found.insert(key_string(candidate));
-            candidate.instance
-        })
-        .collect();
-
-    for candidate in package.files.iter().filter(|candidate| {
-        matches!(
-            candidate.resource_type,
-            TYPE_IMG | TYPE_IMAG_JPG | TYPE_IMAG_PNG | TYPE_IMAG_TGA
-        )
-    }) {
-        let same_instance = tone_instances.contains(&candidate.instance);
-        let same_name_family = name_map
-            .get(&candidate.instance)
-            .map(|name| {
-                let lowered = name.to_lowercase();
-                let lowered_base = base.to_lowercase();
-                normalized_tone_name(name).eq_ignore_ascii_case(&base)
-                    || lowered.starts_with(&lowered_base)
-            })
-            .unwrap_or(false);
-        if same_instance || same_name_family {
-            found.insert(key_string(candidate));
+    // Names are for display, never for associating skin resources. Different
+    // non-default CCs can share a display name (including "Default") in
+    // legacy s3pe merges. Without a reversible manifest, select ONLY the
+    // exact requested TONE, not every TONE with that name.
+    let selected_key = key_string_from_parts(tone);
+    let mut owner_tones = HashSet::from([selected_key.clone()]);
+    if let Some(manifest) = read_merge_manifest_from_dbpf(package)? {
+        let owners: Vec<_> = manifest.packages.iter()
+            .filter(|source| source.resources.iter().any(|r| r.key == selected_key))
+            .collect();
+        if owners.len() == 1 {
+            for resource in &owners[0].resources {
+                if let Ok(parts) = parse_key(&resource.key) {
+                    if parts.resource_type == TYPE_SKINTONE
+                        && package.entry_index(parts.resource_type, parts.resource_group, parts.instance).is_some()
+                    {
+                        owner_tones.insert(resource.key.clone());
+                    }
+                }
+            }
         }
     }
 
+    // Resolve actual Type/Group/Instance references recorded by each proven
+    // owner TONE. The source name or skin classification cannot establish
+    // texture ownership, especially inside third-party s3pe merged packages.
+    for candidate in package.files.iter().filter(|candidate| {
+        candidate.resource_type == TYPE_SKINTONE
+            && owner_tones.contains(&key_string(candidate))
+    }) {
+        found.insert(key_string(candidate));
+        let references = parse_tone_references(candidate.data()).map_err(|error| {
+            format!(
+                "Cannot safely export skin TONE 0x{:016X}: {error}",
+                candidate.instance
+            )
+        })?;
+
+        // A TONE can refer to base-game textures not present in this DBPF.
+        // However, when ALL its referenced _IMG resources are absent, we cannot
+        // certify an independent package, as reproduced by GreatDaySimmer's
+        // s3pe-merged skin exports (some contain only one TONE).
+        let referenced_image_count = references.iter()
+            .filter(|reference| reference.resource_type == TYPE_IMG)
+            .count();
+        let mut matching_image_count = 0usize;
+        for reference in &references {
+            if let Some(index) = package.entry_index(
+                reference.resource_type,
+                reference.resource_group,
+                reference.instance,
+            ) {
+                found.insert(key_string(&package.files[index]));
+                if reference.resource_type == TYPE_IMG {
+                    matching_image_count += 1;
+                }
+            }
+        }
+        if referenced_image_count > 0 && matching_image_count == 0 {
+            return Err(format!(
+                "Skin TONE 0x{:016X} references {} _IMG entries, but none exist in the opened package. Cannot safely export an independent skin; source may rely on external resources or may already be incomplete.",
+                candidate.instance, referenced_image_count
+            ));
+        }
+
+        // Ramp PNGs share an instance with a referenced _IMG, not necessarily
+        // the FIRST reference in the TONE block. Match only textures actually
+        // present in this DBPF, never by guessed name or by TONE instance.
+        let present_img_instances: HashSet<u64> = references.iter()
+            .filter(|reference| reference.resource_type == TYPE_IMG)
+            .filter(|reference| package.entry_index(
+                reference.resource_type, reference.resource_group, reference.instance
+            ).is_some())
+            .map(|reference| reference.instance)
+            .collect();
+        for image in package.files.iter().filter(|image| {
+            image.resource_type == TYPE_IMAG_PNG
+                && present_img_instances.contains(&image.instance)
+        }) {
+            found.insert(key_string(image));
+        }
+    }
+
+    // KEY/NMAP is package-level metadata. Export code filters it to the
+    // selected resource instances; do not infer a skin's type from its name.
     for candidate in package
         .files
         .iter()
@@ -2390,30 +2449,30 @@ fn tone_group_members(
 
     let mut parts = Vec::new();
     for key in found {
-        if let Ok(p) = parse_key(&key) {
-            parts.push(p);
+        if let Ok(part) = parse_key(&key) {
+            parts.push(part);
         }
     }
-    parts
+    Ok(parts)
 }
 
 fn expand_selected_for_tones(
     package: &DBPF<'_>,
     selected: &HashSet<String>,
     name_map: &BTreeMap<u64, String>,
-) -> HashSet<String> {
+) -> Result<HashSet<String>, String> {
     let mut expanded = expand_compound_keys(selected);
     let base_keys: Vec<String> = expanded.iter().cloned().collect();
     for key in base_keys {
         if let Ok(parts) = parse_key(&key) {
             if parts.resource_type == TYPE_SKINTONE {
-                for dep in tone_group_members(package, parts, name_map) {
+                for dep in tone_group_members(package, parts, name_map)? {
                     expanded.insert(key_string_from_parts(dep));
                 }
             }
         }
     }
-    expanded
+    Ok(expanded)
 }
 
 fn package_resource_names(package: &DBPF<'_>) -> BTreeMap<u64, String> {
@@ -2767,29 +2826,48 @@ fn build_skintone_group_items(
     query: &str,
     name_map: &BTreeMap<u64, String>,
 ) -> Vec<ResourceItem> {
-    let mut groups: HashMap<String, Vec<&DBPFEntry<'_>>> = HashMap::new();
+    // A display name is NOT an ownership identifier: unrelated non-default
+    // skins in an s3pe merge can both be called "Default". The UI must not
+    // pre-combine their selection keys, even though TONE expansion itself
+    // resolves dependencies by exact TGI. Group only when a trusted reversible
+    // manifest uniquely proves both TONEs came from the SAME original source.
+    let manifest = read_merge_manifest_from_dbpf(package).ok().flatten();
+    let mut groups: BTreeMap<String, (String, Vec<&DBPFEntry<'_>>)> = BTreeMap::new();
 
-    for entry in package
-        .files
-        .iter()
-        .filter(|entry| entry.resource_type == TYPE_SKINTONE)
-    {
-        let base = tone_display_name(entry, name_map);
-        groups.entry(base).or_default().push(entry);
+    for entry in package.files.iter().filter(|entry| entry.resource_type == TYPE_SKINTONE) {
+        let tone_key = key_string(entry);
+        let display_name = tone_display_name(entry, name_map);
+        let owners: Vec<_> = manifest.as_ref().map(|manifest| {
+            manifest.packages.iter().enumerate()
+                .filter(|(_, source)| source.resources.iter().any(|r| r.key == tone_key))
+                .collect()
+        }).unwrap_or_default();
+
+        let (group_id, label) = if owners.len() == 1 {
+            let (source_index, source) = owners[0];
+            let name = source.name.trim();
+            (
+                format!("manifest-source:{source_index}"),
+                if name.is_empty() { display_name } else { name.to_string() },
+            )
+        } else {
+            // Missing or ambiguous provenance: do not merge separate skins by
+            // UI label, even when the labels and resource groups coincide.
+            (format!("individual-tone:{tone_key}"), display_name)
+        };
+        groups.entry(group_id).or_insert_with(|| (label, Vec::new())).1.push(entry);
     }
 
     let mut items = Vec::new();
-    for (base, mut entries) in groups {
-        entries.sort_by_key(|entry| entry.instance);
+    for (_, (label, mut entries)) in groups {
+        entries.sort_by_key(|entry| (entry.resource_group, entry.instance));
         let first = entries[0];
-        let keys: Vec<String> = entries.iter().map(|entry| key_string(entry)).collect();
-        let joined_key = keys.join("||");
+        let joined_key = entries.iter().map(|entry| key_string(entry))
+            .collect::<Vec<_>>().join("||");
         let details = if entries.len() > 1 {
             format!(
-                "{} arquivos TONE agrupados • Type 0x{:08X} • Group 0x{:08X}",
-                entries.len(),
-                first.resource_type,
-                first.resource_group
+                "{} TONEs da mesma origem confirmada • Type 0x{:08X} • Group 0x{:08X}",
+                entries.len(), first.resource_type, first.resource_group
             )
         } else {
             format!(
@@ -2798,7 +2876,7 @@ fn build_skintone_group_items(
             )
         };
         let item = ResourceItem {
-            label: base,
+            label,
             key: joined_key,
             kind: kind_from_type(first.resource_type).to_string(),
             details,
@@ -2809,7 +2887,8 @@ fn build_skintone_group_items(
         }
     }
 
-    items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase())
+        .then_with(|| a.key.cmp(&b.key)));
     items
 }
 
@@ -2857,7 +2936,22 @@ fn manifest_icon_ref(package: &DBPF<'_>, xml: ResourceKeyParts) -> Option<Resour
         .then_some(parts)
 }
 
+// These are embedded DBPF thumbnail/ICON resource types, not images generated
+// by the game's separate thumbnail-cache packages.
+fn is_object_thumbnail_type(resource_type: u32) -> bool {
+    matches!(
+        resource_type,
+        TYPE_ICON | TYPE_THUM_SMALL | TYPE_THUM_MED | TYPE_THUM_LARGE
+            | 0x0580A2B4 | 0x0580A2B5 | 0x0580A2B6
+    )
+}
+
 fn object_unique_icon_ref(package: &DBPF<'_>) -> Option<ResourceKeyParts> {
+    // One lone ICON in a *multi-object* s3pe merge is not evidence of which
+    // object owns it. Never copy it to every split object.
+    if package.entries_for_type(TYPE_OBJD).len() != 1 {
+        return None;
+    }
     let mut icons = package
         .files
         .iter()
@@ -3389,6 +3483,17 @@ fn same_instance_companions(
             wanted.extend([
                 TYPE_VPXY, TYPE_XML, TYPE_TXTC, TYPE_RSLT, TYPE_FTPT, TYPE_LITE, TYPE_RIG,
             ]);
+            // An ICON with the *same exact Instance* as a selected object is
+            // part of that object's DBPF identity. Preserve it even when
+            // optional thumbnails are off. Other thumbnail variants remain
+            // controlled by the optional preview switch for legacy merges.
+            wanted.insert(TYPE_ICON);
+            if include_thumbnails {
+                wanted.extend([
+                    TYPE_THUM_SMALL, TYPE_THUM_MED, TYPE_THUM_LARGE,
+                    0x0580A2B4, 0x0580A2B5, 0x0580A2B6,
+                ]);
+            }
         }
         _ => {}
     }
@@ -3980,11 +4085,15 @@ fn object_group_members(package: &DBPF<'_>, objd: ResourceKeyParts) -> Vec<Resou
         });
     }
 
-    // Keep package/global manifest XML when present; pull ICON only if that manifest points to it.
+    // An instance-zero XML is package-global, not necessarily owned by a
+    // selected object in a legacy s3pe merge. Including it for every object
+    // can pull an unrelated ICON via <thumbnail>. Only a single-object DBPF
+    // has an unambiguous object root for this legacy heuristic.
+    let single_object = package.entries_for_type(TYPE_OBJD).len() == 1;
     for entry in package
         .files
         .iter()
-        .filter(|e| e.resource_type == TYPE_XML && e.instance == 0)
+        .filter(|e| e.resource_type == TYPE_XML && e.instance == 0 && single_object)
     {
         let parts = ResourceKeyParts {
             resource_type: entry.resource_type,
@@ -3997,7 +4106,7 @@ fn object_group_members(package: &DBPF<'_>, objd: ResourceKeyParts) -> Vec<Resou
     let xml_parts: Vec<ResourceKeyParts> = found
         .iter()
         .copied()
-        .filter(|p| p.resource_type == TYPE_XML)
+        .filter(|p| p.resource_type == TYPE_XML && (p.instance != 0 || single_object))
         .collect();
     let mut found_icon = false;
     for xml in xml_parts {
@@ -4049,7 +4158,7 @@ fn collect_clone_keys(
                 }
             }
             TYPE_SKINTONE => {
-                for part in tone_group_members(package, parts, name_map) {
+                for part in tone_group_members(package, parts, name_map)? {
                     enqueue_key(package, include_thumbnails, &mut resolved, &mut queue, part);
                 }
             }
@@ -4066,7 +4175,7 @@ fn collect_clone_keys(
         let discovered = match current.resource_type {
             TYPE_CASP => casp_direct_refs(package, current),
             TYPE_FACE => face_group_members(package, current, name_map),
-            TYPE_SKINTONE => tone_group_members(package, current, name_map),
+            TYPE_SKINTONE => tone_group_members(package, current, name_map)?,
             TYPE_OBJD => object_group_members(package, current),
             TYPE_OBJK => objk_direct_refs(package, current),
             TYPE_VPXY => vpxy_direct_refs(package, current),
@@ -4096,10 +4205,50 @@ fn expand_selection_for_export(
     include_thumbnails: bool,
     name_map: &BTreeMap<u64, String>,
 ) -> Result<HashSet<String>, String> {
-    let mut selected = expand_selected_for_tones(package, base_keys, name_map);
+    let mut selected = expand_selected_for_tones(package, base_keys, name_map)?;
     selected = expand_selected_for_faces(package, &selected, name_map);
     let extra = collect_clone_keys(package, &selected, include_thumbnails, name_map)?;
     selected.extend(extra);
+
+    // A merged DBPF can contain icons for several independent objects.
+    // Their instances need not match OBJD, and copying an arbitrary icon
+    // would silently attach another object's preview. On Veiga merges, the
+    // embedded per-source manifest provides the exact ownership relationship.
+    let requested_objects: HashSet<String> = selected
+        .iter()
+        .filter(|key| {
+            parse_key(key)
+                .map(|parts| parts.resource_type == TYPE_OBJD)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect();
+    if !requested_objects.is_empty() {
+        if let Some(manifest) = read_valid_merge_manifest_from_dbpf(package) {
+            // Attribute thumbnail resources to a source only if the chosen
+            // OBJD anchor has exactly one manifest owner. A source can own
+            // multiple ICONs/THUMs: preserve every one, without copying
+            // thumbnails belonging to other source packages.
+            for object_key in &requested_objects {
+                let mut owners = manifest.packages.iter().filter(|source| {
+                    source.anchors.iter().any(|anchor| {
+                        anchor.kind.eq_ignore_ascii_case("OBJD") && anchor.key == *object_key
+                    })
+                });
+                let Some(source) = owners.next() else { continue };
+                if owners.next().is_some() { continue }
+                for resource in &source.resources {
+                    if let Ok(parts) = parse_key(&resource.key) {
+                        if is_object_thumbnail_type(parts.resource_type)
+                            && matching_entry_index(package, parts).is_some()
+                        {
+                            selected.insert(resource.key.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let key_names = raw_package_key_names(package);
     let needs_key = selected.iter().any(|key| {
@@ -4144,6 +4293,27 @@ fn relation_ignored_resource(parts: ResourceKeyParts) -> bool {
     parts.resource_type == TYPE_KEY
         || parts.resource_type == TYPE_PACKAGE_MANIFEST
         || is_manifest_tgi(parts.resource_type, parts.resource_group, parts.instance)
+}
+
+// Content-identical OBJD bytes do not prove two catalog entries represent the
+// same object. A wall-mounted frame and its floor-leaning variant can reuse the
+// same textures and metadata but still have different catalog TGIs. Only compare
+// their logical payloads as duplicates when the OBJD roots in the *selection*
+// have the same Type/Group/Instance identities. This is deliberately derived
+// from the selected anchors, not from shared dependencies discovered later.
+fn object_catalog_anchor_tgis(item: &ResourceItem) -> Option<Vec<(u32, u32, u64)>> {
+    let mut anchors: Vec<_> = item.key
+        .split("||")
+        .filter_map(|key| parse_key(key.trim()).ok())
+        .filter(|parts| parts.resource_type == TYPE_OBJD)
+        .map(|parts| (parts.resource_type, parts.resource_group, parts.instance))
+        .collect();
+    if anchors.is_empty() {
+        return None;
+    }
+    anchors.sort_unstable();
+    anchors.dedup();
+    Some(anchors)
 }
 
 fn relation_hash_pair(data: &[u8]) -> (u64, u64) {
@@ -4342,6 +4512,9 @@ fn build_resource_relations(
     let mut atom_cache: HashMap<usize, LogicalAtomKey> = HashMap::new();
     let mut profiles: Vec<Option<LogicalProfile>> = vec![None; items.len()];
     let mut relations: Vec<ResourceRelation> = vec![ResourceRelation::default(); items.len()];
+    // Root catalog TGIs are identity evidence, unlike shared IMG/THUM payloads.
+    // Keep legacy content comparison for non-object types unchanged.
+    let object_roots: Vec<_> = items.iter().map(object_catalog_anchor_tgis).collect();
 
     for (item_index, item) in items.iter().enumerate() {
         let Ok((profile, conflict_count)) = logical_profile_for_item(
@@ -4388,7 +4561,9 @@ fn build_resource_relations(
                     continue;
                 };
 
-                if logical_profiles_exactly_equal(package, seed_profile, candidate_profile) {
+                if object_roots[seed] == object_roots[candidate]
+                    && logical_profiles_exactly_equal(package, seed_profile, candidate_profile)
+                {
                     exact_group.push(candidate);
                 } else {
                     keep.push(candidate);
@@ -4740,49 +4915,78 @@ fn files_are_identical(
 }
 
 
-fn package_tgi_payload_signature(
-    path: &Path,
-) -> Result<Vec<(u32, u32, u64, Vec<u8>)>, String> {
-    let package = WritablePackage::load(path)
-        .map_err(|e| format!("Não foi possível analisar {} para detectar duplicados: {e}", path.display()))?;
-    let mut signature = Vec::new();
-
-    for entry in &package.entries {
+// Compare only one TGI group at a time instead of retaining every
+// decompressed resource from both packages in RAM. This matters for objects
+// and skins containing hundreds of MiB of texture payloads.
+fn package_tgi_entry_groups(
+    package: &WritablePackage,
+) -> BTreeMap<(u32, u32, u64), Vec<usize>> {
+    let mut groups: BTreeMap<(u32, u32, u64), Vec<usize>> = BTreeMap::new();
+    for (index, entry) in package.entries.iter().enumerate() {
         let parts = ResourceKeyParts {
             resource_type: entry.type_id,
             resource_group: entry.group,
             instance: entry.instance,
         };
-        if relation_ignored_resource(parts) {
-            continue;
+        if !relation_ignored_resource(parts) {
+            groups
+                .entry((entry.type_id, entry.group, entry.instance))
+                .or_default()
+                .push(index);
         }
-
-        let data = package.get_uncompressed_data(entry).map_err(|e| {
-            format!(
-                "Não foi possível ler o recurso {} de {} durante a detecção de duplicados: {e}",
-                key_string_from_writable(entry),
-                path.display()
-            )
-        })?;
-        signature.push((entry.type_id, entry.group, entry.instance, data));
     }
-
-    signature.sort();
-    Ok(signature)
+    groups
 }
 
 fn packages_have_same_tgi_payloads(left: &Path, right: &Path) -> Result<bool, String> {
-    let left_signature = package_tgi_payload_signature(left)?;
-    if left_signature.is_empty() {
+    let a = WritablePackage::load(left).map_err(|e| {
+        format!("Não foi possível analisar {}: {e}", left.display())
+    })?;
+    let b = WritablePackage::load(right).map_err(|e| {
+        format!("Não foi possível analisar {}: {e}", right.display())
+    })?;
+    let a_groups = package_tgi_entry_groups(&a);
+    let b_groups = package_tgi_entry_groups(&b);
+    if a_groups.is_empty() || a_groups.len() != b_groups.len() {
         return Ok(false);
     }
 
-    let right_signature = package_tgi_payload_signature(right)?;
-    if right_signature.is_empty() {
-        return Ok(false);
+    for (key, a_indices) in &a_groups {
+        let Some(b_indices) = b_groups.get(key) else {
+            return Ok(false);
+        };
+        if a_indices.len() != b_indices.len() {
+            return Ok(false);
+        }
+        // The typical case has just one resource per TGI. Comparing it
+        // independently avoids storing the contents of unrelated resources.
+        if a_indices.len() == 1 {
+            let lhs = a.get_uncompressed_data(&a.entries[a_indices[0]])
+                .map_err(|e| format!("Falha ao ler {} de {}: {e}", a.entries[a_indices[0]].key_string(), left.display()))?;
+            let rhs = b.get_uncompressed_data(&b.entries[b_indices[0]])
+                .map_err(|e| format!("Falha ao ler {} de {}: {e}", b.entries[b_indices[0]].key_string(), right.display()))?;
+            if lhs != rhs {
+                return Ok(false);
+            }
+        } else {
+            // Malformed/legacy DBPFs can contain repeated TGIs. Keep the
+            // previous multiset semantics without loading other TGI groups.
+            let mut lhs = a_indices.iter()
+                .map(|&i| a.get_uncompressed_data(&a.entries[i])
+                    .map_err(|e| format!("Falha ao ler recurso duplicado de {}: {e}", left.display())))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut rhs = b_indices.iter()
+                .map(|&i| b.get_uncompressed_data(&b.entries[i])
+                    .map_err(|e| format!("Falha ao ler recurso duplicado de {}: {e}", right.display())))
+                .collect::<Result<Vec<_>, _>>()?;
+            lhs.sort();
+            rhs.sort();
+            if lhs != rhs {
+                return Ok(false);
+            }
+        }
     }
-
-    Ok(left_signature == right_signature)
+    Ok(true)
 }
 
 fn existing_package_paths(destination: &Path) -> Result<Vec<PathBuf>, String> {
@@ -4829,7 +5033,7 @@ fn unique_restored_output_path(preferred: &Path) -> PathBuf {
 
 fn unique_restore_temp_path(destination: &Path, package_id: u32) -> PathBuf {
     let base = destination.join(format!(
-        ".veiga-unmerge-{}-{package_id}.package",
+        ".veiga-unmerge-{}-{package_id}.s3cctmp",
         std::process::id()
     ));
     if !base.exists() {
@@ -4838,7 +5042,7 @@ fn unique_restore_temp_path(destination: &Path, package_id: u32) -> PathBuf {
 
     for suffix in 2usize.. {
         let candidate = destination.join(format!(
-            ".veiga-unmerge-{}-{package_id}-{suffix}.package",
+            ".veiga-unmerge-{}-{package_id}-{suffix}.s3cctmp",
             std::process::id()
         ));
         if !candidate.exists() {
@@ -4847,6 +5051,23 @@ fn unique_restore_temp_path(destination: &Path, package_id: u32) -> PathBuf {
     }
 
     unreachable!()
+}
+
+fn unique_remove_temp_path(destination: &Path, stem: &str) -> Result<PathBuf, String> {
+    let stamp = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("Relógio inválido ao criar temporário: {e}"))?
+        .as_nanos();
+    for counter in 0..128u32 {
+        let path = destination.join(format!(
+            ".{stem}.remove-temp-{}-{stamp}-{counter}.s3cctmp",
+            std::process::id()
+        ));
+        if !path.exists() {
+            return Ok(path);
+        }
+    }
+    Err("Não foi possível encontrar um nome temporário de remoção que não exista.".to_string())
 }
 
 fn merger_anchor_kind(resource_type: u32) -> Option<&'static str> {
@@ -4875,6 +5096,34 @@ fn normalized_merged_output_name(name: &str) -> String {
     safe
 }
 
+// DBPF uses 32-bit offsets and a 31-bit stored size (the upper bit is
+// reserved by the resource index). Reject large outputs instead of writing
+// a truncated offset or wrapping the index header silently.
+fn checked_dbpf_resource_offset(file: &mut File, size: u64) -> Result<u32, String> {
+    if size > 0x7FFF_FFFF {
+        return Err("Recurso excede o limite DBPF de 31 bits; operação cancelada.".to_string());
+    }
+    let offset = file.stream_position().map_err(|e| e.to_string())?;
+    let end = offset.checked_add(size)
+        .ok_or_else(|| "Overflow no deslocamento do recurso DBPF.".to_string())?;
+    if end > u32::MAX as u64 {
+        return Err("Package excederia o limite DBPF de 32 bits; nenhuma substituição foi realizada.".to_string());
+    }
+    u32::try_from(offset).map_err(|_| "Offset DBPF de 32 bits inválido.".to_string())
+}
+
+fn checked_dbpf_index_position(package: &WritablePackage, file: &mut File) -> Result<u32, String> {
+    let position = file.stream_position().map_err(|e| e.to_string())?;
+    let count = u64::try_from(package.entries.len())
+        .map_err(|_| "Índice DBPF contém entradas demais.".to_string())?;
+    let index_size = count.checked_mul(32).and_then(|n| n.checked_add(4))
+        .ok_or_else(|| "Overflow ao calcular índice DBPF.".to_string())?;
+    if position.checked_add(index_size).map(|x| x > u32::MAX as u64).unwrap_or(true) {
+        return Err("Índice excederia o limite DBPF de 32 bits; resultado temporário recusado.".to_string());
+    }
+    u32::try_from(position).map_err(|_| "Posição do índice DBPF inválida.".to_string())
+}
+
 fn append_uncompressed_resource(
     out_pkg: &mut WritablePackage,
     out_f: &mut File,
@@ -4884,7 +5133,7 @@ fn append_uncompressed_resource(
     data: &[u8],
     unknown2: u16,
 ) -> Result<(), String> {
-    let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+    let chunk_offset = checked_dbpf_resource_offset(out_f, data.len() as u64)?;
     out_f.write_all(data).map_err(|e| e.to_string())?;
     out_pkg.entries.push(WritableEntry {
         type_id,
@@ -4899,6 +5148,57 @@ fn append_uncompressed_resource(
         unknown2,
     });
     Ok(())
+}
+
+const MIN_RECOMMENDED_FREE_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+const DBPF_WRITE_HEADROOM_BYTES: u64 = 256 * 1024 * 1024;
+
+#[cfg(windows)]
+fn destination_free_bytes(destination: &Path) -> Result<Option<u64>, String> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetDiskFreeSpaceExW(
+            directory: *const u16,
+            free_available: *mut u64,
+            total_bytes: *mut u64,
+            total_free: *mut u64,
+        ) -> i32;
+    }
+    let name: Vec<u16> = destination.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let mut free = 0u64;
+    let result = unsafe {
+        GetDiskFreeSpaceExW(name.as_ptr(), &mut free, std::ptr::null_mut(), std::ptr::null_mut())
+    };
+    if result == 0 {
+        return Err(format!(
+            "Não foi possível verificar espaço disponível em {}: {}",
+            destination.display(), std::io::Error::last_os_error()
+        ));
+    }
+    Ok(Some(free))
+}
+
+#[cfg(not(windows))]
+fn destination_free_bytes(_destination: &Path) -> Result<Option<u64>, String> {
+    Ok(None)
+}
+
+fn evaluate_disk_budget(available: u64, needed: u64) -> Result<Option<u64>, String> {
+    if available < needed {
+        return Err(format!(
+            "Espaço livre insuficiente: {} MiB disponíveis; cerca de {} MiB necessários para temporário, backup e margem de segurança. Libere espaço antes de continuar. Nenhum original foi substituído.",
+            available / (1024 * 1024), needed / (1024 * 1024)
+        ));
+    }
+    Ok((available < MIN_RECOMMENDED_FREE_BYTES).then_some(available))
+}
+
+fn preflight_destination_space(destination: &Path, needed: u64) -> Result<Option<u64>, String> {
+    match destination_free_bytes(destination)? {
+        Some(free) => evaluate_disk_budget(free, needed),
+        None => Ok(None),
+    }
 }
 
 fn is_per_source_metadata_type(resource_type: u32) -> bool {
@@ -5133,6 +5433,75 @@ pub fn collect_merge_package_files(
     Ok(result)
 }
 
+// Copy the original stored DBPF bytes using a bounded I/O buffer. This avoids
+// a large Vec allocation and reopening the original for every CC resource.
+// Compression flags and uncompressed size stay exactly as in the source index.
+// Hash decoded payloads rather than compressed storage: identical resources may
+// use different compression and are not divergent-TGI conflicts.
+fn sha256_hex(decoded: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(decoded))
+}
+
+fn copy_stored_merge_resource(
+    source: &mut File,
+    entry: &WritableEntry,
+    output: &mut File,
+) -> Result<u32, String> {
+    let position = output.stream_position()
+        .map_err(|e| format!("Falha ao consultar a posição do merged: {e}"))?;
+    let offset = u32::try_from(position)
+        .map_err(|_| "Merged maior que o limite DBPF de offsets de 32 bits; operação cancelada.".to_string())?;
+    let resource_end = position.checked_add(entry.file_size as u64)
+        .ok_or_else(|| "Overflow ao calcular tamanho do merged DBPF.".to_string())?;
+    if resource_end > u32::MAX as u64 {
+        return Err("O merged ultrapassaria o limite de offsets de 32 bits do formato DBPF; nenhuma substituição foi realizada.".to_string());
+    }
+    source.seek(SeekFrom::Start(entry.chunk_offset as u64))
+        .map_err(|e| format!("Falha ao acessar o recurso original: {e}"))?;
+    let bytes = std::io::copy(&mut source.take(entry.file_size as u64), output)
+        .map_err(|e| format!("Falha ao copiar recurso original: {e}"))?;
+    if bytes != entry.file_size as u64 {
+        return Err(format!(
+            "Recurso original truncado: esperados {} bytes, lidos {bytes}. O merged temporário não será instalado.",
+            entry.file_size
+        ));
+    }
+    Ok(offset)
+}
+
+// Automatically discard a failed, partially written merged. Its temporary
+// extension is NOT .package, so folder scans cannot accidentally import it.
+struct MergeTempCleanup(PathBuf);
+
+impl MergeTempCleanup {
+    fn disarm(&mut self) {
+        self.0 = PathBuf::new();
+    }
+}
+
+impl Drop for MergeTempCleanup {
+    fn drop(&mut self) {
+        if !self.0.as_os_str().is_empty() {
+            let _ = remove_file(&self.0);
+        }
+    }
+}
+
+fn reserve_owned_temp(path: &Path) -> Result<MergeTempCleanup, String> {
+    // Unlike a check-then-create, create_new never truncates a file that
+    // another process created at this path before we reserved it.
+    let reservation = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| format!(
+            "O arquivo temporário já existe ou não pôde ser reservado sem substituir dados: {} ({e})",
+            path.display()
+        ))?;
+    drop(reservation);
+    Ok(MergeTempCleanup(path.to_path_buf()))
+}
+
 #[tauri::command]
 pub fn merge_packages_with_manifest(
     payload: MergePackagesPayload,
@@ -5148,20 +5517,46 @@ pub fn merge_packages_with_manifest(
     create_dir_all(&destination).map_err(|e| e.to_string())?;
     let output_name = normalized_merged_output_name(&payload.output_name);
     let output_path = destination.join(&output_name);
-    if output_path.exists() {
+    let overwrite_target = output_path.exists();
+    if overwrite_target && !payload.allow_overwrite {
         return Err(format!(
-            "Já existe um arquivo com esse nome no destino: {}",
+            "Já existe um arquivo com esse nome no destino: {}. Confirme a substituição na janela Salvar como.",
             output_path.display()
         ));
     }
-    let temp_path = destination.join(format!(
-        ".{}.merge-temp-{}.package",
-        output_name.trim_end_matches(".package"),
-        std::process::id()
-    ));
-    if temp_path.exists() {
-        remove_file(&temp_path).map_err(|e| e.to_string())?;
+    if overwrite_target {
+        // Never replace an input package during a merge, even after a Save dialog
+        // confirmed overwrite: an original input can still be open/read below.
+        let existing_output = output_path
+            .canonicalize()
+            .map_err(|e| format!("Não foi possível validar o arquivo de destino: {e}"))?;
+        for source_path in &payload.package_paths {
+            let input_path = PathBuf::from(source_path);
+            if input_path.canonicalize().ok().as_ref() == Some(&existing_output) {
+                return Err(format!(
+                    "O destino selecionado também é um package de origem: {}. Escolha outro nome para preservar o original.",
+                    output_path.display()
+                ));
+            }
+        }
     }
+    // Never unlink an existing path just because it resembles our former
+    // process-ID temp filename: it might belong to the user or another job.
+    let stamp = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let temp_path = (0..128)
+        .map(|counter| {
+            destination.join(format!(
+                ".{}.merge-temp-{}-{stamp}-{counter}.s3cctmp",
+                output_name.trim_end_matches(".package"),
+                std::process::id()
+            ))
+        })
+        .find(|candidate| !candidate.exists())
+        .ok_or_else(|| "Não foi possível reservar um nome temporário seguro para a mesclagem.".to_string())?;
+    let _temp_cleanup = reserve_owned_temp(&temp_path)?;
 
     let mut sources = Vec::new();
     let mut source_paths = Vec::new();
@@ -5173,6 +5568,15 @@ pub fn merge_packages_with_manifest(
         sources.push(package);
         source_paths.push(path);
     }
+
+    // Merged temporary coexists with all originals until validation completes.
+    let required = source_paths.iter().try_fold(0u64, |bytes, path| {
+        let size = std::fs::metadata(path)
+            .map_err(|e| format!("Falha ao consultar tamanho de {}: {e}", path.display()))?
+            .len();
+        Ok::<u64, String>(bytes.saturating_add(size))
+    })?.saturating_add(DBPF_WRITE_HEADROOM_BYTES);
+    let disk_free_bytes_warning = preflight_destination_space(&destination, required)?;
 
     let pose_list_plan = pose_list_merge_plan(&sources)?;
 
@@ -5210,16 +5614,24 @@ pub fn merge_packages_with_manifest(
                         continue;
                     }
 
-                    let left = source_paths[previous_source]
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("package");
-                    let right = source_paths[source_index]
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("package");
+                    // Same Type/Group/Instance with different *decoded* data
+                    // is not an identical resource. Never pick a winner silently:
+                    // recolors and overrides can deliberately share TGI values.
+                    let left = source_paths[previous_source].display();
+                    let right = source_paths[source_index].display();
+                    let sha_a = sha256_hex(&previous_data);
+                    let sha_b = sha256_hex(&current_data);
                     return Err(format!(
-                        "Conflito de TGI: {key} existe em {left} e {right} com dados diferentes. O merge foi cancelado."
+                        "Conflito de TGI: {key} ({kind}, Type 0x{type_id:08X}, Group 0x{group:08X}, Instance 0x{instance:016X}).\n\
+                         Origem A: {left}\n  Tamanho descompactado: {size_a} bytes\n  SHA-256 descompactado: {sha_a}\n\
+                         Origem B: {right}\n  Tamanho descompactado: {size_b} bytes\n  SHA-256 descompactado: {sha_b}\n\
+                         Os dois recursos têm a mesma identidade, mas conteúdos diferentes. O merge foi cancelado sem substituir nenhum original. Separe os CCs, ou decida qual override/recolor deve prevalecer antes de criar um merged.",
+                        kind = kind_from_type(entry.type_id),
+                        type_id = entry.type_id,
+                        group = entry.group,
+                        instance = entry.instance,
+                        size_a = previous_data.len(),
+                        size_b = current_data.len(),
                     ));
                 }
                 shared_keys.insert(key);
@@ -5296,6 +5708,12 @@ pub fn merge_packages_with_manifest(
         .seek(SeekFrom::Start(out_pkg.index_position as u64))
         .map_err(|e| e.to_string())?;
 
+    // Keep one read handle per source instead of reopening on every entry.
+    // Only index metadata is retained; large textures are streamed directly.
+    let mut source_handles: Vec<File> = source_paths.iter()
+        .map(|path| File::open(path)
+            .map_err(|e| format!("Falha ao abrir recurso de {}: {e}", path.display())))
+        .collect::<Result<_, _>>()?;
     let mut written = HashSet::new();
     for (source_index, source) in sources.iter().enumerate() {
         for (entry_index, entry) in source.entries.iter().enumerate() {
@@ -5322,9 +5740,9 @@ pub fn merge_packages_with_manifest(
                 continue;
             }
 
-            let raw = source.get_raw_data(entry).map_err(|e| e.to_string())?;
-            let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
-            out_f.write_all(&raw).map_err(|e| e.to_string())?;
+            let chunk_offset = copy_stored_merge_resource(
+                &mut source_handles[source_index], entry, &mut out_f
+            )?;
             out_pkg.entries.push(WritableEntry {
                 type_id: entry.type_id,
                 group: entry.group,
@@ -5357,11 +5775,9 @@ pub fn merge_packages_with_manifest(
         let (registrar_source_index, registrar_entry_index) = plan.primary_registrar;
         let registrar_source = &sources[registrar_source_index];
         let registrar = &registrar_source.entries[registrar_entry_index];
-        let raw = registrar_source
-            .get_raw_data(registrar)
-            .map_err(|e| format!("Não foi possível copiar o registrar S3SA principal: {e}"))?;
-        let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
-        out_f.write_all(&raw).map_err(|e| e.to_string())?;
+        let chunk_offset = copy_stored_merge_resource(
+            &mut source_handles[registrar_source_index], registrar, &mut out_f
+        )?;
         out_pkg.entries.push(WritableEntry {
             type_id: registrar.type_id,
             group: registrar.group,
@@ -5400,7 +5816,21 @@ pub fn merge_packages_with_manifest(
         0,
     )?;
 
-    out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+    // Sorting the index does not reorder any compressed payload or chunk offset.
+    // Keep DBPF lookup deterministic and avoid arbitrary source-order entries.
+    out_pkg.entries.sort_by_key(|entry| (entry.type_id, entry.group, entry.instance));
+    let index_start = out_f.stream_position().map_err(|e| e.to_string())?;
+    let index_size = 4u64 + (out_pkg.entries.len() as u64) * 32;
+    let index_end = index_start.checked_add(index_size)
+        .ok_or_else(|| "Overflow no índice DBPF do merged.".to_string())?;
+    if index_end > u32::MAX as u64 {
+        return Err(format!(
+            "O merged ({} bytes incluindo índice) ultrapassaria o limite DBPF de 32 bits; nenhum package de origem foi modificado.",
+            index_end
+        ));
+    }
+    out_pkg.index_position = u32::try_from(index_start)
+        .map_err(|_| "Offset do índice DBPF inválido.".to_string())?;
     out_pkg
         .write_index_and_header()
         .map_err(|e| e.to_string())?;
@@ -5420,17 +5850,73 @@ pub fn merge_packages_with_manifest(
     rebuilt_manifest.validate_keys(&available_keys)?;
     drop(rebuilt);
 
-    rename(&temp_path, &output_path).map_err(|e| {
-        let _ = remove_file(&temp_path);
-        format!("O merged foi validado, mas não foi possível finalizar o arquivo: {e}")
-    })?;
+    let backup_path = if overwrite_target {
+        // The native Save dialog may have approved overwrite. Only replace after
+        // validating the complete temporary DBPF and its merge manifest. Keep a
+        // permanent rollback backup with a non-.package suffix so recursive
+        // source-folder scans cannot silently re-import the backup as CC.
+        if !output_path.exists() {
+            return Err("O package de destino desapareceu durante a mesclagem; nenhuma substituição foi realizada.".to_string());
+        }
+        let backup_dir = destination.join("Merged_backups");
+        create_dir_all(&backup_dir)
+            .map_err(|e| format!("Não foi possível criar a pasta de backups do Merger: {e}"))?;
+        let stamp = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_nanos();
+        let original_name = output_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Merged.package");
+        let backup_path = (0..128)
+            .map(|counter| backup_dir.join(format!(
+                "{original_name}.{stamp}.{}.{}.s3ccbak",
+                std::process::id(),
+                counter
+            )))
+            .find(|candidate| !candidate.exists())
+            .ok_or_else(|| "Não foi possível obter um nome de backup exclusivo; o original foi preservado.".to_string())?;
+        replace_source_with_rollback(&output_path, &temp_path, &backup_path)?;
+        Some(backup_path.display().to_string())
+    } else {
+        // Refuse to overwrite a file that appeared while the merge was running.
+        if output_path.exists() {
+            return Err("Um package surgiu no caminho de destino durante a mesclagem; nenhum arquivo foi substituído.".to_string());
+        }
+        rename(&temp_path, &output_path).map_err(|e| {
+            let _ = remove_file(&temp_path);
+            format!("O merged foi validado, mas não foi possível finalizar o arquivo: {e}")
+        })?;
+        None
+    };
 
     Ok(MergePackagesResult {
         output_path: output_path.display().to_string(),
+        backup_path,
         package_count: rebuilt_manifest.packages.len(),
         resource_count: written.len(),
         shared_resources: shared_keys.len(),
+        disk_free_bytes_warning,
     })
+}
+
+// A multi-package Unmerge is not atomic at the file-system level. If an
+// ordinary runtime error interrupts it midway, remove ONLY outputs created
+// by this invocation rather than leaving a plausible but incomplete restore.
+struct RestoreOutputsCleanup {
+    created_paths: Vec<PathBuf>,
+    committed: bool,
+}
+
+impl Drop for RestoreOutputsCleanup {
+    fn drop(&mut self) {
+        if !self.committed {
+            for path in &self.created_paths {
+                let _ = remove_file(path);
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -5443,6 +5929,10 @@ pub fn restore_manifest_packages(
     }
 
     let source = WritablePackage::load(&payload.package_path).map_err(|e| e.to_string())?;
+    // A single source handle is reused across all restored assets; even a very
+    // large compressed resource is copied with bounded memory consumption.
+    let mut source_file = File::open(&payload.package_path)
+        .map_err(|e| format!("Falha ao abrir merged original: {e}"))?;
     let manifest = read_merge_manifest_from_writable(&source)?
         .ok_or_else(|| "Este package não contém um Veiga Merge Manifest.".to_string())?;
     let destination = PathBuf::from(&payload.destination_folder);
@@ -5496,7 +5986,25 @@ pub fn restore_manifest_packages(
         }
     }
 
+    // Restored resources can duplicate content that was shared in the merged.
+    let mut required = DBPF_WRITE_HEADROOM_BYTES;
+    for item in &manifest.packages {
+        required = required.saturating_add(96);
+        for resource in &item.resources {
+            let entry = &source.entries[index[&resource.key]];
+            required = required.saturating_add(entry.file_size as u64 + 32);
+        }
+        for resource in &item.preserved_resources {
+            required = required.saturating_add(resource.data_base64.len() as u64 + 32);
+        }
+    }
+    let disk_free_bytes_warning = preflight_destination_space(&destination, required)?;
+
     let mut existing_packages = existing_package_paths(&destination)?;
+    let mut created_outputs = RestoreOutputsCleanup {
+        created_paths: Vec::new(),
+        committed: false,
+    };
     let mut output_paths = Vec::new();
     let mut duplicate_paths = Vec::new();
 
@@ -5510,6 +6018,9 @@ pub fn restore_manifest_packages(
         }
 
         let temp_path = unique_restore_temp_path(&destination, package_info.id);
+        // Failed restorations must never leave a .package that a later
+        // recursive scan could silently pick up as a real piece of CC.
+        let _temp_cleanup = reserve_owned_temp(&temp_path)?;
         let mut out_pkg = WritablePackage::new(&temp_path, false).map_err(|e| e.to_string())?;
         let mut out_f = OpenOptions::new()
             .read(true)
@@ -5532,9 +6043,10 @@ pub fn restore_manifest_packages(
                 )
             })?;
             let entry = &source.entries[entry_index];
-            let raw = source.get_raw_data(entry).map_err(|e| e.to_string())?;
-            let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
-            out_f.write_all(&raw).map_err(|e| e.to_string())?;
+            // Preserve stored DBPF bytes and compression flags verbatim.
+            let chunk_offset = copy_stored_merge_resource(
+                &mut source_file, entry, &mut out_f
+            )?;
             out_pkg.entries.push(WritableEntry {
                 type_id: entry.type_id,
                 group: entry.group,
@@ -5573,7 +6085,7 @@ pub fn restore_manifest_packages(
             )?;
         }
 
-        out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+        out_pkg.index_position = checked_dbpf_index_position(&out_pkg, &mut out_f)?;
         out_pkg
             .write_index_and_header()
             .map_err(|e| e.to_string())?;
@@ -5621,16 +6133,20 @@ pub fn restore_manifest_packages(
             )
         })?;
 
+        created_outputs.created_paths.push(output_path.clone());
         existing_packages.push(output_path.clone());
         output_paths.push(output_path.display().to_string());
     }
 
+    // Every restored file has been validated and finalized.
+    created_outputs.committed = true;
     Ok(RestoreManifestResult {
         destination_folder: destination.display().to_string(),
         package_count: output_paths.len(),
         duplicate_count: duplicate_paths.len(),
         output_paths,
         duplicate_paths,
+        disk_free_bytes_warning,
     })
 }
 
@@ -5644,9 +6160,7 @@ fn write_removed_package(
     resources_to_remove: &HashSet<String>,
     temp_path: &Path,
 ) -> Result<(), String> {
-    if temp_path.exists() {
-        remove_file(temp_path).map_err(|e| e.to_string())?;
-    }
+    let mut temp_owner = reserve_owned_temp(temp_path)?;
 
     let retained_keys: HashSet<String> = package
         .files
@@ -5691,7 +6205,7 @@ fn write_removed_package(
             continue;
         }
 
-        let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+        let chunk_offset = checked_dbpf_resource_offset(&mut out_f, entry.file_size as u64)?;
         source_file
             .seek(SeekFrom::Start(entry.chunk_offset as u64))
             .map_err(|e| e.to_string())?;
@@ -5737,7 +6251,7 @@ fn write_removed_package(
         .find(|entry| entry.type_id == TYPE_KEY)
     {
         let raw = build_filtered_key_data(package, &retained_keys);
-        let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+        let chunk_offset = checked_dbpf_resource_offset(&mut out_f, raw.len() as u64)?;
         out_f.write_all(&raw).map_err(|e| e.to_string())?;
         out_pkg.entries.push(WritableEntry {
             type_id: template.type_id,
@@ -5768,10 +6282,15 @@ fn write_removed_package(
         }
     }
 
-    out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+    // Sorting the index does not reorder any compressed payload or chunk offset.
+    // Keep DBPF lookup deterministic and avoid arbitrary source-order entries.
+    out_pkg.entries.sort_by_key(|entry| (entry.type_id, entry.group, entry.instance));
+    out_pkg.index_position = checked_dbpf_index_position(&out_pkg, &mut out_f)?;
     out_pkg
         .write_index_and_header()
         .map_err(|e| e.to_string())?;
+    // Ownership passes to the caller for final validation and installation.
+    temp_owner.disarm();
     Ok(())
 }
 
@@ -5992,6 +6511,32 @@ fn clone_package_file_name(
     base_key: &str,
     name_map: &BTreeMap<u64, String>,
 ) -> String {
+    // A TONE's display label cannot determine whether its source was a
+    // Default or Non-default skin. If a Veiga manifest identifies a UNIQUE
+    // original source for the selected TONE, preserve that filename instead
+    // of inferring the category from UI labels.
+    if let Ok(parts) = parse_key(first_compound_key(base_key)) {
+        if parts.resource_type == TYPE_SKINTONE {
+            if let Ok(Some(manifest)) = read_merge_manifest_from_dbpf(package) {
+                let tone_key = key_string_from_parts(parts);
+                let mut matching = manifest.packages.iter().filter(|source| {
+                    source.resources.iter().any(|resource| resource.key == tone_key)
+                        && !source.name.trim().is_empty()
+                });
+                if let Some(source) = matching.next() {
+                    if matching.next().is_none() {
+                        let stem = sanitize_file_name(source.name.trim());
+                        return if stem.to_ascii_lowercase().ends_with(".package") {
+                            stem
+                        } else {
+                            format!("{stem}.package")
+                        };
+                    }
+                }
+            }
+        }
+    }
+
     format!(
         "{}.package",
         selection_output_stem(package, base_key, name_map)
@@ -6119,6 +6664,93 @@ fn read_uncompressed_writable_entry(
     .map_err(|e| e.to_string())
 }
 
+// Preserve original package-local metadata when (and only when) a clone is
+// a complete, isolated source from a reversible Veiga merge. KEY/NMAP and the
+// Package Manifest refer to the full source, so copying them into a partial
+// selection or across source boundaries would create misleading references.
+// When an export selection unequivocally identifies one original package,
+// its reversible manifest is the authoritative resource ownership list.
+// Heuristic thumbnail/texture discovery can attach CC from other sources, so
+// bypass it for a complete-source clone. Multiple/no owners fall back to the
+// ordinary per-resource export without inventing ownership.
+fn unique_selected_source_manifest_keys(
+    package: &DBPF<'_>,
+    selected_keys: &[String],
+) -> Option<HashSet<String>> {
+    let manifest = read_valid_merge_manifest_from_dbpf(package)?;
+    let selected: HashSet<&str> = selected_keys.iter()
+        .flat_map(|key| key.split("||"))
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .collect();
+    if selected.is_empty() {
+        return None;
+    }
+    let mut matches = manifest.packages.iter().filter(|source| {
+        !source.anchors.is_empty()
+            && selected.iter().all(|key| source.anchors.iter().any(|a| a.key == *key))
+    });
+    let source = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    let source_keys: HashSet<String> = source.resources.iter()
+        .map(|resource| resource.key.clone())
+        .collect();
+    if source_keys.is_empty() || !selected.iter().all(|key| source_keys.contains(*key)) {
+        return None;
+    }
+    Some(source_keys)
+}
+
+fn complete_source_preserved_metadata(
+    package: &DBPF<'_>,
+    clone_keys: &HashSet<String>,
+) -> Result<Vec<(ResourceKeyParts, Vec<u8>, u16)>, String> {
+    let Some(manifest) = read_merge_manifest_from_dbpf(package)? else {
+        return Ok(Vec::new());
+    };
+    let actual: HashSet<&str> = clone_keys.iter()
+        .filter(|key| parse_key(key).map(|p| p.resource_type != TYPE_KEY).unwrap_or(true))
+        .map(String::as_str)
+        .collect();
+    let mut exact_sources = manifest.packages.iter().filter(|source| {
+        let expected: HashSet<&str> = source.resources.iter()
+            .map(|resource| resource.key.as_str())
+            .collect();
+        !expected.is_empty() && actual == expected
+    });
+    let Some(source) = exact_sources.next() else {
+        return Ok(Vec::new());
+    };
+    if exact_sources.next().is_some() {
+        // Two manifests claiming the exact same closure are ambiguous.
+        return Ok(Vec::new());
+    }
+
+    let mut seen = HashSet::new();
+    let mut restored = Vec::new();
+    for preserved in &source.preserved_resources {
+        let parts = parse_key(&preserved.key)?;
+        if !is_per_source_metadata_type(parts.resource_type)
+            || !seen.insert(preserved.key.clone())
+            || package.entry_index(parts.resource_type, parts.resource_group, parts.instance).is_some()
+        {
+            return Err(format!(
+                "Metadado de origem ambiguo ou duplicado em {}: {}",
+                source.name, preserved.key
+            ));
+        }
+        let bytes = STANDARD.decode(&preserved.data_base64)
+            .map_err(|error| format!(
+                "Metadado de {} corrompido ({}): {error}",
+                source.name, preserved.key
+            ))?;
+        restored.push((parts, bytes, preserved.unknown2));
+    }
+    Ok(restored)
+}
+
 fn create_clone_package_from_loaded(
     core_package: &DBPF<'_>,
     name_map: &BTreeMap<u64, String>,
@@ -6130,8 +6762,18 @@ fn create_clone_package_from_loaded(
     clone_path: &Path,
 ) -> Result<(String, usize), String> {
     let selected: HashSet<String> = selected_keys.iter().cloned().collect();
-    let clone_keys =
-        expand_selection_for_export(core_package, &selected, include_thumbnails, name_map)?;
+    // Required source-owned resources must never depend on the optional
+    // "include thumbnails" switch: IMG textures are essential to a skin,
+    // and ICON is part of a source object's original DBPF. The switch only
+    // influences heuristic extras when there is no unambiguous manifest.
+    let clone_keys = unique_selected_source_manifest_keys(core_package, selected_keys)
+        .map(Ok)
+        .unwrap_or_else(|| {
+            expand_selection_for_export(core_package, &selected, include_thumbnails, name_map)
+        })?;
+    let original_metadata = complete_source_preserved_metadata(core_package, &clone_keys)?;
+    let restores_original_key = original_metadata.iter()
+        .any(|(parts, _, _)| parts.resource_type == TYPE_KEY);
 
     if let Some(parent) = clone_path.parent() {
         create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -6161,9 +6803,9 @@ fn create_clone_package_from_loaded(
             continue;
         }
 
-        let raw = read_raw_writable_entry(source_file, entry)?;
-        let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
-        out_f.write_all(&raw).map_err(|e| e.to_string())?;
+        // Streaming prevents an exported IMG from occupying hundreds of MiB
+        // of memory while preserving its original compression metadata.
+        let chunk_offset = copy_stored_merge_resource(source_file, entry, &mut out_f)?;
         out_pkg.entries.push(WritableEntry {
             type_id: entry.type_id,
             group: entry.group,
@@ -6179,31 +6821,49 @@ fn create_clone_package_from_loaded(
         count += 1;
     }
 
-    if let Some(raw) = filtered_key_data.filter(|raw| !raw.is_empty()) {
-        if let Some(template) = source_package
-            .entries
-            .iter()
-            .find(|entry| entry.type_id == TYPE_KEY)
-        {
-            let chunk_offset = out_f.stream_position().map_err(|e| e.to_string())? as u32;
-            out_f.write_all(&raw).map_err(|e| e.to_string())?;
-            out_pkg.entries.push(WritableEntry {
-                type_id: template.type_id,
-                group: template.group,
-                id1: template.id1,
-                id2: template.id2,
-                instance: template.instance,
-                chunk_offset,
-                file_size: raw.len() as u32,
-                mem_size: raw.len() as u32,
-                compressed: 0,
-                unknown2: template.unknown2,
-            });
-            count += 1;
+    // Full-source exports recover the original KEY and Package Manifest
+    // verbatim (decoded payload); all other clones keep the filtered KEY.
+    if !restores_original_key {
+        if let Some(raw) = filtered_key_data.filter(|raw| !raw.is_empty()) {
+            if let Some(template) = source_package
+                .entries
+                .iter()
+                .find(|entry| entry.type_id == TYPE_KEY)
+            {
+                let chunk_offset = checked_dbpf_resource_offset(&mut out_f, raw.len() as u64)?;
+                out_f.write_all(&raw).map_err(|e| e.to_string())?;
+                out_pkg.entries.push(WritableEntry {
+                    type_id: template.type_id,
+                    group: template.group,
+                    id1: template.id1,
+                    id2: template.id2,
+                    instance: template.instance,
+                    chunk_offset,
+                    file_size: raw.len() as u32,
+                    mem_size: raw.len() as u32,
+                    compressed: 0,
+                    unknown2: template.unknown2,
+                });
+                count += 1;
+            }
         }
     }
 
-    out_pkg.index_position = out_f.stream_position().map_err(|e| e.to_string())? as u32;
+    for (parts, data, unknown2) in original_metadata {
+        append_uncompressed_resource(
+            &mut out_pkg,
+            &mut out_f,
+            parts.resource_type,
+            parts.resource_group,
+            parts.instance,
+            &data,
+            unknown2,
+        )?;
+        count += 1;
+    }
+
+
+    out_pkg.index_position = checked_dbpf_index_position(&out_pkg, &mut out_f)?;
     out_pkg
         .write_index_and_header()
         .map_err(|e| e.to_string())?;
@@ -6826,6 +7486,14 @@ fn remove_selected_from_merged_inner(
         ));
     }
 
+    let source_size = std::fs::metadata(&source_path)
+        .map_err(|e| format!("Falha ao consultar tamanho do package: {e}"))?
+        .len();
+    let required = source_size
+        .saturating_mul(if output_is_source { 1 } else { 2 })
+        .saturating_add(DBPF_WRITE_HEADROOM_BYTES);
+    let disk_free_bytes_warning = preflight_destination_space(&destination, required)?;
+
     let mmap = open_package(&payload.package_path)?;
     let package = parse_package(&mmap)?;
     let name_map = removal_name_map(&package, &payload.selected_keys);
@@ -6843,16 +7511,7 @@ fn remove_selected_from_merged_inner(
     let source_package = WritablePackage::load(&payload.package_path).map_err(|e| e.to_string())?;
     let mut source_file = File::open(&payload.package_path).map_err(|e| e.to_string())?;
 
-    let extension = source_path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or("package");
-    let temp_path = destination.join(format!(
-        ".{stem}.remove-temp-{}.{}",
-        std::process::id(),
-        extension
-    ));
-
+    let temp_path = unique_remove_temp_path(&destination, stem)?;
     progress("Reconstruindo merged", "Gravando os recursos preservados em blocos de 4 MiB.", 25);
     if let Err(error) = write_removed_package(
         app,
@@ -6864,9 +7523,11 @@ fn remove_selected_from_merged_inner(
         &resources_to_remove,
         &temp_path,
     ) {
-        let _ = remove_file(&temp_path);
+        // write_removed_package cleans only the exclusive temporary that it
+        // reserved itself. Never delete an unknown file on reservation failure.
         return Err(error);
     }
+    let _temp_cleanup = MergeTempCleanup(temp_path.clone());
 
     progress("Validando merged", "Conferindo os recursos e o manifesto reconstruídos.", 66);
     if let Err(error) = validate_removed_package(
@@ -6954,6 +7615,7 @@ fn remove_selected_from_merged_inner(
         removed_manifest_packages: plan.manifest_packages_to_remove,
         shared_resources_preserved: shared_preserved.len(),
         selected_resources_preserved: plan.selected_resources_preserved,
+        disk_free_bytes_warning,
     })
 }
 
@@ -7239,6 +7901,657 @@ mod remove_selected_tests {
 
     fn test_resource_key(resource_type: u32, group: u32, instance: u64) -> String {
         format!("0x{resource_type:08X}-0x{group:08X}-0x{instance:016X}")
+    }
+
+    #[test]
+    fn skin_clone_uses_unambiguous_original_manifest_filename_not_default_label() {
+        let root = test_dir("manifest-skin-original-name");
+        let path = root.join("VeigaMerged.package");
+        let tone_key = test_resource_key(TYPE_SKINTONE, 0, 0xFACE);
+        let manifest = MergeManifest {
+            version: 2,
+            packages: vec![ManifestPackage {
+                id: 1,
+                name: "LalaSimmer_KaoaSkin_NonDefault.package".to_string(),
+                original_size: 1234,
+                anchors: vec![ManifestAnchor {kind: "TONE".to_string(), key: tone_key.clone()}],
+                resources: vec![ManifestResource {key: tone_key.clone()}],
+                preserved_resources: vec![],
+            }],
+        };
+        write_test_package(&path, &[
+            (TYPE_SKINTONE, 0, 0xFACE, vec![4, 0, 0, 0]),
+            (MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let names = BTreeMap::from([(0xFACE, "Default".to_string())]);
+        assert_eq!(
+            clone_package_file_name(&package, &tone_key, &names),
+            "LalaSimmer_KaoaSkin_NonDefault.package"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn manifest_only_groups_tones_from_same_unambiguous_original_package() {
+        let root = test_dir("same-original-multiple-tones");
+        let path = root.join("Merged.package");
+        fn simple_tone(img: u64) -> Vec<u8> {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&6u32.to_le_bytes());
+            bytes.extend_from_slice(&16u32.to_le_bytes());
+            bytes.extend_from_slice(&20u32.to_le_bytes());
+            bytes.resize(24, 0);
+            bytes.extend_from_slice(&1u32.to_le_bytes());
+            bytes.extend_from_slice(&TYPE_IMG.to_le_bytes());
+            bytes.extend_from_slice(&0u32.to_le_bytes());
+            bytes.extend_from_slice(&img.to_le_bytes());
+            bytes
+        }
+        let first = test_resource_key(TYPE_SKINTONE, 0, 0x101);
+        let second = test_resource_key(TYPE_SKINTONE, 0, 0x102);
+        let third = test_resource_key(TYPE_SKINTONE, 0, 0x201);
+        let image_a = test_resource_key(TYPE_IMG, 0, 0x501);
+        let image_b = test_resource_key(TYPE_IMG, 0, 0x502);
+        let image_c = test_resource_key(TYPE_IMG, 0, 0x503);
+        let manifest = MergeManifest {
+            version: 2,
+            packages: vec![
+                ManifestPackage {
+                    id: 1,
+                    name: "OneSkinTwoTones.package".to_string(),
+                    original_size: 100,
+                    anchors: vec![ManifestAnchor {kind: "TONE".to_string(), key: first.clone()}],
+                    resources: [&first, &second, &image_a, &image_b].into_iter()
+                        .map(|key| ManifestResource {key: key.clone()}).collect(),
+                    preserved_resources: vec![],
+                },
+                ManifestPackage {
+                    id: 2,
+                    name: "OtherSkin.package".to_string(),
+                    original_size: 100,
+                    anchors: vec![ManifestAnchor {kind: "TONE".to_string(), key: third.clone()}],
+                    resources: [&third, &image_c].into_iter()
+                        .map(|key| ManifestResource {key: key.clone()}).collect(),
+                    preserved_resources: vec![],
+                },
+            ],
+        };
+        write_test_package(&path, &[
+            (TYPE_SKINTONE, 0, 0x101, simple_tone(0x501)),
+            (TYPE_SKINTONE, 0, 0x102, simple_tone(0x502)),
+            (TYPE_SKINTONE, 0, 0x201, simple_tone(0x503)),
+            (TYPE_IMG, 0, 0x501, b"a".to_vec()),
+            (TYPE_IMG, 0, 0x502, b"b".to_vec()),
+            (TYPE_IMG, 0, 0x503, b"c".to_vec()),
+            (MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let selected = tone_group_members(
+            &package,
+            ResourceKeyParts {resource_type: TYPE_SKINTONE, resource_group: 0, instance: 0x101},
+            &BTreeMap::new()
+        ).unwrap();
+        for instance in [0x101, 0x102, 0x501, 0x502] {
+            assert!(selected.iter().any(|x| x.instance == instance),
+                "Lost legitimate same-source resource {instance:016X}");
+        }
+        for instance in [0x201, 0x503] {
+            assert!(!selected.iter().any(|x| x.instance == instance),
+                "Leaked unrelated skin resource {instance:016X}");
+        }
+        let items = build_skintone_group_items(&package, "", &BTreeMap::new());
+        assert_eq!(items.len(), 2, "Distinct manifest sources must remain separate UI items");
+        let owned = items.iter().find(|item| item.key == format!("{first}||{second}"))
+            .expect("Two TONEs with the same proven original owner form one UI item");
+        assert_eq!(owned.label, "OneSkinTwoTones.package");
+        assert!(!owned.key.contains(&third), "An unrelated TONE must never enter that UI item");
+        assert!(items.iter().any(|item| item.key == third));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn skins_with_identical_display_names_do_not_mix_tone_or_image_dependencies() {
+        let root = test_dir("two-skins-same-display-name");
+        let path = root.join("OldS3peMerged.package");
+        fn tone_ref(img: u64) -> Vec<u8> {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&6u32.to_le_bytes());
+            bytes.extend_from_slice(&16u32.to_le_bytes());
+            bytes.extend_from_slice(&20u32.to_le_bytes());
+            bytes.resize(24, 0);
+            bytes.extend_from_slice(&1u32.to_le_bytes());
+            bytes.extend_from_slice(&TYPE_IMG.to_le_bytes());
+            bytes.extend_from_slice(&0u32.to_le_bytes());
+            bytes.extend_from_slice(&img.to_le_bytes());
+            bytes
+        }
+        write_test_package(&path, &[
+            (TYPE_SKINTONE, 0, 0x101, tone_ref(0x501)),
+            (TYPE_IMG, 0, 0x501, b"first-skin".to_vec()),
+            (TYPE_SKINTONE, 0, 0x202, tone_ref(0x502)),
+            (TYPE_IMG, 0, 0x502, b"second-skin".to_vec()),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let name_map = BTreeMap::from([
+            (0x101, "Default".to_string()),
+            (0x202, "Default".to_string()),
+        ]);
+        let found = tone_group_members(
+            &package,
+            ResourceKeyParts {
+                resource_type: TYPE_SKINTONE,
+                resource_group: 0,
+                instance: 0x101,
+            },
+            &name_map,
+        ).unwrap();
+        assert!(found.iter().any(|p| p.resource_type == TYPE_SKINTONE && p.instance == 0x101));
+        assert!(found.iter().any(|p| p.resource_type == TYPE_IMG && p.instance == 0x501));
+        assert!(!found.iter().any(|p| p.instance == 0x202 || p.instance == 0x502),
+            "Identically named but unrelated skin resources must never leak");
+        let items = build_skintone_group_items(&package, "", &name_map);
+        assert_eq!(items.len(), 2,
+            "The UI must not group unrelated non-default skins sharing the Default label");
+        assert!(items.iter().all(|item| !item.key.contains("||")),
+            "Each unowned TONE must remain a distinct selectable item");
+        assert!(items.iter().any(|item| item.key == test_resource_key(TYPE_SKINTONE, 0, 0x101)));
+        assert!(items.iter().any(|item| item.key == test_resource_key(TYPE_SKINTONE, 0, 0x202)));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tone_ramp_png_is_preserved_when_image_reference_is_not_first() {
+        let root = test_dir("tone-nonfirst-img-ramp");
+        let source = root.join("Tone.package");
+        let tone_id = 0xAAA0;
+        let image_id: u64 = 0xBBB0;
+        let unrelated_id = 0xDDD0;
+        // v6; table at offset 8 + 16. First resource is not an IMG.
+        let mut tone = Vec::new();
+        tone.extend_from_slice(&6u32.to_le_bytes());
+        tone.extend_from_slice(&16u32.to_le_bytes());
+        tone.extend_from_slice(&(4u32 + 2 * 16).to_le_bytes());
+        tone.resize(24, 0);
+        tone.extend_from_slice(&2u32.to_le_bytes());
+        tone.extend_from_slice(&TYPE_XML.to_le_bytes());
+        tone.extend_from_slice(&0u32.to_le_bytes());
+        tone.extend_from_slice(&0x123u64.to_le_bytes());
+        tone.extend_from_slice(&TYPE_IMG.to_le_bytes());
+        tone.extend_from_slice(&0u32.to_le_bytes());
+        tone.extend_from_slice(&image_id.to_le_bytes());
+
+        write_test_package(&source, &[
+            (TYPE_SKINTONE, 0, tone_id, tone),
+            (TYPE_IMG, 0, image_id, b"skin-texture".to_vec()),
+            (TYPE_IMAG_PNG, 0, image_id, b"ramp-png".to_vec()),
+            (TYPE_IMAG_PNG, 0, unrelated_id, b"unrelated-png".to_vec()),
+        ]);
+        let mmap = open_package(&source.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let base = ResourceKeyParts {
+            resource_type: TYPE_SKINTONE,
+            resource_group: 0,
+            instance: tone_id,
+        };
+        let found = tone_group_members(&package, base, &BTreeMap::new()).unwrap();
+        assert!(found.iter().any(|p| {
+            p.resource_type == TYPE_IMG && p.instance == image_id
+        }));
+        assert!(found.iter().any(|p| {
+            p.resource_type == TYPE_IMAG_PNG && p.instance == image_id
+        }));
+        assert!(!found.iter().any(|p| p.instance == unrelated_id));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn skin_manifest_restores_img_even_when_optional_thumbnails_disabled() {
+        let root = test_dir("nondefault-full-manifest-clone");
+        let source = root.join("merged.package");
+        let destination = root.join("NonDefault.package");
+        let tone = test_resource_key(TYPE_SKINTONE, 0, 0xAA1);
+        let img1 = test_resource_key(TYPE_IMG, 0, 0xBB1);
+        let img2 = test_resource_key(TYPE_IMG, 0, 0xBB2);
+        let other = test_resource_key(TYPE_IMG, 0, 0xCC1);
+        let manifest = MergeManifest {
+            version: 2,
+            packages: vec![ManifestPackage {
+                id: 1, name: "NonDefault.package".to_string(), original_size: 12_000_000,
+                anchors: vec![ManifestAnchor { kind: "SkinTone".to_string(), key: tone.clone() }],
+                resources: [&tone, &img1, &img2].into_iter()
+                    .map(|key| ManifestResource { key: key.clone() }).collect(),
+                preserved_resources: vec![],
+            }],
+        };
+        write_test_package(&source, &[
+            (TYPE_SKINTONE, 0, 0xAA1, vec![4, 0, 0, 0]),
+            (TYPE_IMG, 0, 0xBB1, vec![0x11; 256 * 1024]),
+            (TYPE_IMG, 0, 0xBB2, vec![0x22; 256 * 1024]),
+            (TYPE_IMG, 0, 0xCC1, vec![0x33; 256 * 1024]),
+            (MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+        ]);
+        let mmap = open_package(&source.display().to_string()).unwrap();
+        let core = parse_package(&mmap).unwrap();
+        let writable = WritablePackage::load(&source).unwrap();
+        let mut reader = File::open(&source).unwrap();
+        create_clone_package_from_loaded(
+            &core, &BTreeMap::new(), &writable, &mut reader,
+            &[tone.clone()], false, false, &destination,
+        ).unwrap();
+        let result = WritablePackage::load(&destination).unwrap();
+        let keys: HashSet<String> = result.entries.iter().map(key_string_from_writable).collect();
+        assert_eq!(keys, HashSet::from([tone, img1, img2]));
+        assert!(!keys.contains(&other));
+        drop(result);
+        drop(core);
+        drop(mmap);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reversible_object_clone_rejects_unowned_images_and_restores_original_icon() {
+        let root = test_dir("manifest-owner-closure-extra-img");
+        let merged_path = root.join("MergedObjects.package");
+        let out_path = root.join("Slippers.package");
+        let obj = test_resource_key(TYPE_OBJD, 0, 0xA001);
+        let icon = test_resource_key(TYPE_ICON, 0, 0xB001);
+        let image = test_resource_key(TYPE_IMG, 0, 0xC001);
+        let other_obj = test_resource_key(TYPE_OBJD, 0, 0xA002);
+        let other_img = test_resource_key(TYPE_IMG, 0, 0xC002);
+        let ghost_img = test_resource_key(TYPE_IMG, 0, 0xDEAD);
+        let original_metadata = b"<PackageManifest name='Slippers'/>";
+        let source = MergeManifest {
+            version: 2,
+            packages: vec![
+                ManifestPackage {
+                    id: 1, name: "Slippers.package".to_string(), original_size: 1000,
+                    anchors: vec![ManifestAnchor { kind: "OBJD".to_string(), key: obj.clone() }],
+                    resources: [&obj, &icon, &image].into_iter()
+                        .map(|key| ManifestResource { key: key.clone() }).collect(),
+                    preserved_resources: vec![ManifestPreservedResource {
+                        key: test_resource_key(TYPE_PACKAGE_MANIFEST, 0, 0),
+                        data_base64: STANDARD.encode(original_metadata),
+                        unknown2: 0,
+                    }],
+                },
+                ManifestPackage {
+                    id: 2, name: "Other.package".to_string(), original_size: 100,
+                    anchors: vec![ManifestAnchor { kind: "OBJD".to_string(), key: other_obj.clone() }],
+                    resources: [&other_obj, &other_img].into_iter()
+                        .map(|key| ManifestResource { key: key.clone() }).collect(),
+                    preserved_resources: vec![],
+                },
+            ],
+        };
+        write_test_package(&merged_path, &[
+            (TYPE_OBJD, 0, 0xA001, b"slippers".to_vec()),
+            (TYPE_ICON, 0, 0xB001, b"real-source-icon".to_vec()),
+            (TYPE_IMG, 0, 0xC001, b"source-texture".to_vec()),
+            (TYPE_OBJD, 0, 0xA002, b"other-object".to_vec()),
+            (TYPE_IMG, 0, 0xC002, b"unrelated-texture".to_vec()),
+            (TYPE_IMG, 0, 0xDEAD, b"unclaimed-image".to_vec()),
+            (MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE, source.to_xml_bytes()),
+        ]);
+        let mmap = open_package(&merged_path.display().to_string()).unwrap();
+        let core = parse_package(&mmap).unwrap();
+        let selected = vec![obj.clone()];
+        let keys = unique_selected_source_manifest_keys(&core, &selected).unwrap();
+        assert_eq!(keys, HashSet::from([obj.clone(), icon.clone(), image.clone()]));
+        let writable = WritablePackage::load(&merged_path).unwrap();
+        let mut handle = File::open(&merged_path).unwrap();
+        create_clone_package_from_loaded(
+            &core, &BTreeMap::new(), &writable, &mut handle,
+            &selected, true, false, &out_path,
+        ).unwrap();
+        let output = WritablePackage::load(&out_path).unwrap();
+        let keys: HashSet<String> = output.entries.iter().map(key_string_from_writable).collect();
+        assert!(keys.contains(&obj));
+        assert!(keys.contains(&icon));
+        assert!(keys.contains(&image));
+        assert!(keys.contains(&test_resource_key(TYPE_PACKAGE_MANIFEST, 0, 0)));
+        assert!(!keys.contains(&other_obj));
+        assert!(!keys.contains(&other_img));
+        assert!(!keys.contains(&ghost_img));
+        let original_manifest = output.entries.iter()
+            .find(|e| e.type_id == TYPE_PACKAGE_MANIFEST).unwrap();
+        assert_eq!(output.get_uncompressed_data(original_manifest).unwrap(), original_metadata);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn manual_clone_restores_complete_source_metadata_without_cross_contamination() {
+        let root = test_dir("object-restore-metadata");
+        let merged_path = root.join("Merged.package");
+        let clone_path = root.join("NativeBodyWash.package");
+        let selected_obj = test_resource_key(TYPE_OBJD, 0, 0xA0A0);
+        let selected_icon = test_resource_key(TYPE_ICON, 0, 0xB0B0);
+        let other_obj = test_resource_key(TYPE_OBJD, 0, 0xC0C0);
+        let other_icon = test_resource_key(TYPE_ICON, 0, 0xD0D0);
+        let manifest_key = test_resource_key(TYPE_PACKAGE_MANIFEST, 0, 0);
+        let key_key = test_resource_key(TYPE_KEY, 0, 0xEE);
+        let original_key = b"original-KEY-resource";
+        let original_manifest = b"<packageManifest native='yes'/>";
+
+        let manifest = MergeManifest {
+            version: 2,
+            packages: vec![
+                ManifestPackage {
+                    id: 1,
+                    name: "NativeBodyWash.package".to_string(),
+                    original_size: 555,
+                    anchors: vec![ManifestAnchor {kind:"OBJD".to_string(), key:selected_obj.clone()}],
+                    resources: vec![
+                        ManifestResource {key:selected_obj.clone()},
+                        ManifestResource {key:selected_icon.clone()},
+                    ],
+                    preserved_resources: vec![
+                        ManifestPreservedResource {
+                            key: key_key.clone(),
+                            data_base64: STANDARD.encode(original_key),
+                            unknown2: 0,
+                        },
+                        ManifestPreservedResource {
+                            key: manifest_key.clone(),
+                            data_base64: STANDARD.encode(original_manifest),
+                            unknown2: 0,
+                        },
+                    ],
+                },
+                ManifestPackage {
+                    id: 2,
+                    name: "UnrelatedObject.package".to_string(),
+                    original_size: 222,
+                    anchors: vec![ManifestAnchor {kind:"OBJD".to_string(), key:other_obj.clone()}],
+                    resources: vec![
+                        ManifestResource {key:other_obj.clone()},
+                        ManifestResource {key:other_icon.clone()},
+                    ],
+                    preserved_resources: vec![],
+                },
+            ],
+        };
+        write_test_package(&merged_path, &[
+            (TYPE_OBJD, 0, 0xA0A0, b"object-native".to_vec()),
+            (TYPE_ICON, 0, 0xB0B0, b"icon-native".to_vec()),
+            (TYPE_OBJD, 0, 0xC0C0, b"object-unrelated".to_vec()),
+            (TYPE_ICON, 0, 0xD0D0, b"icon-unrelated".to_vec()),
+            (MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+        ]);
+        let mmap = open_package(&merged_path.display().to_string()).unwrap();
+        let core = parse_package(&mmap).unwrap();
+        let writable = WritablePackage::load(&merged_path).unwrap();
+        let mut handle = File::open(&merged_path).unwrap();
+        create_clone_package_from_loaded(
+            &core,
+            &BTreeMap::new(),
+            &writable,
+            &mut handle,
+            &[selected_obj.clone()],
+            true,
+            false,
+            &clone_path,
+        ).unwrap();
+        let restored = WritablePackage::load(&clone_path).unwrap();
+        let get = |key: &str| {
+            let p = parse_key(key).unwrap();
+            restored.entries.iter().find(|entry| {
+                entry.type_id == p.resource_type
+                    && entry.group == p.resource_group
+                    && entry.instance == p.instance
+            }).map(|entry| restored.get_uncompressed_data(entry).unwrap())
+        };
+        assert_eq!(get(&selected_obj).unwrap(), b"object-native");
+        assert_eq!(get(&selected_icon).unwrap(), b"icon-native");
+        assert_eq!(get(&key_key).unwrap(), original_key);
+        assert_eq!(get(&manifest_key).unwrap(), original_manifest);
+        assert!(get(&other_obj).is_none());
+        assert!(get(&other_icon).is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn incomplete_source_never_inherits_original_global_metadata() {
+        let root = test_dir("partial-metadata");
+        let path = root.join("Merged.package");
+        let obj_key = test_resource_key(TYPE_OBJD, 0, 0x123);
+        let unselected_key = test_resource_key(TYPE_IMG, 0, 0x456);
+        let manifest = MergeManifest {
+            version: 2,
+            packages: vec![ManifestPackage {
+                id: 1,
+                name: "Partial.package".to_string(),
+                original_size: 500,
+                anchors: vec![ManifestAnchor {kind:"OBJD".to_string(), key:obj_key.clone()}],
+                resources: vec![
+                    ManifestResource {key:obj_key.clone()},
+                    ManifestResource {key:unselected_key.clone()},
+                ],
+                preserved_resources: vec![
+                    ManifestPreservedResource {
+                        key: test_resource_key(TYPE_KEY, 0, 1),
+                        data_base64: STANDARD.encode(b"stale-key-for-whole-source"),
+                        unknown2: 0,
+                    },
+                ],
+            }],
+        };
+        write_test_package(&path, &[
+            (TYPE_OBJD, 0, 0x123, b"object".to_vec()),
+            (TYPE_IMG, 0, 0x456, b"unrelated-image".to_vec()),
+            (MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let core = parse_package(&mmap).unwrap();
+        let selected = HashSet::from([obj_key]);
+        assert!(complete_source_preserved_metadata(&core, &selected).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn object_export_uses_manifest_owned_icon_and_never_steals_another_objects_icon() {
+        use crate::merge_manifest::LEGACY_MANIFEST_TYPE;
+
+        for manifest_type in [MANIFEST_TYPE, LEGACY_MANIFEST_TYPE] {
+            let path = test_path("two-object-icons-owned-by-manifest");
+            let object_a = test_resource_key(TYPE_OBJD, 0, 0xA0A0);
+            let object_b = test_resource_key(TYPE_OBJD, 0, 0xB0B0);
+            let icon_a = test_resource_key(TYPE_ICON, 0, 0xC0C0);
+            let icon_b = test_resource_key(TYPE_ICON, 0, 0xD0D0);
+            let manifest = MergeManifest {
+                version: 2,
+                packages: vec![
+                    ManifestPackage {
+                        id: 1,
+                        name: "Object A.package".to_string(),
+                        original_size: 500,
+                        anchors: vec![ManifestAnchor {kind: "OBJD".to_string(), key: object_a.clone()}],
+                        resources: vec![
+                            ManifestResource {key: object_a.clone()},
+                            ManifestResource {key: icon_a.clone()},
+                        ],
+                        preserved_resources: vec![],
+                    },
+                    ManifestPackage {
+                        id: 2,
+                        name: "Object B.package".to_string(),
+                        original_size: 500,
+                        anchors: vec![ManifestAnchor {kind: "OBJD".to_string(), key: object_b.clone()}],
+                        resources: vec![
+                            ManifestResource {key: object_b.clone()},
+                            ManifestResource {key: icon_b.clone()},
+                        ],
+                        preserved_resources: vec![],
+                    },
+                ],
+            };
+            write_test_package(&path, &[
+                (TYPE_OBJD, 0, 0xA0A0, b"object-a".to_vec()),
+                (TYPE_OBJD, 0, 0xB0B0, b"object-b".to_vec()),
+                (TYPE_ICON, 0, 0xC0C0, b"icon-a".to_vec()),
+                (TYPE_ICON, 0, 0xD0D0, b"icon-b".to_vec()),
+                (manifest_type, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+            ]);
+            let mmap = open_package(&path.display().to_string()).unwrap();
+            let package = parse_package(&mmap).unwrap();
+            let keys = expand_selection_for_export(
+                &package,
+                &HashSet::from([object_a.clone()]),
+                true,
+                &BTreeMap::new(),
+            ).unwrap();
+            assert!(keys.contains(&object_a), "object must be retained");
+            assert!(keys.contains(&icon_a), "correct ICON must be retained");
+            assert!(!keys.contains(&icon_b), "unrelated ICON must not leak");
+            assert!(!keys.contains(&object_b), "unrelated object must not leak");
+            drop(package);
+            drop(mmap);
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+
+    #[test]
+    fn object_manifest_selection_preserves_all_owned_icons_and_thums_without_cross_leaks() {
+        let root = test_dir("multi-thumbnail-per-object");
+        let source = root.join("ObjectMerge.package");
+        let output = root.join("ObjectA.package");
+        let a = test_resource_key(TYPE_OBJD, 0, 0x1110);
+        let b = test_resource_key(TYPE_OBJD, 0, 0x2220);
+        let icon_a1 = test_resource_key(TYPE_ICON, 0, 0xAA11);
+        let icon_a2 = test_resource_key(TYPE_ICON, 0, 0xAA12);
+        let thum_a = test_resource_key(TYPE_THUM_LARGE, 0, 0xAA13);
+        let icon_b = test_resource_key(TYPE_ICON, 0, 0xBB11);
+        let thum_b = test_resource_key(TYPE_THUM_LARGE, 0, 0xBB12);
+        let img_b = test_resource_key(TYPE_IMG, 0, 0xBB13);
+        let mk = |id, name: &str, anchor: &String, resources: Vec<&String>| ManifestPackage {
+            id,
+            name: name.to_string(),
+            original_size: 100,
+            anchors: vec![ManifestAnchor { kind: "OBJD".to_string(), key: anchor.clone() }],
+            resources: resources.into_iter()
+                .map(|key| ManifestResource { key: key.clone() })
+                .collect(),
+            preserved_resources: vec![],
+        };
+        let manifest = MergeManifest {
+            version: 2,
+            packages: vec![
+                mk(1, "ObjectA.package", &a, vec![&a, &icon_a1, &icon_a2, &thum_a]),
+                mk(2, "ObjectB.package", &b, vec![&b, &icon_b, &thum_b, &img_b]),
+            ],
+        };
+        write_test_package(&source, &[
+            (TYPE_OBJD, 0, 0x1110, b"object-a".to_vec()),
+            (TYPE_OBJD, 0, 0x2220, b"object-b".to_vec()),
+            (TYPE_ICON, 0, 0xAA11, b"icon-a1".to_vec()),
+            (TYPE_ICON, 0, 0xAA12, b"icon-a2".to_vec()),
+            (TYPE_THUM_LARGE, 0, 0xAA13, b"thum-a".to_vec()),
+            (TYPE_ICON, 0, 0xBB11, b"icon-b".to_vec()),
+            (TYPE_THUM_LARGE, 0, 0xBB12, b"thum-b".to_vec()),
+            (TYPE_IMG, 0, 0xBB13, b"img-b".to_vec()),
+            (MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+        ]);
+        let mmap = open_package(&source.display().to_string()).unwrap();
+        let core = parse_package(&mmap).unwrap();
+        let selected = HashSet::from([a.clone()]);
+        // Even when optional thumbnails are unchecked, known source-owned
+        // ICON/THUM resources must be included in the closure.
+        let expanded = expand_selection_for_export(&core, &selected, false, &BTreeMap::new()).unwrap();
+        for key in [&a, &icon_a1, &icon_a2, &thum_a] {
+            assert!(expanded.contains(key), "Lost owned object resource {key}");
+        }
+        for key in [&b, &icon_b, &thum_b, &img_b] {
+            assert!(!expanded.contains(key), "Leaked other object's resource {key}");
+        }
+        let writable = WritablePackage::load(&source).unwrap();
+        let mut reader = File::open(&source).unwrap();
+        create_clone_package_from_loaded(
+            &core, &BTreeMap::new(), &writable, &mut reader,
+            &[a.clone()], false, false, &output,
+        ).unwrap();
+        let result = WritablePackage::load(&output).unwrap();
+        let output_keys: HashSet<_> = result.entries.iter().map(key_string_from_writable).collect();
+        assert_eq!(output_keys, HashSet::from([a, icon_a1, icon_a2, thum_a]));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn object_same_instance_embedded_thumb_is_preserved_without_manifest() {
+        let path = test_path("same-instance-object-thumb");
+        let obj = test_resource_key(TYPE_OBJD, 0, 0xABCDEF);
+        let own_thumb = test_resource_key(TYPE_THUM_LARGE, 0, 0xABCDEF);
+        let unrelated = test_resource_key(TYPE_THUM_LARGE, 0, 0x888888);
+        write_test_package(&path, &[
+            (TYPE_OBJD, 0, 0xABCDEF, b"objd".to_vec()),
+            (TYPE_THUM_LARGE, 0, 0xABCDEF, b"own embedded thumbnail".to_vec()),
+            (TYPE_THUM_LARGE, 0, 0x888888, b"unrelated thumbnail".to_vec()),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let core = parse_package(&mmap).unwrap();
+        let expanded = expand_selection_for_export(
+            &core, &HashSet::from([obj.clone()]), true, &BTreeMap::new()
+        ).unwrap();
+        assert!(expanded.contains(&obj));
+        assert!(expanded.contains(&own_thumb));
+        assert!(!expanded.contains(&unrelated));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_object_same_instance_icon_survives_without_optional_thumbnails() {
+        let path = test_path("two-object-same-instance-icons");
+        let first = test_resource_key(TYPE_OBJD, 0, 0xA111);
+        let second = test_resource_key(TYPE_OBJD, 0, 0xB222);
+        let owned_icon = test_resource_key(TYPE_ICON, 0, 0xA111);
+        let unrelated_icon = test_resource_key(TYPE_ICON, 0, 0xB222);
+        write_test_package(&path, &[
+            (TYPE_OBJD, 0, 0xA111, b"objd-a".to_vec()),
+            (TYPE_OBJD, 0, 0xB222, b"objd-b".to_vec()),
+            (TYPE_ICON, 0, 0xA111, b"icon-a".to_vec()),
+            (TYPE_ICON, 0, 0xB222, b"icon-b".to_vec()),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let core = parse_package(&mmap).unwrap();
+        let selected = expand_selection_for_export(
+            &core, &HashSet::from([first.clone()]), false, &BTreeMap::new()
+        ).unwrap();
+        assert!(selected.contains(&first));
+        assert!(selected.contains(&owned_icon),
+            "Identically-instanced ICON must survive an object clone");
+        assert!(!selected.contains(&second));
+        assert!(!selected.contains(&unrelated_icon),
+            "Another object's exact-instance ICON must not leak");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_s3pe_multi_object_merge_does_not_borrow_single_global_icon() {
+        let path = test_path("legacy-multi-object-global-icon");
+        let a = test_resource_key(TYPE_OBJD, 0, 0x1111);
+        let b = test_resource_key(TYPE_OBJD, 0, 0x2222);
+        let icon = test_resource_key(TYPE_ICON, 0, 0x4444);
+        let global_xml = test_resource_key(TYPE_XML, 0, 0);
+        write_test_package(&path, &[
+            (TYPE_OBJD, 0, 0x1111, b"object a".to_vec()),
+            (TYPE_OBJD, 0, 0x2222, b"object b".to_vec()),
+            (TYPE_ICON, 0, 0x4444, b"unattributed icon".to_vec()),
+            (TYPE_XML, 0, 0, b"<manifest><thumbnail>2E75C765:00000000:0000000000004444</thumbnail></manifest>".to_vec()),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let core = parse_package(&mmap).unwrap();
+        for key in [a.clone(), b.clone()] {
+            let keys = expand_selection_for_export(
+                &core, &HashSet::from([key.clone()]), true, &BTreeMap::new()
+            ).unwrap();
+            assert!(keys.contains(&key));
+            assert!(!keys.contains(&icon), "A global XML/ICON has no unique owner");
+            assert!(!keys.contains(&global_xml), "A global XML is not per-object metadata");
+        }
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -7593,6 +8906,110 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn object_variants_with_identical_payloads_but_distinct_catalog_tgis_are_not_duplicates() {
+        // GreatDaySimmer regression: wall-hanging and leaning picture-frame
+        // variants can reuse exact bytes without being interchangeable CC.
+        let root = test_dir("object-wall-vs-floor-variant");
+        let path = root.join("Frames.package");
+        let wall = 0x1000_1111_2222_3333u64;
+        let leaning = 0x2000_1111_2222_3333u64;
+        let shared_payload = b"same-frame-metadata".to_vec();
+        write_test_package(&path, &[
+            (TYPE_OBJD, 0, wall, shared_payload.clone()),
+            (TYPE_OBJD, 0, leaning, shared_payload),
+            (TYPE_IMG, 0, 0x7777, vec![1u8; 64]),
+        ]);
+
+        for mode in ["object", "all"] {
+            let scan = scan_package_resources_inner(None, ScanPayload {
+                package_path: path.display().to_string(),
+                resource_type: mode.to_string(),
+                search: None,
+            }).unwrap();
+            let items: Vec<_> = scan.items.iter()
+                .filter(|item| item.key.starts_with(&format!("0x{TYPE_OBJD:08X}-")))
+                .collect();
+            assert_eq!(items.len(), 2, "Both frame variants should be selectable");
+            assert_ne!(items[0].key, items[1].key);
+            for item in items {
+                let relation = relation_for(&scan, &item.key);
+                assert_eq!(relation.duplicate_count, 0,
+                    "Distinct frame OBJD identities must not be flagged as duplicates");
+                assert_eq!(relation.tgi_conflict_count, 0);
+            }
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn manifest_owned_object_variants_with_same_bytes_are_not_duplicates() {
+        let root = test_dir("manifest-two-object-variants");
+        let path = root.join("MergedFrames.package");
+        let wall = test_resource_key(TYPE_OBJD, 0, 0xB001);
+        let leaning = test_resource_key(TYPE_OBJD, 0, 0xB002);
+        let img = test_resource_key(TYPE_IMG, 0, 0xC001);
+        let mk_source = |id, name: &str, objd: &String| ManifestPackage {
+            id,
+            name: name.to_string(),
+            original_size: 100,
+            anchors: vec![ManifestAnchor { kind: "OBJD".to_string(), key: objd.clone() }],
+            resources: [objd, &img].into_iter()
+                .map(|key| ManifestResource {key: key.clone()}).collect(),
+            preserved_resources: Vec::new(),
+        };
+        let manifest = MergeManifest {
+            version: 2,
+            packages: vec![
+                mk_source(1, "Frame_Wall.package", &wall),
+                mk_source(2, "Frame_Leaning.package", &leaning),
+            ],
+        };
+        write_test_package(&path, &[
+            (TYPE_OBJD, 0, 0xB001, b"same-catalog-payload".to_vec()),
+            (TYPE_OBJD, 0, 0xB002, b"same-catalog-payload".to_vec()),
+            (TYPE_IMG, 0, 0xC001, b"shared-texture".to_vec()),
+            (MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+        ]);
+        let scan = scan_package_resources_inner(None, ScanPayload {
+            package_path: path.display().to_string(),
+            resource_type: "all".to_string(),
+            search: None,
+        }).unwrap();
+        assert_eq!(scan.items.len(), 2);
+        assert!(scan.items.iter().any(|item| item.label == "Frame_Wall.package"));
+        assert!(scan.items.iter().any(|item| item.label == "Frame_Leaning.package"));
+        for item in &scan.items {
+            assert_eq!(relation_for(&scan, &item.key).duplicate_count, 0,
+                "A source manifest must not merge catalog variants by matching bytes");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn repeated_exact_objd_tgi_with_identical_bytes_is_still_reported() {
+        let root = test_dir("repeated-objd-same-tgi");
+        let path = root.join("RepeatedOBJD.package");
+        let tgi = 0x2222_3333_4444_5555u64;
+        write_test_package(&path, &[
+            (TYPE_OBJD, 0, tgi, b"identical".to_vec()),
+            (TYPE_OBJD, 0, tgi, b"identical".to_vec()),
+        ]);
+        let scan = scan_package_resources_inner(None, ScanPayload {
+            package_path: path.display().to_string(),
+            resource_type: "object".to_string(),
+            search: None,
+        }).unwrap();
+        assert_eq!(scan.items.len(), 2);
+        for item in &scan.items {
+            let relation = relation_for(&scan, &item.key);
+            assert_eq!(relation.duplicate_count, 2,
+                "Repeated identical catalog TGI must still flag genuine duplicates");
+            assert_eq!(relation.tgi_conflict_count, 0);
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn scan_marks_exact_logical_content_as_duplicate_even_with_different_tgi() {
         let root = test_dir("duplicate-content");
         let path = root.join("DuplicateContent.package");
@@ -7935,6 +9352,7 @@ mod remove_selected_tests {
             ],
             destination_folder: merged_dir.display().to_string(),
             output_name: "MyMerged.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
 
@@ -8006,6 +9424,185 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn failed_multi_package_unmerge_removes_only_new_outputs() {
+        let root = test_dir("unmerge-partial-rollback");
+        let existing = root.join("Existing.package");
+        let newly_created = root.join("FirstRestored.package");
+        std::fs::write(&existing, b"original untouched").unwrap();
+        {
+            let mut cleanup = RestoreOutputsCleanup {
+                created_paths: Vec::new(), committed: false,
+            };
+            std::fs::write(&newly_created, b"partial restored").unwrap();
+            cleanup.created_paths.push(newly_created.clone());
+            // Simulate a later package failing to validate.
+        }
+        assert!(!newly_created.exists());
+        assert_eq!(std::fs::read(&existing).unwrap(), b"original untouched");
+
+        {
+            let mut cleanup = RestoreOutputsCleanup {
+                created_paths: Vec::new(), committed: false,
+            };
+            std::fs::write(&newly_created, b"complete restored").unwrap();
+            cleanup.created_paths.push(newly_created.clone());
+            cleanup.committed = true;
+        }
+        assert_eq!(std::fs::read(&newly_created).unwrap(), b"complete restored");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn disk_budget_blocks_shortage_and_warns_under_five_gib() {
+        let gib = 1024u64 * 1024 * 1024;
+        assert!(evaluate_disk_budget(gib, 2 * gib)
+            .unwrap_err().contains("Espaço livre insuficiente"));
+        assert_eq!(evaluate_disk_budget(3 * gib, 2 * gib).unwrap(), Some(3 * gib));
+        assert_eq!(evaluate_disk_budget(6 * gib, 2 * gib).unwrap(), None);
+        assert_eq!(evaluate_disk_budget(2 * gib, 2 * gib).unwrap(), Some(2 * gib));
+    }
+
+    #[test]
+    fn remove_rebuild_never_deletes_or_overwrites_a_preexisting_temp_file() {
+        let root = test_dir("existing-remove-temporary");
+        let source = root.join("Original.package");
+        let temp = root.join(".user-data.s3cctmp");
+        write_test_package(&source, &[
+            (TYPE_XML, 0, 0x1234, b"original".to_vec()),
+        ]);
+        std::fs::write(&temp, b"must remain unchanged").unwrap();
+        let mmap = open_package(&source.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let source_package = WritablePackage::load(&source).unwrap();
+        let mut source_file = File::open(&source).unwrap();
+        let error = write_removed_package(
+            None,
+            Instant::now(),
+            &package,
+            &source_package,
+            &mut source_file,
+            &[],
+            &HashSet::new(),
+            &temp,
+        ).unwrap_err();
+        assert!(error.contains("já existe ou não pôde ser reservado"), "{error}");
+        assert_eq!(std::fs::read(&temp).unwrap(), b"must remain unchanged");
+        let candidate = unique_remove_temp_path(&root, "Original").unwrap();
+        assert!(!candidate.exists());
+        assert_eq!(candidate.extension().and_then(|x| x.to_str()), Some("s3cctmp"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unfinished_unmerge_restorations_are_not_selected_as_cc() {
+        let root = test_dir("ignore-unmerge-temp");
+        let original = root.join("Original.package");
+        std::fs::write(&original, b"original").unwrap();
+        let incomplete = unique_restore_temp_path(&root, 1);
+        assert!(incomplete.to_string_lossy().ends_with(".s3cctmp"));
+        std::fs::write(&incomplete, b"partial").unwrap();
+        let mut sources = Vec::new();
+        collect_merge_sources_from_path(&root, &mut sources).unwrap();
+        assert_eq!(sources, vec![original]);
+        {
+            let _cleanup = MergeTempCleanup(incomplete.clone());
+        }
+        assert!(!incomplete.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unfinished_merger_temporaries_are_not_selected_as_game_packages() {
+        let root = test_dir("ignore-merge-temp");
+        let input = root.join("Original.package");
+        let incomplete = root.join(".Merged.merge-temp-1234.s3cctmp");
+        std::fs::write(&input, b"original-package").unwrap();
+        std::fs::write(&incomplete, b"partial-do-not-import").unwrap();
+        let mut paths = Vec::new();
+        collect_merge_sources_from_path(&root, &mut paths).unwrap();
+        assert_eq!(paths, vec![input]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn streamed_merge_copy_preserves_stored_bytes_and_rejects_short_reads() {
+        let source_path = test_path("streamed-merge-original");
+        let output_path = test_path("streamed-merge-output");
+        let stored = b"stored-refpack-bytes-not-recompressed";
+        let mut whole = b"XX".to_vec();
+        whole.extend_from_slice(stored);
+        std::fs::write(&source_path, &whole).unwrap();
+        let mut source = File::open(&source_path).unwrap();
+        let mut dest = OpenOptions::new().read(true).write(true)
+            .create_new(true).open(&output_path).unwrap();
+        let entry = WritableEntry {
+            type_id: TYPE_IMG, group: 0, id1: 0, id2: 1, instance: 1,
+            chunk_offset: 2, file_size: stored.len() as u32,
+            mem_size: (stored.len() + 500) as u32,
+            compressed: 0x5A42, unknown2: 0x1234,
+        };
+        let offset = copy_stored_merge_resource(&mut source, &entry, &mut dest).unwrap();
+        assert_eq!(offset, 0);
+        assert_eq!(std::fs::read(&output_path).unwrap(), stored);
+        let mut truncated = entry.clone();
+        truncated.file_size += 1;
+        assert!(copy_stored_merge_resource(&mut source, &truncated, &mut dest)
+            .unwrap_err().contains("truncado"));
+        // A sparse seek is enough to simulate a near-4-GiB DBPF without
+        // allocating the file's intervening bytes on disk.
+        dest.seek(SeekFrom::Start(u32::MAX as u64 - 2)).unwrap();
+        assert!(copy_stored_merge_resource(&mut source, &entry, &mut dest)
+            .unwrap_err().contains("32 bits"));
+        drop(dest);
+        drop(source);
+        let _ = std::fs::remove_file(source_path);
+        let _ = std::fs::remove_file(output_path);
+    }
+
+    #[test]
+    fn merged_index_is_sorted_and_game_manifest_is_not_tuning_xml() {
+        let root = test_dir("sorted-opaque-merge");
+        let a = root.join("A.package");
+        let b = root.join("B.package");
+        let out = root.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        // Deliberately place high TGI before low TGI in the source.
+        write_test_package(&a, &[
+            (TYPE_STBL, 0, 0x9999, b"Catalog name".to_vec()),
+            (TYPE_OBJD, 0, 0x8888, b"objd".to_vec()),
+        ]);
+        write_test_package(&b, &[(TYPE_CASP, 0, 0x7777, b"casp".to_vec())]);
+
+        let merged = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![a.display().to_string(), b.display().to_string()],
+            destination_folder: out.display().to_string(),
+            output_name: "Merged.package".to_string(),
+            allow_overwrite: false,
+        }).unwrap();
+        let result = WritablePackage::load(&merged.output_path).unwrap();
+        assert!(result.entries.windows(2).all(|pair| {
+            (pair[0].type_id, pair[0].group, pair[0].instance)
+                <= (pair[1].type_id, pair[1].group, pair[1].instance)
+        }));
+        let manifest_entry = result.entries.iter()
+            .find(|e| is_manifest_tgi(e.type_id, e.group, e.instance))
+            .unwrap();
+        assert_eq!(manifest_entry.type_id, MANIFEST_TYPE);
+        assert_ne!(manifest_entry.type_id, TYPE_XML);
+        for (ty, instance, expected) in [
+            (TYPE_STBL, 0x9999, b"Catalog name".as_slice()),
+            (TYPE_OBJD, 0x8888, b"objd".as_slice()),
+            (TYPE_CASP, 0x7777, b"casp".as_slice()),
+        ] {
+            let entry = result.entries.iter()
+                .find(|e| e.type_id == ty && e.instance == instance).unwrap();
+            assert_eq!(result.get_uncompressed_data(entry).unwrap(), expected);
+        }
+        drop(result);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn reversible_merger_rejects_conflicting_tgi_data() {
         let root = test_dir("merge-conflict");
         let source_a = root.join("A.package");
@@ -8015,7 +9612,7 @@ mod remove_selected_tests {
 
         let instance = 0x4444_0000_0000_0004u64;
         write_test_package(&source_a, &[(TYPE_IMG, 0, instance, vec![1, 2, 3])]);
-        write_test_package(&source_b, &[(TYPE_IMG, 0, instance, vec![9, 9, 9])]);
+        write_test_package(&source_b, &[(TYPE_IMG, 0, instance, vec![9, 9, 9, 9])]);
 
         let error = merge_packages_with_manifest(MergePackagesPayload {
             package_paths: vec![
@@ -8024,12 +9621,89 @@ mod remove_selected_tests {
             ],
             destination_folder: destination.display().to_string(),
             output_name: "Conflict.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap_err();
 
         assert!(error.contains("Conflito de TGI"));
+        assert!(error.contains(&source_a.display().to_string()));
+        assert!(error.contains(&source_b.display().to_string()));
+        assert!(error.contains("IMG"));
+        assert!(error.contains("3 bytes"));
+        assert!(error.contains("4 bytes"));
         assert!(!destination.join("Conflict.package").exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn checked_dbpf_writes_refuse_offset_and_resource_length_overflow() {
+        let path = test_path("dbpf-boundary-check");
+        let package = WritablePackage::new(&path, false).unwrap();
+        let mut file = OpenOptions::new().read(true).write(true).open(&path).unwrap();
+        file.seek(SeekFrom::Start(u32::MAX as u64 - 8)).unwrap();
+        assert!(checked_dbpf_resource_offset(&mut file, 32)
+            .unwrap_err().contains("32 bits"));
+        assert!(checked_dbpf_resource_offset(&mut file, 0x8000_0000)
+            .unwrap_err().contains("31 bits"));
+        // The empty index is 4 bytes; MAX-8 is valid, MAX-2 is not.
+        assert!(checked_dbpf_index_position(&package, &mut file).is_ok());
+        file.seek(SeekFrom::Start(u32::MAX as u64 - 2)).unwrap();
+        assert!(checked_dbpf_index_position(&package, &mut file)
+            .unwrap_err().contains("32 bits"));
+        file.seek(SeekFrom::Start(96)).unwrap();
+        assert_eq!(checked_dbpf_resource_offset(&mut file, 32).unwrap(), 96);
+        drop(file);
+        drop(package);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn large_manifest_restore_preserves_exact_payloads_and_index_metadata() {
+        let root = test_dir("large-restore-streaming");
+        let source_a = root.join("LargeA.package");
+        let source_b = root.join("LargeB.package");
+        let merged_root = root.join("merged");
+        let restored_root = root.join("restored");
+        std::fs::create_dir_all(&merged_root).unwrap();
+        std::fs::create_dir_all(&restored_root).unwrap();
+        let mut big = vec![0u8; 12 * 1024 * 1024 + 13];
+        for (i, byte) in big.iter_mut().enumerate() {
+            *byte = (i % 251) as u8;
+        }
+        write_test_package(&source_a, &[
+            (TYPE_IMG, 0, 0xEE01, big.clone()),
+            (TYPE_OBJD, 0, 0xAA01, b"LargeObject".to_vec()),
+        ]);
+        write_test_package(&source_b, &[
+            (TYPE_OBJD, 0, 0xAA02, b"SecondObject".to_vec()),
+        ]);
+        let merged = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![source_a.display().to_string(), source_b.display().to_string()],
+            destination_folder: merged_root.display().to_string(),
+            output_name: "Merged.package".to_string(),
+            allow_overwrite: false,
+        }).unwrap();
+        let restored = restore_manifest_packages(RestoreManifestPayload {
+            package_path: merged.output_path,
+            destination_folder: restored_root.display().to_string(),
+        }).unwrap();
+        assert_eq!(restored.package_count, 2);
+        let original = WritablePackage::load(&source_a).unwrap();
+        let result = WritablePackage::load(restored_root.join("LargeA.package")).unwrap();
+        for entry in &original.entries {
+            let back = result.entries.iter().find(|r| {
+                (r.type_id, r.group, r.instance) == (entry.type_id, entry.group, entry.instance)
+            }).unwrap();
+            assert_eq!(back.file_size, entry.file_size);
+            assert_eq!(back.mem_size, entry.mem_size);
+            assert_eq!(back.compressed, entry.compressed);
+            assert_eq!(back.unknown2, entry.unknown2);
+            assert_eq!(
+                original.get_uncompressed_data(entry).unwrap(),
+                result.get_uncompressed_data(back).unwrap()
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -8073,6 +9747,7 @@ mod remove_selected_tests {
             ],
             destination_folder: destination.display().to_string(),
             output_name: "EyebrowsMerged.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
 
@@ -8191,6 +9866,7 @@ mod remove_selected_tests {
             ],
             destination_folder: destination.display().to_string(),
             output_name: "Merged.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
 
@@ -8252,6 +9928,135 @@ mod remove_selected_tests {
         assert_eq!(std::fs::read(&source).unwrap(), rebuilt);
         assert_eq!(std::fs::read(&backup).unwrap(), original);
         assert!(!temp.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn duplicate_detection_compares_decoded_tgis_without_caring_about_index_order() {
+        let root = test_dir("duplicates-streamed-signature");
+        let a = root.join("A.package");
+        let b = root.join("B.package");
+        let changed = root.join("C.package");
+        write_test_package(&a, &[
+            (TYPE_IMG, 0, 0x1111, vec![17; 96 * 1024]),
+            (TYPE_OBJD, 0, 0x2222, b"same objd".to_vec()),
+        ]);
+        write_test_package(&b, &[
+            (TYPE_OBJD, 0, 0x2222, b"same objd".to_vec()),
+            (TYPE_IMG, 0, 0x1111, vec![17; 96 * 1024]),
+        ]);
+        write_test_package(&changed, &[
+            (TYPE_OBJD, 0, 0x2222, b"same objd".to_vec()),
+            (TYPE_IMG, 0, 0x1111, vec![18; 96 * 1024]),
+        ]);
+        assert!(packages_have_same_tgi_payloads(&a, &b).unwrap());
+        assert!(!packages_have_same_tgi_payloads(&a, &changed).unwrap());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn divergent_img_tgi_reports_both_sha256_hashes_and_preserves_inputs() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let root = test_dir("merger-tgi-sha256");
+        let source_a = root.join("Texture_A.package");
+        let source_b = root.join("Texture_B.package");
+        let destination = root.join("output");
+        std::fs::create_dir_all(&destination).unwrap();
+        let pixels_a = b"first-real-texture".to_vec();
+        let pixels_b = b"second-real-texture".to_vec();
+        let tgi = 0xABCDEFu64;
+        write_test_package(&source_a, &[(TYPE_IMG, 0, tgi, pixels_a.clone())]);
+        write_test_package(&source_b, &[(TYPE_IMG, 0, tgi, pixels_b.clone())]);
+        let bytes_a = std::fs::read(&source_a).unwrap();
+        let bytes_b = std::fs::read(&source_b).unwrap();
+
+        let error = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![source_a.display().to_string(), source_b.display().to_string()],
+            destination_folder: destination.display().to_string(),
+            output_name: "Merged.package".to_string(),
+            allow_overwrite: false,
+        }).unwrap_err();
+
+        assert!(error.contains("Conflito de TGI"), "{error}");
+        assert!(error.contains("Type 0x00B2D882"), "{error}");
+        assert!(error.contains("Instance 0x0000000000ABCDEF"), "{error}");
+        assert!(error.contains(&source_a.display().to_string()), "{error}");
+        assert!(error.contains(&source_b.display().to_string()), "{error}");
+        assert!(error.contains(&sha256_hex(&pixels_a)), "{error}");
+        assert!(error.contains(&sha256_hex(&pixels_b)), "{error}");
+        assert_eq!(error.matches("SHA-256 descompactado:").count(), 2);
+        assert_eq!(std::fs::read(&source_a).unwrap(), bytes_a);
+        assert_eq!(std::fs::read(&source_b).unwrap(), bytes_b);
+        assert!(!destination.join("Merged.package").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn merger_requires_explicit_consent_and_preserves_replaced_output_in_a_backup() {
+        let root = test_dir("merger-safe-overwrite");
+        let source_a = root.join("Source_A.package");
+        let source_b = root.join("Source_B.package");
+        let destination = root.join("output");
+        std::fs::create_dir_all(&destination).unwrap();
+        write_test_package(&source_a, &[(TYPE_CASP, 0, 0xA1123, vec![1, 2, 3])]);
+        write_test_package(&source_b, &[(TYPE_CASP, 0, 0xB1123, vec![4, 5, 6])]);
+
+        let original_a = std::fs::read(&source_a).unwrap();
+        let original_b = std::fs::read(&source_b).unwrap();
+        // A legacy temp path may be a legitimate user file. It must survive.
+        let existing_legacy_temp =
+            destination.join(format!(".Merged.merge-temp-{}.package", std::process::id()));
+        std::fs::write(&existing_legacy_temp, b"legacy-temp-must-not-be-deleted").unwrap();
+        let output = destination.join("Merged.package");
+        std::fs::write(&output, b"old-merged-kept-exactly").unwrap();
+
+        let mut payload = MergePackagesPayload {
+            package_paths: vec![
+                source_a.display().to_string(),
+                source_b.display().to_string(),
+            ],
+            destination_folder: destination.display().to_string(),
+            output_name: "Merged.package".to_string(),
+            allow_overwrite: false,
+        };
+        let error = merge_packages_with_manifest(payload.clone()).unwrap_err();
+        assert!(error.contains("Já existe"), "{error}");
+        assert_eq!(std::fs::read(&output).unwrap(), b"old-merged-kept-exactly");
+
+        payload.allow_overwrite = true;
+        let result = merge_packages_with_manifest(payload.clone()).unwrap();
+        let saved = result.backup_path.expect("A confirmed replacement must create a backup");
+        assert!(saved.ends_with(".s3ccbak"));
+        assert_eq!(std::fs::read(&saved).unwrap(), b"old-merged-kept-exactly");
+        let first_merged = std::fs::read(&output).unwrap();
+        assert!(WritablePackage::load(&output).is_ok());
+
+        let second = merge_packages_with_manifest(payload).unwrap();
+        let backup_again = second.backup_path.expect("Each overwrite needs another backup");
+        assert_ne!(saved, backup_again);
+        assert_eq!(std::fs::read(&backup_again).unwrap(), first_merged);
+        assert_eq!(std::fs::read(&source_a).unwrap(), original_a);
+        assert_eq!(std::fs::read(&source_b).unwrap(), original_b);
+        assert_eq!(
+            std::fs::read(&existing_legacy_temp).unwrap(),
+            b"legacy-temp-must-not-be-deleted"
+        );
+
+        // No replacement of an original source is allowed, even with consent.
+        let protected = merge_packages_with_manifest(MergePackagesPayload {
+            package_paths: vec![
+                source_a.display().to_string(),
+                source_b.display().to_string(),
+            ],
+            destination_folder: root.display().to_string(),
+            output_name: "Source_A.package".to_string(),
+            allow_overwrite: true,
+        }).unwrap_err();
+        assert!(protected.contains("package de origem"), "{protected}");
+        assert_eq!(std::fs::read(&source_a).unwrap(), original_a);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -8322,6 +10127,7 @@ mod remove_selected_tests {
             package_paths: sources,
             destination_folder: destination.display().to_string(),
             output_name: "Merged.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
         let original_size = std::fs::metadata(&merged.output_path).unwrap().len();
@@ -8405,6 +10211,7 @@ mod remove_selected_tests {
             package_paths: paths,
             destination_folder: destination.display().to_string(),
             output_name: "MergedTen.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
 
@@ -8547,6 +10354,7 @@ mod remove_selected_tests {
             ],
             destination_folder: merged_dir.display().to_string(),
             output_name: "MergedClips.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
 
@@ -8641,6 +10449,7 @@ mod remove_selected_tests {
             ],
             destination_folder: merged_dir.display().to_string(),
             output_name: "CombinedPoseLists.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
 
@@ -8787,6 +10596,7 @@ mod remove_selected_tests {
             ],
             destination_folder: merged_a_dir.display().to_string(),
             output_name: "MergedA.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
 
@@ -8797,6 +10607,7 @@ mod remove_selected_tests {
             ],
             destination_folder: merged_b_dir.display().to_string(),
             output_name: "MergedB.package".to_string(),
+            allow_overwrite: false,
         })
         .unwrap();
 

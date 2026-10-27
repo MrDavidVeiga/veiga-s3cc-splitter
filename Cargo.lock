@@ -5509,6 +5509,7 @@ dependencies = [
  "byteorder",
  "quick-xml 0.31.0",
  "serde",
+ "sha2 0.10.9",
  "thiserror 1.0.69",
 ]
 
@@ -6819,6 +6820,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sims3-core",
  "sims3-pack",
  "tauri",
