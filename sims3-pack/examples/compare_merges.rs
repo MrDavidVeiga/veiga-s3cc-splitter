@@ -5,6 +5,7 @@
  //! No CC is copied, rewritten, uploaded or renamed. The CSV is created with
  //! create_new to avoid accidentally overwriting anything.
  use sims3_pack::dbpf::{Package, ResourceEntry};
+ use sha2::{Digest, Sha256};
  use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
  use anyhow::Result;
  use std::fs::{File, OpenOptions};
@@ -78,6 +79,12 @@
      }
  }
 
+ // Decode one resource at a time to avoid keeping both large texture
+ // payloads in RAM. Hash the uncompressed resource, not stored RefPack bytes.
+ fn decoded_sha256(package: &Package, entry: &ResourceEntry) -> Result<String> {
+     Ok(format!("{:x}", Sha256::digest(package.get_uncompressed_data(entry)?)))
+ }
+
  fn run(left_path: &Path, right_path: &Path, report_path: &Path) -> Result<()> {
      let left = Package::load(left_path)?;
      let right = Package::load(right_path)?;
@@ -85,11 +92,19 @@
      let right_bytes = std::fs::metadata(right_path)?.len();
      let (left_idx, left_duplicates) = index(&left);
      let (right_idx, right_duplicates) = index(&right);
+     let mut left_counts = HashMap::<Key, usize>::new();
+     let mut right_counts = HashMap::<Key, usize>::new();
+     for entry in &left.entries {
+         *left_counts.entry((entry.type_id, entry.group, entry.instance)).or_default() += 1;
+     }
+     for entry in &right.entries {
+         *right_counts.entry((entry.type_id, entry.group, entry.instance)).or_default() += 1;
+     }
      let keys: BTreeSet<Key> = left_idx.keys().chain(right_idx.keys()).copied().collect();
      let mut left_handle = File::open(left_path)?;
      let mut right_handle = File::open(right_path)?;
      let mut report = OpenOptions::new().write(true).create_new(true).open(report_path)?;
-     writeln!(report, "status,type,group,instance,left_stored_size,right_stored_size,left_decoded_size,right_decoded_size,left_compressed,left_unknown2,right_compressed,right_unknown2")?;
+     writeln!(report, "status,type,group,instance,left_stored_size,right_stored_size,left_decoded_size,right_decoded_size,left_compressed,left_unknown2,right_compressed,right_unknown2,left_decoded_sha256,right_decoded_sha256,left_tgi_count,right_tgi_count")?;
 
      let mut counts = BTreeMap::<&str, usize>::new();
      for key in keys {
@@ -108,9 +123,21 @@
              }
          };
          *counts.entry(status).or_default() += 1;
+         // For repeated TGIs there is no unique resource to hash: leave both
+         // fields blank rather than silently hashing only the last entry.
+         let left_hash = if left_duplicates.contains(&key) {
+             None
+         } else {
+             a.and_then(|entry| decoded_sha256(&left, entry).ok())
+         };
+         let right_hash = if right_duplicates.contains(&key) {
+             None
+         } else {
+             b.and_then(|entry| decoded_sha256(&right, entry).ok())
+         };
          writeln!(
              report,
-             "{status},0x{:08X},0x{:08X},0x{:016X},{},{},{},{},{},{},{},{}",
+             "{status},0x{:08X},0x{:08X},0x{:016X},{},{},{},{},{},{},{},{},{},{},{},{}",
              key.0, key.1, key.2,
              a.map(|e| e.file_size.to_string()).unwrap_or_default(),
              b.map(|e| e.file_size.to_string()).unwrap_or_default(),
@@ -120,6 +147,10 @@
              a.map(|e| e.unknown2.to_string()).unwrap_or_default(),
              b.map(|e| e.compressed.to_string()).unwrap_or_default(),
              b.map(|e| e.unknown2.to_string()).unwrap_or_default(),
+             left_hash.unwrap_or_default(),
+             right_hash.unwrap_or_default(),
+             left_counts.get(&key).copied().unwrap_or(0),
+             right_counts.get(&key).copied().unwrap_or(0),
          )?;
      }
      report.flush()?;
@@ -198,6 +229,48 @@
          for path in [a, b, report] {
              std::fs::remove_file(path).unwrap();
          }
+     }
+
+     #[test]
+     fn audit_records_decoded_sha256_for_matching_and_missing_skin_img() {
+         let a = fixture("skin-with-img.package");
+         let b = fixture("skin-without-img.package");
+         let report = fixture("skin-audit.csv");
+         sample_package(&a, &[(101, b"tone"), (501, b"skin-texture")]);
+         sample_package(&b, &[(101, b"tone")]);
+         run(&a, &b, &report).unwrap();
+         let csv = std::fs::read_to_string(&report).unwrap();
+         let header: Vec<_> = csv.lines().next().unwrap().split(',').collect();
+         assert_eq!(header.len(), 16);
+         assert!(header.contains(&"left_decoded_sha256"));
+         let row = csv.lines().find(|line| line.starts_with("only_s3pe,")
+             && line.contains("0x00000000000001F5")).unwrap();
+         let cols: Vec<_> = row.split(',').collect();
+         assert_eq!(cols[12], format!("{:x}", Sha256::digest(b"skin-texture")));
+         assert_eq!(cols[13], "");
+         assert_eq!(cols[14], "1");
+         assert_eq!(cols[15], "0");
+         let equal = csv.lines().find(|line| line.starts_with("same_stored,")).unwrap();
+         let fields: Vec<_> = equal.split(',').collect();
+         assert_eq!(fields[12], fields[13]);
+         for path in [a, b, report] { std::fs::remove_file(path).unwrap(); }
+     }
+
+     #[test]
+     fn audit_marks_same_tgi_multiple_payloads_without_choosing_a_hash() {
+         let a = fixture("two-versions-under-one-tgi.package");
+         let b = fixture("one-version.package");
+         let report = fixture("two-versions.csv");
+         sample_package(&a, &[(42, b"version-wall"), (42, b"version-floor")]);
+         sample_package(&b, &[(42, b"version-wall")]);
+         run(&a, &b, &report).unwrap();
+         let csv = std::fs::read_to_string(&report).unwrap();
+         let row = csv.lines().find(|line| line.starts_with("duplicate_tgi")).unwrap();
+         let fields: Vec<_> = row.split(',').collect();
+         assert_eq!(fields[12], "");
+         assert_eq!(fields[14], "2");
+         assert_eq!(fields[15], "1");
+         for path in [a, b, report] { std::fs::remove_file(path).unwrap(); }
      }
 
      #[test]
