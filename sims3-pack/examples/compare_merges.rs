@@ -274,6 +274,44 @@
      }
 
      #[test]
+     fn refpack_and_uncompressed_payloads_have_same_decoded_hash() {
+         let compressed = fixture("refpack-compressed.package");
+         let plain = fixture("refpack-plain.package");
+         let report = fixture("refpack-vs-plain.csv");
+         // RefPack: 3-byte size, literal ending command, decoded "cat".
+         let bytes_compressed = [0u8, 0xFB, 0, 0, 3, 0xFF, b'c', b'a', b't'];
+         let write_one = |path: &Path, data: &[u8]| {
+             let mut package = Package::new(path, false).unwrap();
+             let mut file = OpenOptions::new().read(true).write(true).open(path).unwrap();
+             file.seek(SeekFrom::Start(package.index_position as u64)).unwrap();
+             let offset = file.stream_position().unwrap() as u32;
+             file.write_all(data).unwrap();
+             package.entries.push(ResourceEntry {
+                 type_id: 0x00B2_D882, group: 0, id1: 0, id2: 0xA1,
+                 instance: 0xA1, chunk_offset: offset,
+                 file_size: data.len() as u32, mem_size: 3,
+                 compressed: if data.len() != 3 { 0xFFFF } else { 0 },
+                 unknown2: 0,
+             });
+             package.index_position = file.stream_position().unwrap() as u32;
+             drop(file);
+             package.write_index_and_header().unwrap();
+         };
+         write_one(&compressed, &bytes_compressed);
+         write_one(&plain, b"cat");
+         run(&compressed, &plain, &report).unwrap();
+         let csv = std::fs::read_to_string(&report).unwrap();
+         let row = csv.lines().find(|r| r.starts_with("same_decoded_metadata_diff,"))
+             .expect("Compression-only difference must not be classified as changed content");
+         let cols: Vec<_> = row.split(',').collect();
+         assert_eq!(cols[12], cols[13]);
+         assert_eq!(cols[12], format!("{:x}", Sha256::digest(b"cat")));
+         for path in [compressed, plain, report] {
+             std::fs::remove_file(path).unwrap();
+         }
+     }
+
+     #[test]
      fn buffered_stored_comparison_respects_offsets_and_differences() {
          let a = fixture("a");
          let b = fixture("b");
