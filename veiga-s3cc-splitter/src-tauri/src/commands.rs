@@ -3483,11 +3483,14 @@ fn same_instance_companions(
             wanted.extend([
                 TYPE_VPXY, TYPE_XML, TYPE_TXTC, TYPE_RSLT, TYPE_FTPT, TYPE_LITE, TYPE_RIG,
             ]);
-            // Same-instance embedded thumbnails can be associated with the
-            // selected catalog object without guessing an unrelated ICON.
+            // An ICON with the *same exact Instance* as a selected object is
+            // part of that object's DBPF identity. Preserve it even when
+            // optional thumbnails are off. Other thumbnail variants remain
+            // controlled by the optional preview switch for legacy merges.
+            wanted.insert(TYPE_ICON);
             if include_thumbnails {
                 wanted.extend([
-                    TYPE_ICON, TYPE_THUM_SMALL, TYPE_THUM_MED, TYPE_THUM_LARGE,
+                    TYPE_THUM_SMALL, TYPE_THUM_MED, TYPE_THUM_LARGE,
                     0x0580A2B4, 0x0580A2B5, 0x0580A2B6,
                 ]);
             }
@@ -8495,6 +8498,33 @@ mod remove_selected_tests {
         assert!(expanded.contains(&obj));
         assert!(expanded.contains(&own_thumb));
         assert!(!expanded.contains(&unrelated));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_object_same_instance_icon_survives_without_optional_thumbnails() {
+        let path = test_path("two-object-same-instance-icons");
+        let first = test_resource_key(TYPE_OBJD, 0, 0xA111);
+        let second = test_resource_key(TYPE_OBJD, 0, 0xB222);
+        let owned_icon = test_resource_key(TYPE_ICON, 0, 0xA111);
+        let unrelated_icon = test_resource_key(TYPE_ICON, 0, 0xB222);
+        write_test_package(&path, &[
+            (TYPE_OBJD, 0, 0xA111, b"objd-a".to_vec()),
+            (TYPE_OBJD, 0, 0xB222, b"objd-b".to_vec()),
+            (TYPE_ICON, 0, 0xA111, b"icon-a".to_vec()),
+            (TYPE_ICON, 0, 0xB222, b"icon-b".to_vec()),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let core = parse_package(&mmap).unwrap();
+        let selected = expand_selection_for_export(
+            &core, &HashSet::from([first.clone()]), false, &BTreeMap::new()
+        ).unwrap();
+        assert!(selected.contains(&first));
+        assert!(selected.contains(&owned_icon),
+            "Identically-instanced ICON must survive an object clone");
+        assert!(!selected.contains(&second));
+        assert!(!selected.contains(&unrelated_icon),
+            "Another object's exact-instance ICON must not leak");
         let _ = std::fs::remove_file(path);
     }
 
