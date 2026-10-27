@@ -2936,7 +2936,22 @@ fn manifest_icon_ref(package: &DBPF<'_>, xml: ResourceKeyParts) -> Option<Resour
         .then_some(parts)
 }
 
+// These are embedded DBPF thumbnail/ICON resource types, not images generated
+// by the game's separate thumbnail-cache packages.
+fn is_object_thumbnail_type(resource_type: u32) -> bool {
+    matches!(
+        resource_type,
+        TYPE_ICON | TYPE_THUM_SMALL | TYPE_THUM_MED | TYPE_THUM_LARGE
+            | 0x0580A2B4 | 0x0580A2B5 | 0x0580A2B6
+    )
+}
+
 fn object_unique_icon_ref(package: &DBPF<'_>) -> Option<ResourceKeyParts> {
+    // One lone ICON in a *multi-object* s3pe merge is not evidence of which
+    // object owns it. Never copy it to every split object.
+    if package.entries_for_type(TYPE_OBJD).len() != 1 {
+        return None;
+    }
     let mut icons = package
         .files
         .iter()
@@ -3468,6 +3483,14 @@ fn same_instance_companions(
             wanted.extend([
                 TYPE_VPXY, TYPE_XML, TYPE_TXTC, TYPE_RSLT, TYPE_FTPT, TYPE_LITE, TYPE_RIG,
             ]);
+            // Same-instance embedded thumbnails can be associated with the
+            // selected catalog object without guessing an unrelated ICON.
+            if include_thumbnails {
+                wanted.extend([
+                    TYPE_ICON, TYPE_THUM_SMALL, TYPE_THUM_MED, TYPE_THUM_LARGE,
+                    0x0580A2B4, 0x0580A2B5, 0x0580A2B6,
+                ]);
+            }
         }
         _ => {}
     }
@@ -4059,11 +4082,15 @@ fn object_group_members(package: &DBPF<'_>, objd: ResourceKeyParts) -> Vec<Resou
         });
     }
 
-    // Keep package/global manifest XML when present; pull ICON only if that manifest points to it.
+    // An instance-zero XML is package-global, not necessarily owned by a
+    // selected object in a legacy s3pe merge. Including it for every object
+    // can pull an unrelated ICON via <thumbnail>. Only a single-object DBPF
+    // has an unambiguous object root for this legacy heuristic.
+    let single_object = package.entries_for_type(TYPE_OBJD).len() == 1;
     for entry in package
         .files
         .iter()
-        .filter(|e| e.resource_type == TYPE_XML && e.instance == 0)
+        .filter(|e| e.resource_type == TYPE_XML && e.instance == 0 && single_object)
     {
         let parts = ResourceKeyParts {
             resource_type: entry.resource_type,
@@ -4076,7 +4103,7 @@ fn object_group_members(package: &DBPF<'_>, objd: ResourceKeyParts) -> Vec<Resou
     let xml_parts: Vec<ResourceKeyParts> = found
         .iter()
         .copied()
-        .filter(|p| p.resource_type == TYPE_XML)
+        .filter(|p| p.resource_type == TYPE_XML && (p.instance != 0 || single_object))
         .collect();
     let mut found_icon = false;
     for xml in xml_parts {
@@ -4194,27 +4221,27 @@ fn expand_selection_for_export(
         .cloned()
         .collect();
     if !requested_objects.is_empty() {
-        if let Some(manifest) = read_merge_manifest_from_dbpf(package)? {
-            for source in &manifest.packages {
-                let owns_requested_object = source.anchors.iter().any(|anchor| {
-                    anchor.kind.eq_ignore_ascii_case("OBJD")
-                        && requested_objects.contains(&anchor.key)
-                });
-                if !owns_requested_object {
-                    continue;
-                }
-                let matching_icons: Vec<&str> = source.resources.iter()
-                    .filter_map(|resource| {
-                        let parts = parse_key(&resource.key).ok()?;
-                        (parts.resource_type == TYPE_ICON
-                            && matching_entry_index(package, parts).is_some())
-                            .then_some(resource.key.as_str())
+        if let Some(manifest) = read_valid_merge_manifest_from_dbpf(package) {
+            // Attribute thumbnail resources to a source only if the chosen
+            // OBJD anchor has exactly one manifest owner. A source can own
+            // multiple ICONs/THUMs: preserve every one, without copying
+            // thumbnails belonging to other source packages.
+            for object_key in &requested_objects {
+                let mut owners = manifest.packages.iter().filter(|source| {
+                    source.anchors.iter().any(|anchor| {
+                        anchor.kind.eq_ignore_ascii_case("OBJD") && anchor.key == *object_key
                     })
-                    .collect();
-                // If an original source had multiple ICONs, resource ownership
-                // inside that source is ambiguous; do not guess.
-                if matching_icons.len() == 1 {
-                    selected.insert(matching_icons[0].to_string());
+                });
+                let Some(source) = owners.next() else { continue };
+                if owners.next().is_some() { continue }
+                for resource in &source.resources {
+                    if let Ok(parts) = parse_key(&resource.key) {
+                        if is_object_thumbnail_type(parts.resource_type)
+                            && matching_entry_index(package, parts).is_some()
+                        {
+                            selected.insert(resource.key.clone());
+                        }
+                    }
                 }
             }
         }
@@ -8381,6 +8408,120 @@ mod remove_selected_tests {
             drop(mmap);
             let _ = std::fs::remove_file(path);
         }
+    }
+
+
+    #[test]
+    fn object_manifest_selection_preserves_all_owned_icons_and_thums_without_cross_leaks() {
+        let root = test_dir("multi-thumbnail-per-object");
+        let source = root.join("ObjectMerge.package");
+        let output = root.join("ObjectA.package");
+        let a = test_resource_key(TYPE_OBJD, 0, 0x1110);
+        let b = test_resource_key(TYPE_OBJD, 0, 0x2220);
+        let icon_a1 = test_resource_key(TYPE_ICON, 0, 0xAA11);
+        let icon_a2 = test_resource_key(TYPE_ICON, 0, 0xAA12);
+        let thum_a = test_resource_key(TYPE_THUM_LARGE, 0, 0xAA13);
+        let icon_b = test_resource_key(TYPE_ICON, 0, 0xBB11);
+        let thum_b = test_resource_key(TYPE_THUM_LARGE, 0, 0xBB12);
+        let img_b = test_resource_key(TYPE_IMG, 0, 0xBB13);
+        let mk = |id, name: &str, anchor: &String, resources: Vec<&String>| ManifestPackage {
+            id,
+            name: name.to_string(),
+            original_size: 100,
+            anchors: vec![ManifestAnchor { kind: "OBJD".to_string(), key: anchor.clone() }],
+            resources: resources.into_iter()
+                .map(|key| ManifestResource { key: key.clone() })
+                .collect(),
+            preserved_resources: vec![],
+        };
+        let manifest = MergeManifest {
+            version: 2,
+            packages: vec![
+                mk(1, "ObjectA.package", &a, vec![&a, &icon_a1, &icon_a2, &thum_a]),
+                mk(2, "ObjectB.package", &b, vec![&b, &icon_b, &thum_b, &img_b]),
+            ],
+        };
+        write_test_package(&source, &[
+            (TYPE_OBJD, 0, 0x1110, b"object-a".to_vec()),
+            (TYPE_OBJD, 0, 0x2220, b"object-b".to_vec()),
+            (TYPE_ICON, 0, 0xAA11, b"icon-a1".to_vec()),
+            (TYPE_ICON, 0, 0xAA12, b"icon-a2".to_vec()),
+            (TYPE_THUM_LARGE, 0, 0xAA13, b"thum-a".to_vec()),
+            (TYPE_ICON, 0, 0xBB11, b"icon-b".to_vec()),
+            (TYPE_THUM_LARGE, 0, 0xBB12, b"thum-b".to_vec()),
+            (TYPE_IMG, 0, 0xBB13, b"img-b".to_vec()),
+            (MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE, manifest.to_xml_bytes()),
+        ]);
+        let mmap = open_package(&source.display().to_string()).unwrap();
+        let core = parse_package(&mmap).unwrap();
+        let selected = HashSet::from([a.clone()]);
+        // Even when optional thumbnails are unchecked, known source-owned
+        // ICON/THUM resources must be included in the closure.
+        let expanded = expand_selection_for_export(&core, &selected, false, &BTreeMap::new()).unwrap();
+        for key in [&a, &icon_a1, &icon_a2, &thum_a] {
+            assert!(expanded.contains(key), "Lost owned object resource {key}");
+        }
+        for key in [&b, &icon_b, &thum_b, &img_b] {
+            assert!(!expanded.contains(key), "Leaked other object's resource {key}");
+        }
+        let writable = WritablePackage::load(&source).unwrap();
+        let mut reader = File::open(&source).unwrap();
+        create_clone_package_from_loaded(
+            &core, &BTreeMap::new(), &writable, &mut reader,
+            &[a.clone()], false, false, &output,
+        ).unwrap();
+        let result = WritablePackage::load(&output).unwrap();
+        let output_keys: HashSet<_> = result.entries.iter().map(key_string_from_writable).collect();
+        assert_eq!(output_keys, HashSet::from([a, icon_a1, icon_a2, thum_a]));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn object_same_instance_embedded_thumb_is_preserved_without_manifest() {
+        let path = test_path("same-instance-object-thumb");
+        let obj = test_resource_key(TYPE_OBJD, 0, 0xABCDEF);
+        let own_thumb = test_resource_key(TYPE_THUM_LARGE, 0, 0xABCDEF);
+        let unrelated = test_resource_key(TYPE_THUM_LARGE, 0, 0x888888);
+        write_test_package(&path, &[
+            (TYPE_OBJD, 0, 0xABCDEF, b"objd".to_vec()),
+            (TYPE_THUM_LARGE, 0, 0xABCDEF, b"own embedded thumbnail".to_vec()),
+            (TYPE_THUM_LARGE, 0, 0x888888, b"unrelated thumbnail".to_vec()),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let core = parse_package(&mmap).unwrap();
+        let expanded = expand_selection_for_export(
+            &core, &HashSet::from([obj.clone()]), true, &BTreeMap::new()
+        ).unwrap();
+        assert!(expanded.contains(&obj));
+        assert!(expanded.contains(&own_thumb));
+        assert!(!expanded.contains(&unrelated));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_s3pe_multi_object_merge_does_not_borrow_single_global_icon() {
+        let path = test_path("legacy-multi-object-global-icon");
+        let a = test_resource_key(TYPE_OBJD, 0, 0x1111);
+        let b = test_resource_key(TYPE_OBJD, 0, 0x2222);
+        let icon = test_resource_key(TYPE_ICON, 0, 0x4444);
+        let global_xml = test_resource_key(TYPE_XML, 0, 0);
+        write_test_package(&path, &[
+            (TYPE_OBJD, 0, 0x1111, b"object a".to_vec()),
+            (TYPE_OBJD, 0, 0x2222, b"object b".to_vec()),
+            (TYPE_ICON, 0, 0x4444, b"unattributed icon".to_vec()),
+            (TYPE_XML, 0, 0, b"<manifest><thumbnail>2E75C765:00000000:0000000000004444</thumbnail></manifest>".to_vec()),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let core = parse_package(&mmap).unwrap();
+        for key in [a.clone(), b.clone()] {
+            let keys = expand_selection_for_export(
+                &core, &HashSet::from([key.clone()]), true, &BTreeMap::new()
+            ).unwrap();
+            assert!(keys.contains(&key));
+            assert!(!keys.contains(&icon), "A global XML/ICON has no unique owner");
+            assert!(!keys.contains(&global_xml), "A global XML is not per-object metadata");
+        }
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
