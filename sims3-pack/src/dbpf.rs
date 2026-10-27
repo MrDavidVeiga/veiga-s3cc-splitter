@@ -107,12 +107,13 @@ impl Package {
         f.seek(SeekFrom::Start(index_position as u64))?;
         let bit_flag = f.read_u32::<LittleEndian>()?;
 
-        let mut common_count = 0;
-        for bit in [1u32, 2, 4, 8] {
-            if (bit_flag & bit) != 0 {
-                common_count += 1;
-            }
+        // All eight DBPF index fields can be stored once in the shared
+        // header. The low Instance word (bit 3) and the four trailing fields
+        // must not be consumed again from each compact index record.
+        if bit_flag & !0xFF != 0 {
+            bail!("Corrupted: unsupported DBPF index shared-field mask 0x{bit_flag:08X}");
         }
+        let common_count = bit_flag.count_ones();
 
         let entry_size = 32u64
             .checked_sub((common_count * 4) as u64)
@@ -129,35 +130,59 @@ impl Package {
             );
         }
 
-        let mut common = vec![0u32; common_count as usize];
-        for c in &mut common {
-            *c = f.read_u32::<LittleEndian>()?;
+        // Store shared values by field position, not the number of
+        // preceding shared fields. Fields are ordered by bit 0..7.
+        let mut common = [0u32; 8];
+        for (field_index, value) in common.iter_mut().enumerate() {
+            if bit_flag & (1 << field_index) != 0 {
+                *value = f.read_u32::<LittleEndian>()?;
+            }
         }
 
         let mut entries = Vec::with_capacity(index_count as usize);
         for _ in 0..index_count {
-            let mut ci = 0usize;
-            let type_id = if (bit_flag & 1) != 0 {
-                common[ci].tap(|_| ci += 1)
+            let type_id = if bit_flag & 0x01 != 0 {
+                common[0]
             } else {
                 f.read_u32::<LittleEndian>()?
             };
-            let group = if (bit_flag & 2) != 0 {
-                common[ci].tap(|_| ci += 1)
+            let group = if bit_flag & 0x02 != 0 {
+                common[1]
             } else {
                 f.read_u32::<LittleEndian>()?
             };
-            let id1 = if (bit_flag & 4) != 0 {
-                common[ci].tap(|_| ci += 1)
+            let id1 = if bit_flag & 0x04 != 0 {
+                common[2]
             } else {
                 f.read_u32::<LittleEndian>()?
             };
-            let id2 = f.read_u32::<LittleEndian>()?;
-            let chunk_offset = f.read_u32::<LittleEndian>()?;
-            let file_size_raw = f.read_u32::<LittleEndian>()?;
-            let mem_size = f.read_u32::<LittleEndian>()?;
-            let compressed = f.read_u16::<LittleEndian>()?;
-            let unknown2 = f.read_u16::<LittleEndian>()?;
+            let id2 = if bit_flag & 0x08 != 0 {
+                common[3]
+            } else {
+                f.read_u32::<LittleEndian>()?
+            };
+            let chunk_offset = if bit_flag & 0x10 != 0 {
+                common[4]
+            } else {
+                f.read_u32::<LittleEndian>()?
+            };
+            let file_size_raw = if bit_flag & 0x20 != 0 {
+                common[5]
+            } else {
+                f.read_u32::<LittleEndian>()?
+            };
+            let mem_size = if bit_flag & 0x40 != 0 {
+                common[6]
+            } else {
+                f.read_u32::<LittleEndian>()?
+            };
+            let flags_raw = if bit_flag & 0x80 != 0 {
+                common[7]
+            } else {
+                f.read_u32::<LittleEndian>()?
+            };
+            let compressed = flags_raw as u16;
+            let unknown2 = (flags_raw >> 16) as u16;
 
             let file_size = file_size_raw & 0x7FFF_FFFF;
             let instance = ((id1 as u64) << 32) | id2 as u64;
@@ -409,6 +434,87 @@ mod tests {
         std::env::temp_dir().join(format!("s3cc-dbpf-test-{}-{}", std::process::id(), name))
     }
 
+    // Compact DBPF indexes have a mask, all shared u32 fields in bit order,
+    // then only the unshared u32 fields in each entry.
+    fn shared_index_fixture(mask: u32, common: [u32; 8], entries: &[[u32; 8]], data: &[u8]) -> Vec<u8> {
+        let mut output = vec![0u8; 96];
+        output[..4].copy_from_slice(b"DBPF");
+        output[4..8].copy_from_slice(&2u32.to_le_bytes());
+        output[8..12].copy_from_slice(&0u32.to_le_bytes());
+        output[60..64].copy_from_slice(&3u32.to_le_bytes());
+        let index_position = (96 + data.len()) as u32;
+        output[64..68].copy_from_slice(&index_position.to_le_bytes());
+
+        let mut index = Vec::new();
+        index.extend_from_slice(&mask.to_le_bytes());
+        for (bit, value) in common.iter().enumerate() {
+            if mask & (1 << bit) != 0 {
+                index.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        for entry in entries {
+            for (bit, value) in entry.iter().enumerate() {
+                if mask & (1 << bit) == 0 {
+                    index.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+        }
+        output[36..40].copy_from_slice(&(entries.len() as u32).to_le_bytes());
+        output[44..48].copy_from_slice(&(index.len() as u32).to_le_bytes());
+        output.extend_from_slice(data);
+        output.extend_from_slice(&index);
+        output
+    }
+
+    #[test]
+    fn loads_shared_low_instance_word_in_compact_dbpf_index() {
+        let path = temp_path("shared-instance-low.package");
+        let mut shared = [0u32; 8];
+        shared[3] = 0xAABB_CCDD;
+        let entries = [
+            [0x00B2_D882, 0, 0x1122_3344, shared[3], 96, 3, 3, 0],
+            [0x00B2_D882, 1, 0x5566_7788, shared[3], 99, 3, 3, 0],
+        ];
+        std::fs::write(&path, shared_index_fixture(0x08, shared, &entries, b"catdog")).unwrap();
+        let package = Package::load(&path).expect("shared low instance word is valid");
+        assert_eq!(package.entries.len(), 2);
+        assert_eq!(package.entries[0].instance, 0x1122_3344_AABB_CCDD);
+        assert_eq!(package.entries[1].instance, 0x5566_7788_AABB_CCDD);
+        assert_eq!(package.entries[0].group, 0);
+        assert_eq!(package.entries[1].group, 1);
+        assert_eq!(package.get_raw_data(&package.entries[0]).unwrap(), b"cat");
+        assert_eq!(package.get_raw_data(&package.entries[1]).unwrap(), b"dog");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn loads_all_eight_shared_fields_in_compact_dbpf_index() {
+        let path = temp_path("all-shared-index-fields.package");
+        let common = [
+            0x00B2_D882,
+            0xDEAD_BEEF,
+            0x1122_3344,
+            0x5566_7788,
+            96,
+            0x8000_0004,
+            4,
+            0x1234_0000,
+        ];
+        std::fs::write(&path, shared_index_fixture(0xFF, common, &[common], b"data")).unwrap();
+        let package = Package::load(&path).expect("all eight shared index fields are valid");
+        assert_eq!(package.entries.len(), 1);
+        let entry = &package.entries[0];
+        assert_eq!(entry.type_id, 0x00B2_D882);
+        assert_eq!(entry.group, 0xDEAD_BEEF);
+        assert_eq!(entry.instance, 0x1122_3344_5566_7788);
+        assert_eq!(entry.file_size, 4);
+        assert_eq!(entry.mem_size, 4);
+        assert_eq!(entry.compressed, 0);
+        assert_eq!(entry.unknown2, 0x1234);
+        assert_eq!(package.get_uncompressed_data(entry).unwrap(), b"data");
+        let _ = std::fs::remove_file(path);
+    }
+
     #[test]
     fn validates_index_and_resource_bounds() {
         let path = temp_path("valid.package");
@@ -432,11 +538,3 @@ mod tests {
     }
 }
 
-// Small helper: like `.tap()` from other languages.
-trait Tap: Sized {
-    fn tap<F: FnOnce(&Self)>(self, f: F) -> Self {
-        f(&self);
-        self
-    }
-}
-impl<T> Tap for T {}
