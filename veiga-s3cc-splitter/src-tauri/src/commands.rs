@@ -5832,6 +5832,26 @@ pub fn zip_selected_resources(payload: ExportSelectionPayload) -> Result<String,
 }
 
 #[cfg(test)]
+mod responsive_scan_tests {
+    use super::*;
+
+    #[test]
+    fn large_packages_defer_optional_relationship_analysis() {
+        assert!(!relations_should_defer(256 * 1024 * 1024, 8000));
+        assert!(relations_should_defer(256 * 1024 * 1024 + 1, 1));
+        assert!(relations_should_defer(4096, 8001));
+    }
+
+    #[test]
+    fn cancellation_reports_a_clear_error() {
+        SCAN_CANCEL_REQUESTED.store(true, Ordering::Release);
+        assert!(check_scan_cancelled().is_err());
+        SCAN_CANCEL_REQUESTED.store(false, Ordering::Release);
+        assert!(check_scan_cancelled().is_ok());
+    }
+}
+
+#[cfg(test)]
 mod remove_selected_tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
