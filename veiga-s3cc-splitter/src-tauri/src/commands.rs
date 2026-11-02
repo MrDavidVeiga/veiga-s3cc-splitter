@@ -21,6 +21,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use zip::write::FileOptions;
 
 use crate::tone_dependencies::parse_tone_references;
+use crate::skin_classification::{EaSkinCatalog, SkinResourceKey, classify_skin};
 use crate::merge_manifest::{
     is_manifest_tgi, read_from_dbpf as read_merge_manifest_from_dbpf,
     read_from_writable as read_merge_manifest_from_writable, ManifestAnchor, ManifestPackage,
@@ -2977,6 +2978,7 @@ fn build_skintone_group_items(
     package: &DBPF<'_>,
     query: &str,
     name_map: &BTreeMap<u64, String>,
+    catalog: Option<&EaSkinCatalog>,
 ) -> Vec<ResourceItem> {
     // A display name is NOT an ownership identifier: unrelated non-default
     // skins in an s3pe merge can both be called "Default". The UI must not
@@ -3027,11 +3029,55 @@ fn build_skintone_group_items(
                 first.resource_type, first.resource_group
             )
         };
+        let skin_keys: Vec<SkinResourceKey> = entries.iter().map(|entry| SkinResourceKey {
+            resource_type: entry.resource_type, group: entry.resource_group, instance: entry.instance
+        }).collect();
+        let classification = classify_skin(catalog, &skin_keys);
         let item = ResourceItem {
             label,
             key: joined_key,
             kind: kind_from_type(first.resource_type).to_string(),
-            details,
+            details: format!("{details} • Skin: {}", classification.display()),
+            content_categories: vec!["Skins".to_string()],
+        };
+        if item_matches_query(&item, query) {
+            items.push(item);
+        }
+    }
+
+    // Default-replacement texture packages may contain IMG and NMAP/KEY but
+    // NO TONE. Never invent a TONE. For a source with no proven ownership,
+    // treat this as one conservative, reversible extraction group. Avoid
+    // labeling arbitrary mixed object/CC packages as skins.
+    let img_only_source = !package.files.iter()
+        .any(|entry| entry.resource_type == TYPE_SKINTONE)
+        && package.files.iter().any(|entry| entry.resource_type == TYPE_IMG)
+        && package.files.iter().all(|entry|
+            matches!(entry.resource_type, TYPE_IMG | TYPE_KEY | TYPE_IMAG_PNG)
+            || is_manifest_tgi(entry.resource_type, entry.resource_group, entry.instance)
+        );
+    if img_only_source {
+        let mut images: Vec<_> = package.files.iter()
+            .filter(|entry| entry.resource_type == TYPE_IMG).collect();
+        images.sort_by_key(|entry| (entry.resource_group, entry.instance));
+        let keys: Vec<SkinResourceKey> = images.iter().map(|entry| SkinResourceKey {
+            resource_type: entry.resource_type, group: entry.resource_group, instance: entry.instance
+        }).collect();
+        let grouped_keys = images.iter().map(|entry| key_string(entry))
+            .collect::<Vec<_>>().join("||");
+        let label = recovered_skin_resource_stem(package, &grouped_keys, name_map)
+            .unwrap_or_else(|| {
+                format!("IMG-only resources ({:016X})", images[0].instance)
+            });
+        let classification = classify_skin(catalog, &keys);
+        let item = ResourceItem {
+            label,
+            key: grouped_keys,
+            kind: "SkinTone".to_string(),
+            details: format!(
+                "{} IMG resources (no TONE) • Skin: {}",
+                images.len(), classification.display()
+            ),
             content_categories: vec!["Skins".to_string()],
         };
         if item_matches_query(&item, query) {
@@ -7410,6 +7456,8 @@ fn scan_package_resources_inner(
         );
         let query = payload.search.unwrap_or_default().to_lowercase();
         let name_map = package_resource_names(&package);
+        // Optional user-supplied EA full-TGI reference, not bundled copyrighted data.
+        let ea_catalog = EaSkinCatalog::load_for_package(Path::new(package_path));
         check_cancelled()?;
         let merge_manifest = read_valid_merge_manifest_from_dbpf(&package);
         let manifest_package_count = merge_manifest
@@ -7430,7 +7478,7 @@ fn scan_package_resources_inner(
                 &name_map,
             )
         } else if resource_type == "skintone" {
-            build_skintone_group_items(&package, &query, &name_map)
+            build_skintone_group_items(&package, &query, &name_map, ea_catalog.as_ref())
         } else if resource_type == "face" {
             build_face_group_items(&package, &query, &name_map)
         } else if resource_type == "casp" {
@@ -7452,7 +7500,7 @@ fn scan_package_resources_inner(
                 .collect();
 
             items.extend(build_casp_group_items(&package, &query, &name_map));
-            items.extend(build_skintone_group_items(&package, &query, &name_map));
+            items.extend(build_skintone_group_items(&package, &query, &name_map, ea_catalog.as_ref()));
             items.extend(build_face_group_items(&package, &query, &name_map));
             items.extend(build_clip_group_items(&package, &query, &name_map));
             items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
@@ -8275,7 +8323,7 @@ mod remove_selected_tests {
             assert!(!selected.iter().any(|x| x.instance == instance),
                 "Leaked unrelated skin resource {instance:016X}");
         }
-        let items = build_skintone_group_items(&package, "", &BTreeMap::new());
+        let items = build_skintone_group_items(&package, "", &BTreeMap::new(), None);
         assert_eq!(items.len(), 2, "Distinct manifest sources must remain separate UI items");
         let owned = items.iter().find(|item| item.key == format!("{first}||{second}"))
             .expect("Two TONEs with the same proven original owner form one UI item");
@@ -8326,7 +8374,7 @@ mod remove_selected_tests {
         assert!(found.iter().any(|p| p.resource_type == TYPE_IMG && p.instance == 0x501));
         assert!(!found.iter().any(|p| p.instance == 0x202 || p.instance == 0x502),
             "Identically named but unrelated skin resources must never leak");
-        let items = build_skintone_group_items(&package, "", &name_map);
+        let items = build_skintone_group_items(&package, "", &name_map, None);
         assert_eq!(items.len(), 2,
             "The UI must not group unrelated non-default skins sharing the Default label");
         assert!(items.iter().all(|item| !item.key.contains("||")),
