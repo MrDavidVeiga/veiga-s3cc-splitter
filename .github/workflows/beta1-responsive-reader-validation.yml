@@ -1,0 +1,52 @@
+name: Beta 1 responsive package reader
+on:
+  push:
+    branches:
+      - "fix/beta1-responsive-large-package-scan-20261102"
+    paths:
+      - ".github/workflows/beta1-responsive-reader-validation.yml"
+      - "veiga-s3cc-splitter/**"
+      - "sims3-core/**"
+      - "sims3-pack/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: veiga-s3cc-splitter/package-lock.json
+      - run: npm ci
+        working-directory: veiga-s3cc-splitter
+      - run: node --test
+        working-directory: veiga-s3cc-splitter
+      - run: npm run build
+        working-directory: veiga-s3cc-splitter
+  rust-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux Tauri libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev pkg-config build-essential
+      - name: Check workspace and run Rust regression tests
+        run: |
+          cargo check --locked --workspace
+          cargo test --locked --workspace --lib
+  rust-windows-check:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --workspace
