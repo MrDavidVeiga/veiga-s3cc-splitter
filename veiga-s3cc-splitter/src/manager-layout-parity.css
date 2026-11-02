@@ -557,3 +557,31 @@ html[data-theme-choice] body.release-v1 .topbar #lang-menu .lang-menu-item.hidde
     padding:0;
   }
 }
+
+
+/* Manager sidebar and legacy Splitter 2.1.0 language selector alignment:
+   keep the five social links inside the left sidebar and at its bottom.
+   The code is left-aligned while the chevron sits on the far right. */
+html[data-theme-choice] body.release-v1 .layout > .left-panel {
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+}
+html[data-theme-choice] body.release-v1 .layout > .left-panel > .winui-social-footer {
+  position:static;
+  align-self:stretch;
+  flex:0 0 auto;
+  margin-top:auto;
+}
+html[data-theme-choice] body.release-v1 .topbar #lang-toggle-btn {
+  justify-content:space-between;
+  gap:8px;
+}
+html[data-theme-choice] body.release-v1 .topbar #lang-current-code {
+  flex:0 0 auto;
+  margin-right:auto;
+}
+html[data-theme-choice] body.release-v1 .topbar #lang-toggle-icon {
+  flex:0 0 12px;
+  margin-left:auto;
+}
