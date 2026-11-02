@@ -237,7 +237,18 @@ impl<'a> ctx::TryFromCtx<'a, ()> for DBPF<'a> {
             if index_src.len() < 4 {
                 return Err(scroll::Error::Custom("DBPF index header is truncated".to_string()));
             }
-            let mask: u8 = index_src.pread_with::<u32>(0, LE)? as u8;
+            if index_start < 96 {
+                return Err(scroll::Error::Custom(
+                    "DBPF index overlaps the file header".to_string(),
+                ));
+            }
+            let raw_mask: u32 = index_src.pread_with(0, LE)?;
+            if raw_mask & !0xFF != 0 {
+                return Err(scroll::Error::Custom(format!(
+                    "Unsupported DBPF shared-field mask 0x{raw_mask:08X}"
+                )));
+            }
+            let mask = raw_mask as u8;
             let header_size = mask.count_ones() as usize * 4;
             let entry_size = (!mask).count_ones() as usize * 4;
             let expected_index_len = 4usize
@@ -262,11 +273,19 @@ impl<'a> ctx::TryFromCtx<'a, ()> for DBPF<'a> {
                 .into_iter()
                 .map(|index| {
                     let end = index.chunk_offset.checked_add(index.filesize).ok_or_else(|| {
-                        refpack::decompress::Error::ExpectedAnotherByte
+                        scroll::Error::Custom("DBPF resource range overflow".to_string())
                     })?;
                     let raw = src.get(index.chunk_offset..end).ok_or_else(|| {
-                        refpack::decompress::Error::ExpectedAnotherByte
+                        scroll::Error::Custom("DBPF resource outside file".to_string())
                     })?;
+                    if index.filesize != 0 && (index.chunk_offset < 96
+                        || (index.chunk_offset < index_end && end > index_start))
+                    {
+                        return Err(scroll::Error::Custom(format!(
+                            "DBPF resource 0x{:016X} overlaps header or index",
+                            index.instance
+                        )));
+                    }
                     let data = LazyTransform::new(raw);
                     if !index.compressed {
                         // We don't need to defer this.
@@ -282,10 +301,7 @@ impl<'a> ctx::TryFromCtx<'a, ()> for DBPF<'a> {
                         data,
                     })
                 })
-                .collect::<Result<_, _>>()
-                .map_err(|err: refpack::decompress::Error| {
-                    scroll::Error::Custom(err.to_string())
-                })?;
+                .collect::<Result<_, scroll::Error>>()?;
         } else {
             files = Vec::with_capacity(0);
         }
@@ -344,6 +360,22 @@ mod tests {
     #[test]
     fn rejects_truncated_header_without_panicking() {
         assert!(DBPF::new(&[0u8; 95]).is_err());
+    }
+
+    #[test]
+    fn rejects_resource_pointing_to_header_or_index() {
+        assert!(DBPF::new(&fixture(92, 4)).is_err(),
+            "Header bytes must never be interpreted as an ordinary resource");
+        assert!(DBPF::new(&fixture(100, 4)).is_err(),
+            "Index bytes must never be interpreted as an ordinary resource");
+    }
+
+    #[test]
+    fn rejects_nonzero_high_bits_in_index_mask() {
+        let mut bytes = fixture(132, 4);
+        bytes[96..100].copy_from_slice(&0x0000_0100u32.to_le_bytes());
+        assert!(DBPF::new(&bytes).is_err(),
+            "Shared-field masks beyond eight DBPF fields must be rejected");
     }
 
     #[test]

@@ -3,7 +3,10 @@ use std::collections::HashSet;
 use sims3_core::dbpf::DBPF;
 use sims3_pack::dbpf::Package as WritablePackage;
 
-pub const MANIFEST_TYPE: u32 = 0x0333406C;
+// The former private manifest used the game's XML tuning TypeID.
+// New outputs use an opaque metadata TypeID; old merged files remain readable.
+pub const MANIFEST_TYPE: u32 = 0x5653474D; // "VSGM"
+pub const LEGACY_MANIFEST_TYPE: u32 = 0x0333406C;
 pub const MANIFEST_GROUP: u32 = 0x56534733; // "VSG3"
 pub const MANIFEST_INSTANCE: u64 = 0x56454947414D4E46; // "VEIGAMNF"
 
@@ -42,7 +45,9 @@ pub struct MergeManifest {
 }
 
 pub fn is_manifest_tgi(resource_type: u32, group: u32, instance: u64) -> bool {
-    resource_type == MANIFEST_TYPE && group == MANIFEST_GROUP && instance == MANIFEST_INSTANCE
+    (resource_type == MANIFEST_TYPE || resource_type == LEGACY_MANIFEST_TYPE)
+        && group == MANIFEST_GROUP
+        && instance == MANIFEST_INSTANCE
 }
 
 fn xml_escape(value: &str) -> String {
@@ -337,6 +342,15 @@ pub fn read_from_writable(package: &WritablePackage) -> Result<Option<MergeManif
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_and_legacy_manifest_types_both_recognized_without_claiming_game_xml() {
+        assert_ne!(MANIFEST_TYPE, LEGACY_MANIFEST_TYPE);
+        assert!(is_manifest_tgi(MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE));
+        assert!(is_manifest_tgi(LEGACY_MANIFEST_TYPE, MANIFEST_GROUP, MANIFEST_INSTANCE));
+        assert!(!is_manifest_tgi(LEGACY_MANIFEST_TYPE, 0, MANIFEST_INSTANCE));
+        assert!(!is_manifest_tgi(MANIFEST_TYPE, MANIFEST_GROUP, 0));
+    }
 
     #[test]
     fn round_trips_manifest_xml() {
