@@ -8069,6 +8069,113 @@ mod remove_selected_tests {
         format!("0x{resource_type:08X}-0x{group:08X}-0x{instance:016X}")
     }
 
+
+    #[test]
+    fn legacy_skin_recovers_stage7_nmap_name_without_claiming_default_status() {
+        let root = test_dir("legacy-skin-resource-name");
+        let path = root.join("OldS3peMerge.package");
+        let key = test_resource_key(TYPE_SKINTONE, 0, 0x95C9DE637D75A5AC);
+        write_test_package(&path, &[
+            (TYPE_SKINTONE, 0, 0x95C9DE637D75A5AC, vec![4, 0, 0, 0]),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let names = BTreeMap::from([(
+            0x95C9DE637D75A5AC,
+            "CAPPUCINO_NONDEFAULT_Default".to_string(),
+        )]);
+        assert_eq!(
+            clone_package_file_name(&package, &key, &names),
+            "CAPPUCINO_NONDEFAULT_Default.package"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_tone_custom_suffix_is_stripped_but_tone_variant_is_preserved() {
+        let root = test_dir("legacy-skin-custom-suffix");
+        let path = root.join("OldS3peMerge.package");
+        write_test_package(&path, &[
+            (TYPE_SKINTONE, 0, 0x10, vec![4, 0, 0, 0]),
+            (TYPE_SKINTONE, 0, 0x20, vec![4, 0, 0, 0]),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let names = BTreeMap::from([
+            (0x10, "Tainted_custom_0".to_string()),
+            (0x20, "[to]PamelaSkin_tone_2".to_string()),
+        ]);
+        assert_eq!(
+            clone_package_file_name(&package, &test_resource_key(TYPE_SKINTONE, 0, 0x10), &names),
+            "Tainted.package"
+        );
+        assert_eq!(
+            clone_package_file_name(&package, &test_resource_key(TYPE_SKINTONE, 0, 0x20), &names),
+            "[to]PamelaSkin_tone_2.package"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn img_only_skin_recovers_shared_resource_stem_without_inventing_a_tone() {
+        let root = test_dir("img-only-creator-stem");
+        let path = root.join("DefaultIMGOnly.package");
+        write_test_package(&path, &[
+            (TYPE_IMG, 0, 0x501, b"face".to_vec()),
+            (TYPE_IMG, 0, 0x502, b"body".to_vec()),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let compound_key = format!(
+            "{}||{}",
+            test_resource_key(TYPE_IMG, 0, 0x501),
+            test_resource_key(TYPE_IMG, 0, 0x502),
+        );
+        let names = BTreeMap::from([
+            (0x501, "KBPrimerSkin_Face_IMG".to_string()),
+            (0x502, "KBPrimerSkin_Body_IMG".to_string()),
+        ]);
+        assert_eq!(
+            clone_package_file_name(&package, &compound_key, &names),
+            "KBPrimerSkin.package"
+        );
+        assert!(package.files.iter().all(|e| e.resource_type != TYPE_SKINTONE));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_or_generic_metadata_uses_full_tgi_not_fake_default_label() {
+        let root = test_dir("missing-skin-metadata-name");
+        let path = root.join("OldMerge.package");
+        write_test_package(&path, &[
+            (TYPE_SKINTONE, 0, 0x101, vec![4, 0, 0, 0]),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let key = test_resource_key(TYPE_SKINTONE, 0, 0x101);
+        let names = BTreeMap::from([(0x101, "Default".to_string())]);
+        assert_eq!(
+            clone_package_file_name(&package, &key, &names),
+            "Skin-0x0354796A-0x00000000-0x0000000000000101.package"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn colliding_readable_skin_names_receive_stable_tgi_disambiguators() {
+        let mut used = HashSet::new();
+        let key1 = test_resource_key(TYPE_SKINTONE, 0, 0x111);
+        let key2 = test_resource_key(TYPE_SKINTONE, 0, 0x222);
+        assert_eq!(
+            unique_skin_clone_output_name("MySkin.package".to_string(), &key1, &mut used),
+            "MySkin.package"
+        );
+        assert_eq!(
+            unique_skin_clone_output_name("MySkin.package".to_string(), &key2, &mut used),
+            "MySkin [Skin-0x0354796A-0x00000000-0x0000000000000222].package"
+        );
+    }
+
     #[test]
     fn skin_clone_uses_unambiguous_original_manifest_filename_not_default_label() {
         let root = test_dir("manifest-skin-original-name");
