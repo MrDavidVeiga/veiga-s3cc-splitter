@@ -9,8 +9,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             system_appearance::get_system_appearance,
-            commands::scan_package_resources,
-            commands::get_resource_preview,
+            commands::scan_package_resources_async,
+            commands::cancel_scan_package,
+            commands::get_resource_preview_async,
             commands::analyze_remove_selection,
             commands::remove_selected_from_merged,
             commands::collect_merge_package_files,
