@@ -4408,6 +4408,33 @@ fn expand_selection_for_export(
     let extra = collect_clone_keys(package, &selected, include_thumbnails, name_map)?;
     selected.extend(extra);
 
+    // An IMG-only default replacement has no TONE to anchor the source.
+    // In a standalone package containing IMG + NMAP/KEY (+ optional ramp PNG),
+    // the IMG selection owns the package-level names and related ramp images.
+    // Preserve the exact existing TGIs; do not invent a TONE or guess ownership
+    // across a mixed legacy merge.
+    let img_only_package = !package.files.iter()
+        .any(|entry| entry.resource_type == TYPE_SKINTONE)
+        && package.files.iter().any(|entry| entry.resource_type == TYPE_IMG)
+        && package.files.iter().all(|entry|
+            matches!(entry.resource_type, TYPE_IMG | TYPE_KEY | TYPE_IMAG_PNG)
+            || is_manifest_tgi(entry.resource_type, entry.resource_group, entry.instance)
+        );
+    let selected_img_instances: HashSet<u64> = selected.iter()
+        .filter_map(|key| parse_key(key).ok())
+        .filter(|parts| parts.resource_type == TYPE_IMG)
+        .map(|parts| parts.instance)
+        .collect();
+    if img_only_package && !selected_img_instances.is_empty() {
+        for entry in package.files.iter().filter(|entry| {
+            entry.resource_type == TYPE_KEY
+                || (entry.resource_type == TYPE_IMAG_PNG
+                    && selected_img_instances.contains(&entry.instance))
+        }) {
+            selected.insert(key_string(entry));
+        }
+    }
+
     // A merged DBPF can contain icons for several independent objects.
     // Their instances need not match OBJD, and copying an arbitrary icon
     // would silently attach another object's preview. On Veiga merges, the
