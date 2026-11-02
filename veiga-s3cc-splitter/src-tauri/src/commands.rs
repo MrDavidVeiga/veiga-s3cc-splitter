@@ -1894,6 +1894,158 @@ fn tone_display_name(entry: &DBPFEntry<'_>, name_map: &BTreeMap<u64, String>) ->
     normalized_tone_name(&export_file_stem(entry, name_map))
 }
 
+// Resource metadata may preserve a creator's useful CC name even in a
+// legacy s3pe merge without a Veiga manifest. It describes the source label,
+// NOT whether this skin is a default replacement or a non-default CAS entry.
+fn useful_skin_resource_name(raw: &str) -> Option<String> {
+    let original = raw.trim_matches('\0').trim();
+    if original.is_empty() {
+        return None;
+    }
+    let name = normalized_key_resource_name(original);
+    let name = normalized_tone_name(&name);
+    let name = name
+        .strip_suffix(".package")
+        .or_else(|| name.strip_suffix(".PACKAGE"))
+        .unwrap_or(&name)
+        .trim();
+    let stem = sanitize_file_name(name);
+    let low = stem.to_ascii_lowercase();
+    if matches!(
+        low.as_str(),
+        "resource" | "skintone" | "tone" | "img" | "imag" | "default" | "nondefault"
+    ) || low.starts_with("skintone-0x") || low.starts_with("img-0x") {
+        return None;
+    }
+    Some(stem)
+}
+
+// When a default-replacement group contains only IMG resources, look for
+// a shared, meaningful name in their KEY/NMAP entries. If unrelated names
+// disagree, return None rather than assigning one texture's name to all CC.
+fn shared_skin_resource_name(names: Vec<String>) -> Option<String> {
+    let mut names = names;
+    names.sort();
+    names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    if names.len() == 1 {
+        return names.pop();
+    }
+    let first = names.first()?;
+    let mut prefix = first.clone();
+    for name in names.iter().skip(1) {
+        let common: String = prefix
+            .chars()
+            .zip(name.chars())
+            .take_while(|(a, b)| a.eq_ignore_ascii_case(b))
+            .map(|(a, _)| a)
+            .collect();
+        prefix = common;
+        if prefix.chars().count() < 8 {
+            return None;
+        }
+    }
+    let common = prefix
+        .trim_end_matches(|ch: char| matches!(ch, '_' | '-' | ' ' | '.' | '(' | '['))
+        .trim();
+    if common.chars().count() < 8 {
+        return None;
+    }
+    useful_skin_resource_name(common)
+}
+
+fn recovered_skin_resource_stem(
+    package: &DBPF<'_>,
+    base_key: &str,
+    name_map: &BTreeMap<u64, String>,
+) -> Option<String> {
+    let selected: Vec<ResourceKeyParts> = base_key
+        .split("||")
+        .filter_map(|key| parse_key(key.trim()).ok())
+        .collect();
+    let tone = selected.iter().find(|parts| parts.resource_type == TYPE_SKINTONE);
+    if let Some(tone) = tone {
+        // The selected TONE's own NMAP label has precedence. A label such as
+        // "CAPPUCINO_NONDEFAULT_Default" is preserved, never interpreted as
+        // a default/non-default determination.
+        if let Some(name) = name_map
+            .get(&tone.instance)
+            .and_then(|name| useful_skin_resource_name(name))
+        {
+            return Some(name);
+        }
+        // Fallback: only consider physically present IMG resources referenced
+        // by this exact TONE TGI, never similarly named unrelated skins.
+        let entry = package
+            .entry_index(tone.resource_type, tone.resource_group, tone.instance)
+            .and_then(|index| package.files.get(index))?;
+        let references = parse_tone_references(entry.data()).ok()?;
+        let mut img_names = Vec::new();
+        for reference in references {
+            if reference.resource_type != TYPE_IMG
+                || package.entry_index(
+                    reference.resource_type, reference.resource_group, reference.instance
+                ).is_none()
+            {
+                continue;
+            }
+            if let Some(name) = name_map
+                .get(&reference.instance)
+                .and_then(|raw| useful_skin_resource_name(raw))
+            {
+                img_names.push(name);
+            }
+        }
+        return shared_skin_resource_name(img_names);
+    }
+
+    // Stage 8 also exposes IMG-only default-replacement groups. Recover a
+    // creator label only from IMG keys selected in that actual logical group.
+    let img_names: Vec<String> = selected.iter()
+        .filter(|parts| parts.resource_type == TYPE_IMG)
+        .filter(|parts| package.entry_index(
+            parts.resource_type, parts.resource_group, parts.instance
+        ).is_some())
+        .filter_map(|parts| {
+            name_map.get(&parts.instance)
+                .and_then(|name| useful_skin_resource_name(name))
+        })
+        .collect();
+    shared_skin_resource_name(img_names)
+}
+
+fn neutral_skin_tgi_stem(base_key: &str) -> Option<String> {
+    let parts = parse_key(first_compound_key(base_key)).ok()?;
+    if !matches!(parts.resource_type, TYPE_SKINTONE | TYPE_IMG) {
+        return None;
+    }
+    Some(format!(
+        "Skin-0x{:08X}-0x{:08X}-0x{:016X}",
+        parts.resource_type, parts.resource_group, parts.instance
+    ))
+}
+
+fn unique_skin_clone_output_name(
+    desired: String,
+    base_key: &str,
+    used: &mut HashSet<String>,
+) -> String {
+    if used.insert(desired.to_lowercase()) {
+        return desired;
+    }
+    let Some(tgi_stem) = neutral_skin_tgi_stem(base_key) else {
+        return unique_output_name(desired, used);
+    };
+    let readable = Path::new(&desired)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("Skin");
+    // The TGI is an identity disambiguator only; never an invented Default
+    // or Non-default suffix, and never a replacement for a readable label.
+    unique_output_name(
+        format!("{} [{}].package", readable, tgi_stem), used
+    )
+}
+
 fn normalized_face_name(name: &str) -> String {
     let mut s = name.trim().to_string();
     loop {
@@ -6537,6 +6689,15 @@ fn clone_package_file_name(
         }
     }
 
+    // Preserve creator names recovered from resource metadata for legacy
+    // s3pe merges; Stage 8 semantic classification remains independent.
+    if let Some(stem) = recovered_skin_resource_stem(package, base_key, name_map) {
+        return format!("{}.package", sanitize_file_name(&stem));
+    }
+    if let Some(stem) = neutral_skin_tgi_stem(base_key) {
+        return format!("{}.package", stem);
+    }
+
     format!(
         "{}.package",
         selection_output_stem(package, base_key, name_map)
@@ -7101,10 +7262,15 @@ fn create_clone_package(payload: &ExportSelectionPayload) -> Result<(String, usi
     let mut used_clone_names = HashSet::new();
 
     for key in &payload.selected_keys {
-        let clone_name = unique_output_name(
-            clone_package_file_name(&package, key, &name_map),
-            &mut used_clone_names,
-        );
+        let desired = clone_package_file_name(&package, key, &name_map);
+        let clone_name = if parse_key(first_compound_key(key))
+            .map(|parts| matches!(parts.resource_type, TYPE_SKINTONE | TYPE_IMG))
+            .unwrap_or(false)
+        {
+            unique_skin_clone_output_name(desired, key, &mut used_clone_names)
+        } else {
+            unique_output_name(desired, &mut used_clone_names)
+        };
         let clone_path = batch_root.join(clone_name);
         let selected_keys = vec![key.clone()];
         let (_path, count) = create_clone_package_from_loaded(
