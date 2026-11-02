@@ -16,9 +16,8 @@ test("native open-dialog labels are *.package in both Splitter and Merger", () =
 });
 
 test("visible title and runtime title share the same release version and beta number", () => {
-  const n = /Beta 1/.test(tauri.app.windows[0].title) ? 1 : 2;
-  const expected = "Veiga's S3CC Splitter v2.0.0 | Beta " + n;
-  assert.equal(tauri.version, "2.0.0");
+  const expected = "Veiga's S3CC Splitter v2.1.0 | Beta 2 — Versão Beta Final 2.1";
+  assert.equal(tauri.version, "2.1.0");
   assert.equal(tauri.app.windows[0].title, expected);
   assert.equal((html.match(/<title>([^<]+)<\/title>/) || [])[1], expected);
   assert.equal((html.match(/<span class="winui-window-title"[^>]*>([^<]+)<\/span>/) || [])[1], expected);
