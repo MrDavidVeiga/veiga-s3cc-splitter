@@ -1,8 +1,8 @@
-Veiga's S3CC Splitter v2.1.0 | Beta 2 — Versão Beta Final 2.1
+Veiga's S3CC Splitter v2.0.0 | Beta 2 — Versão Beta 2 v2.0.0
 
 Detailed change history, known issues and contributor credits: see CHANGELOG.md in this branch.
 
-What's included in Beta Final 2.1 (former Beta 3)
+What's included in Beta 2 v2.0.0 (former Beta 3)
 
 - Splitter and Merger modes are available in the same application.
 - Results can be filtered and searched, with zero preselection, multiple selection, Shift + click, and Select All / Select None limited to the visible result set.
@@ -26,7 +26,7 @@ What's included in Beta Final 2.1 (former Beta 3)
   - quietlyshout reported excessive RAM usage during large exports, duplicate-name export issues, and suggested improvements for a more compact/resizable interface and clearer duplicate handling.
 - The portable build workflow covers Windows x64, Windows x86, Windows ARM64, Linux x64, Linux x86, Linux ARM64, macOS Intel, and macOS Apple Silicon.
 
-Additional capabilities included in Beta Final 2.1
+Additional capabilities included in Beta 2 v2.0.0
 
 CLIP and Pose List support
 
@@ -138,5 +138,11 @@ Thank you
 Thank you to everyone who tests the tool, reports problems, and helps improve compatibility with real The Sims 3 custom-content collections.
 
 
-Canonical working branch: beta-final/v2.1.0
-This supersedes the older Beta 3 naming and keeps all former Beta 3 features. Do not use the legacy build/v2.2.0 branch for current Beta Final 2.1 work.
+Canonical working branch: beta-final/v2.0.0-beta2
+This supersedes the older Beta 3 and Beta 2 v2.1.0 naming and keeps all former Beta 3 features. Do not use the legacy build/v2.2.0 branch for current Beta 2 v2.0.0 work.
+
+
+OFFICIAL BETA 2 IDENTITY (2026-11-02)
+App version: v2.0.0 | Beta 2.
+Canonical Beta 2 branch: beta-final/v2.0.0-beta2.
+The previous beta-final/v2.1.0 branch remains an historical reference. Stage 8/9 skin fixes on the experimental PR are not claimed as shipped here.

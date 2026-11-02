@@ -25,7 +25,7 @@ test("language button has the selected code at left and dropdown chevron at righ
 });
 
 test("native window title matches the simple Beta identifier", () => {
-  const expected = "Veiga's S3CC Splitter v2.1.0 | Beta 2";
+  const expected = "Veiga's S3CC Splitter v2.0.0 | Beta 2";
   assert.equal(tauri.app.windows[0].title, expected);
   assert.ok(html.includes('class="winui-window-title" data-tauri-drag-region>' + expected + "</span>"));
   assert.ok(html.includes("<title>" + expected + "</title>"));
