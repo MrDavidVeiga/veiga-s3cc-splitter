@@ -8,6 +8,11 @@ on:
       - "beta-final/v2.0.0"
     paths:
       - ".github/workflows/beta1-eight-target-builds.yml"
+      - "veiga-s3cc-splitter/**"
+      - "sims3-core/**"
+      - "sims3-pack/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
   workflow_dispatch:
 
 jobs:
