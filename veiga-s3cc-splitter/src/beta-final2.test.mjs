@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 
 const read = (relativePath) => readFileSync(new URL(relativePath, import.meta.url), "utf8");
 
-test("Beta 2 uses v2.1.0 consistently and carries the Beta Final 2.1 marker", () => {
+test("Beta 2 uses v2.1.0 consistently with concise titlebar label", () => {
   const npm = JSON.parse(read("../package.json"));
   const lock = JSON.parse(read("../package-lock.json"));
   const tauri = JSON.parse(read("../src-tauri/tauri.conf.json"));
@@ -17,8 +17,9 @@ test("Beta 2 uses v2.1.0 consistently and carries the Beta Final 2.1 marker", ()
   assert.equal(tauri.version, "2.1.0");
   assert.match(cargo, /^version = "2\.1\.0"$/m);
   assert.match(cargoLock, /name = "veiga-s3cc-splitter"\r?\nversion = "2\.1\.0"/);
-  assert.match(html, /v2\.1\.0 \| Beta 2 — Versão Beta Final 2\.1/);
-  assert.match(tauri.app.windows[0].title, /v2\.1\.0 \| Beta 2 — Versão Beta Final 2\.1/);
+  assert.equal(tauri.app.windows[0].title, "Veiga's S3CC Splitter v2.1.0 | Beta 2");
+  assert.ok(html.includes("<title>Veiga's S3CC Splitter v2.1.0 | Beta 2</title>"));
+  assert.doesNotMatch(html, /Versão Beta Final/);
   assert.doesNotMatch(html, /Beta 3/);
 });
 
