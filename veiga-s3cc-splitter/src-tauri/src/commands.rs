@@ -8251,6 +8251,64 @@ mod remove_selected_tests {
         );
     }
 
+
+    #[test]
+    fn img_only_skin_scan_and_clone_preserves_tgi_nmap_and_payload() {
+        let root = test_dir("img-only-stage8-name-roundtrip");
+        let src = root.join("KBPrimerSDDEFAULTSkinFIXED.package");
+        let dest = root.join("KBPrimerSkin.package");
+        let key_data = build_key_data_from_names(&BTreeMap::from([
+            (0x501, "KBPrimerSkin_Face_IMG".to_string()),
+            (0x502, "KBPrimerSkin_Body_IMG".to_string()),
+        ]));
+        let source_resources = vec![
+            (TYPE_IMG, 0, 0x501, b"face-data".to_vec()),
+            (TYPE_IMG, 0, 0x502, b"body-data".to_vec()),
+            (TYPE_KEY, 0, 0xF00, key_data),
+        ];
+        write_test_package(&src, &source_resources);
+        let mmap = open_package(&src.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let names = package_resource_names(&package);
+        let items = build_skintone_group_items(&package, "", &names, None);
+        assert_eq!(items.len(), 1, "IMG-only package must be one selectable logical group");
+        let item = &items[0];
+        assert_eq!(item.label, "KBPrimerSkin");
+        assert!(item.details.contains("Unverified"));
+        assert_eq!(item.key.split("||").count(), 2);
+        let source = WritablePackage::load(&src).unwrap();
+        let mut source_file = File::open(&src).unwrap();
+        let (_path, count) = create_clone_package_from_loaded(
+            &package, &names, &source, &mut source_file,
+            &[item.key.clone()], false, false, &dest
+        ).unwrap();
+        assert_eq!(count, 3, "Both original IMGs plus source NMAP must survive");
+        let copied_map = open_package(&dest.display().to_string()).unwrap();
+        let copied = parse_package(&copied_map).unwrap();
+        assert_eq!(copied.files.len(), 3);
+        for (ty, group, instance, data) in &source_resources {
+            let idx = copied.entry_index(*ty, *group, *instance).unwrap();
+            let entry = &copied.files[idx];
+            assert_eq!(entry.data(), data.as_slice(), "Payload changed for {:016X}", instance);
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn img_only_group_does_not_swallow_unrelated_object_resources() {
+        let root = test_dir("mixed-img-not-skin");
+        let src = root.join("Mixed.package");
+        write_test_package(&src, &[
+            (TYPE_IMG, 0, 0x501, b"texture".to_vec()),
+            (TYPE_OBJD, 0, 0x601, b"object".to_vec()),
+        ]);
+        let mmap = open_package(&src.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let items = build_skintone_group_items(&package, "", &BTreeMap::new(), None);
+        assert!(items.is_empty(), "Do not infer a skin group from a mixed object package");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn skin_clone_uses_unambiguous_original_manifest_filename_not_default_label() {
         let root = test_dir("manifest-skin-original-name");
