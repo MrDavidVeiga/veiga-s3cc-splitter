@@ -4,6 +4,8 @@ use std::fs::{copy, create_dir_all, remove_file, rename, File, OpenOptions};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use memmap::Mmap;
@@ -13,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use sims3_core::dbpf::filetypes::{resource_is_png, ResourceType};
 use sims3_core::dbpf::{DBPFEntry, DBPF};
 use sims3_pack::dbpf::{Package as WritablePackage, ResourceEntry as WritableEntry};
+use tauri::{AppHandle, Emitter};
 use zip::write::FileOptions;
 
 use crate::merge_manifest::{
@@ -56,6 +59,50 @@ const TYPE_LITE: u32 = 0x03B4C61D;
 const TYPE_RIG: u32 = 0x8EAF13DE;
 const TYPE_ICON: u32 = 0x2E75C765;
 
+const MAX_SYNCHRONOUS_RELATIONS_BYTES: usize = 256 * 1024 * 1024;
+const MAX_SYNCHRONOUS_RELATIONS_ITEMS: usize = 8000;
+static SCAN_CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ScanProgress {
+    stage: String,
+    percent: u32,
+    resources: usize,
+    elapsed_ms: u128,
+}
+
+fn emit_scan_progress(app: Option<&AppHandle>, started: Instant, stage: &str, percent: u32, resources: usize) {
+    let info = ScanProgress {
+        stage: stage.to_string(),
+        percent,
+        resources,
+        elapsed_ms: started.elapsed().as_millis(),
+    };
+    eprintln!("[splitter-scan] stage={} progress={} resources={} elapsed_ms={}", info.stage, info.percent, info.resources, info.elapsed_ms);
+    if let Some(app) = app {
+        let _ = app.emit("splitter-scan-progress", info);
+    }
+}
+
+fn check_scan_cancelled() -> Result<(), String> {
+    if SCAN_CANCEL_REQUESTED.load(Ordering::Acquire) {
+        Err("Leitura do package cancelada.".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn relations_should_defer(package_size: usize, item_count: usize) -> bool {
+    package_size > MAX_SYNCHRONOUS_RELATIONS_BYTES
+        || item_count > MAX_SYNCHRONOUS_RELATIONS_ITEMS
+}
+
+#[tauri::command]
+pub fn cancel_scan_package() {
+    SCAN_CANCEL_REQUESTED.store(true, Ordering::Release);
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanPayload {
@@ -93,6 +140,7 @@ pub struct ScanResult {
     pub items: Vec<ResourceItem>,
     pub manifest_package_count: usize,
     pub relations: BTreeMap<String, ResourceRelation>,
+    pub relations_deferred: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -5322,7 +5370,26 @@ fn build_merge_manifest_items(
 }
 
 #[tauri::command]
-pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String> {
+pub async fn scan_package_resources_async(
+    app: AppHandle,
+    payload: ScanPayload,
+) -> Result<ScanResult, String> {
+    tauri::async_runtime::spawn_blocking(move || scan_package_resources_inner(Some(&app), payload))
+        .await
+        .map_err(|error| format!("Falha ao executar a leitura em segundo plano: {error}"))?
+}
+
+// Retain the synchronous test entrypoint without routing user calls through
+// Tauri's event loop. Regression fixtures continue to exercise the same engine.
+#[cfg(test)]
+fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String> {
+    scan_package_resources_inner(None, payload)
+}
+
+fn scan_package_resources_inner(
+    app: Option<&AppHandle>,
+    payload: ScanPayload,
+) -> Result<ScanResult, String> {
     let package_path = payload.package_path.trim();
     if package_path.is_empty() {
         return Err("Nenhum package foi selecionado.".to_string());
@@ -5336,17 +5403,26 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
         _ => "all".to_string(),
     };
 
-    std::panic::catch_unwind(|| {
+    SCAN_CANCEL_REQUESTED.store(false, Ordering::Release);
+    let started = Instant::now();
+    emit_scan_progress(app, started, "open", 0, 0);
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mmap = open_package(package_path)?;
+        check_scan_cancelled()?;
         let package = parse_package(&mmap)?;
+        check_scan_cancelled()?;
+        emit_scan_progress(app, started, "names", 25, package.files.len());
         let query = payload.search.unwrap_or_default().to_lowercase();
         let name_map = package_resource_names(&package);
+        check_scan_cancelled()?;
         let merge_manifest = read_valid_merge_manifest_from_dbpf(&package);
         let manifest_package_count = merge_manifest
             .as_ref()
             .map(|manifest| manifest.packages.len())
             .unwrap_or(0);
 
+        emit_scan_progress(app, started, "items", 50, package.files.len());
+        check_scan_cancelled()?;
         let items = if resource_type == "all" && merge_manifest.is_some() {
             build_merge_manifest_items(
                 &package,
@@ -5392,14 +5468,27 @@ pub fn scan_package_resources(payload: ScanPayload) -> Result<ScanResult, String
             items
         };
 
-        let relations = build_resource_relations(&package, &name_map, &items);
+        check_scan_cancelled()?;
+        let relations_deferred = relations_should_defer(mmap.len(), items.len());
+        emit_scan_progress(app, started, "relations", 80, package.files.len());
+        // These badges are optional. Full payload comparison on large merges
+        // can decompress/hash gigabytes before the user ever sees the list.
+        // Never silently interpret a skipped scan as "no duplicates".
+        let relations = if relations_deferred {
+            BTreeMap::new()
+        } else {
+            build_resource_relations(&package, &name_map, &items)
+        };
+        check_scan_cancelled()?;
+        emit_scan_progress(app, started, "complete", 100, package.files.len());
 
         Ok(ScanResult {
             items,
             manifest_package_count,
             relations,
+            relations_deferred,
         })
-    })
+    }))
     .map_err(|_| "Falha ao carregar a lista de recursos deste package.".to_string())?
 }
 
@@ -5556,7 +5645,13 @@ pub fn remove_selected_from_merged(
 }
 
 #[tauri::command]
-pub fn get_resource_preview(payload: PreviewPayload) -> Result<PreviewResult, String> {
+pub async fn get_resource_preview_async(payload: PreviewPayload) -> Result<PreviewResult, String> {
+    tauri::async_runtime::spawn_blocking(move || get_resource_preview_inner(payload))
+        .await
+        .map_err(|error| format!("Falha ao preparar a pré-visualização: {error}"))?
+}
+
+fn get_resource_preview_inner(payload: PreviewPayload) -> Result<PreviewResult, String> {
     validate_package_extension(&payload.package_path)?;
     let mmap = open_package(&payload.package_path)?;
     let package = parse_package(&mmap)?;
