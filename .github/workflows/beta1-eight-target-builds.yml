@@ -1,0 +1,237 @@
+name: Beta 1 v2.0.0 - 8 portable targets
+
+run-name: Beta 1 v2.0.0 8-target matrix by @${{ github.actor }}
+
+on:
+  push:
+    branches:
+      - "build/beta1-v2.0.0-eight-targets-20261102"
+    paths:
+      - ".github/workflows/beta1-eight-target-builds.yml"
+  workflow_dispatch:
+
+jobs:
+  build-portable:
+    name: ${{ matrix.artifact_name }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-2022
+            target: ""
+            build_args: --no-bundle
+            binary_name: veiga-s3cc-splitter.exe
+            artifact_name: Veiga-S3CC-Splitter-Beta1-v2.0.0-Windows-x64
+
+          - platform: windows-2022
+            target: i686-pc-windows-msvc
+            build_args: --target i686-pc-windows-msvc --no-bundle
+            binary_name: veiga-s3cc-splitter.exe
+            artifact_name: Veiga-S3CC-Splitter-Beta1-v2.0.0-Windows-x86
+
+          - platform: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            build_args: --target aarch64-pc-windows-msvc --no-bundle
+            binary_name: veiga-s3cc-splitter.exe
+            artifact_name: Veiga-S3CC-Splitter-Beta1-v2.0.0-Windows-ARM64
+
+          - platform: ubuntu-22.04
+            target: ""
+            build_args: --no-bundle
+            binary_name: veiga-s3cc-splitter
+            artifact_name: Veiga-S3CC-Splitter-Beta1-v2.0.0-Linux-x64
+
+          - platform: ubuntu-22.04
+            target: i686-unknown-linux-gnu
+            build_args: --target i686-unknown-linux-gnu --no-bundle
+            binary_name: veiga-s3cc-splitter
+            artifact_name: Veiga-S3CC-Splitter-Beta1-v2.0.0-Linux-x86
+
+          - platform: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            build_args: --target aarch64-unknown-linux-gnu --no-bundle
+            binary_name: veiga-s3cc-splitter
+            artifact_name: Veiga-S3CC-Splitter-Beta1-v2.0.0-Linux-ARM64
+
+          - platform: macos-15-intel
+            target: x86_64-apple-darwin
+            build_args: --target x86_64-apple-darwin --no-bundle
+            binary_name: veiga-s3cc-splitter
+            artifact_name: Veiga-S3CC-Splitter-Beta1-v2.0.0-macOS-Intel
+
+          - platform: macos-15
+            target: aarch64-apple-darwin
+            build_args: --target aarch64-apple-darwin --no-bundle
+            binary_name: veiga-s3cc-splitter
+            artifact_name: Veiga-S3CC-Splitter-Beta1-v2.0.0-macOS-Apple-Silicon
+
+    runs-on: ${{ matrix.platform }}
+
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Linux dependencies
+        if: startsWith(matrix.platform, 'ubuntu') && matrix.target != 'i686-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Install Linux x86 dependencies
+        if: matrix.target == 'i686-unknown-linux-gnu'
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-i686-linux-gnu \
+            g++-i686-linux-gnu \
+            pkg-config \
+            libwebkit2gtk-4.1-dev:i386 \
+            libssl-dev:i386 \
+            librsvg2-dev:i386
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: veiga-s3cc-splitter/package-lock.json
+
+      - name: Install Rust stable
+        if: matrix.target == ''
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust stable with target
+        if: matrix.target != ''
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        working-directory: veiga-s3cc-splitter
+        run: npm ci
+
+      - name: Run frontend tests
+        working-directory: veiga-s3cc-splitter
+        shell: bash
+        run: |
+          node src/filter-logic.test.mjs
+          node src/label-relations.test.mjs
+          node src/remove-confirm.test.mjs
+          node src/modal.test.mjs
+          node --test src/window-controls.test.mjs
+
+      - name: Check Rust workspace
+        if: matrix.target != 'i686-unknown-linux-gnu'
+        run: cargo check --workspace
+
+      - name: Run Rust tests
+        if: matrix.target != 'i686-unknown-linux-gnu'
+        run: cargo test --workspace
+
+      - name: Build portable binary
+        if: matrix.target != 'i686-unknown-linux-gnu'
+        working-directory: veiga-s3cc-splitter
+        run: npm run tauri build -- ${{ matrix.build_args }}
+
+      - name: Build Linux x86 portable binary
+        if: matrix.target == 'i686-unknown-linux-gnu'
+        working-directory: veiga-s3cc-splitter
+        env:
+          PKG_CONFIG_ALLOW_CROSS: "1"
+          PKG_CONFIG_LIBDIR: /usr/lib/i386-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          CC_i686_unknown_linux_gnu: i686-linux-gnu-gcc
+          CXX_i686_unknown_linux_gnu: i686-linux-gnu-g++
+          CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER: i686-linux-gnu-gcc
+        run: npm run tauri build -- ${{ matrix.build_args }}
+
+      - name: Locate Windows binary
+        if: startsWith(matrix.platform, 'windows')
+        id: locate_windows
+        shell: pwsh
+        run: |
+          $file = Get-ChildItem -Path "target" -Filter "${{ matrix.binary_name }}" -Recurse -File |
+            Where-Object {
+              $_.FullName -match '\\release\\' -and
+              $_.FullName -notmatch '\\bundle\\'
+            } |
+            Select-Object -First 1 -ExpandProperty FullName
+
+          if (-not $file) {
+            Write-Host "Files found in target:"
+            Get-ChildItem -Path "target" -Recurse -File | Select-Object FullName
+            throw "Portable binary not found."
+          }
+
+          "artifact_path=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Locate Unix binary
+        if: ${{ !startsWith(matrix.platform, 'windows') }}
+        id: locate_unix
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          file_path="$(find target -type f -name "${{ matrix.binary_name }}" ! -path "*/bundle/*" | grep "/release/" | head -n 1 || true)"
+
+          if [ -z "$file_path" ]; then
+            echo "Files found in target:"
+            find target -type f | sort || true
+            exit 1
+          fi
+
+          echo "artifact_path=$file_path" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Windows portable package
+        if: startsWith(matrix.platform, 'windows')
+        shell: pwsh
+        run: |
+          $out = Join-Path $PWD "portable/${{ matrix.artifact_name }}"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item "${{ steps.locate_windows.outputs.artifact_path }}" (Join-Path $out "Veiga's S3CC Splitter.exe")
+          Copy-Item "README.txt" (Join-Path $out "README.txt")
+          Copy-Item "LICENSE.txt" (Join-Path $out "LICENSE.txt")
+
+      - name: Prepare Unix portable package
+        if: ${{ !startsWith(matrix.platform, 'windows') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="portable/${{ matrix.artifact_name }}"
+          mkdir -p "$out"
+          cp "${{ steps.locate_unix.outputs.artifact_path }}" "$out/${{ matrix.binary_name }}"
+          cp README.txt "$out/README.txt"
+          cp LICENSE.txt "$out/LICENSE.txt"
+
+      - name: Record build source and SHA256
+        shell: bash
+        env:
+          ARTIFACT_NAME: ${{ matrix.artifact_name }}
+          GIT_SHA: ${{ github.sha }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          out="portable/$ARTIFACT_NAME"
+          printf 'Veiga S3CC Splitter Beta 1 v2.0.0\nSource commit: %s\nArchitecture target: %s\nBuild job: %s\n' "$GIT_SHA" "${TARGET:-host native}" "$ARTIFACT_NAME" > "$out/BUILD_INFO.txt"
+          (cd "$out" && (sha256sum "Veiga's S3CC Splitter.exe" 2>/dev/null || sha256sum veiga-s3cc-splitter) > SHA256.txt)
+
+      - name: Upload portable package
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: portable/${{ matrix.artifact_name }}/*
+          if-no-files-found: error
+          retention-days: 30
