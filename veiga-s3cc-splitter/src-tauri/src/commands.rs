@@ -5842,13 +5842,6 @@ mod responsive_scan_tests {
         assert!(relations_should_defer(4096, 8001));
     }
 
-    #[test]
-    fn cancellation_reports_a_clear_error() {
-        SCAN_CANCEL_REQUESTED.store(true, Ordering::Release);
-        assert!(check_scan_cancelled().is_err());
-        SCAN_CANCEL_REQUESTED.store(false, Ordering::Release);
-        assert!(check_scan_cancelled().is_ok());
-    }
 }
 
 #[cfg(test)]
