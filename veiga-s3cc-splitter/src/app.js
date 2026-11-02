@@ -1,6 +1,7 @@
 import noPreviewImage from "./assets/no-preview.png";
 import "@fortawesome/fontawesome-free/css/all.min.css";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -438,7 +439,10 @@ const state = {
   isBusy: false,
   busyTitle: "",
   busyMessage: "",
-  progress: 30,
+  progress: 0,
+  scanInProgress: false,
+  scanCancelRequested: false,
+  relationsDeferred: false,
   language: "en",
   isLangMenuOpen: false,
   isContentFilterOpen: false,
@@ -505,6 +509,7 @@ const el = {
   busyTitle: document.querySelector("#busy-title"),
   busyMessage: document.querySelector("#busy-message"),
   progressBar: document.querySelector("#progress-bar"),
+  cancelScanBtn: document.querySelector("#cancel-scan-btn"),
   resourceList: document.querySelector("#resource-list"),
   previewThumb: document.querySelector("#preview-thumb"),
   previewEmpty: document.querySelector("#preview-empty"),
@@ -642,6 +647,7 @@ function applyStaticTranslations() {
 
 function setBusy(title, message) {
   state.isBusy = true;
+  state.progress = 0;
   state.busyTitle = title;
   state.busyMessage = message;
   render();
@@ -865,7 +871,7 @@ function render() {
   const visibleResources = getVisibleResources();
   el.selectedCount.textContent = t("selectedCount", state.selectedKeys.length);
   el.resultsSummary.textContent = state.packagePath
-    ? [t("packageReady", visibleResources.length), state.manifestPackageCount ? t("manifestFound", state.manifestPackageCount) : ""]
+    ? [t("packageReady", visibleResources.length), state.manifestPackageCount ? t("manifestFound", state.manifestPackageCount) : "", state.relationsDeferred ? (scanStatusMessages[state.language] || scanStatusMessages.en).deferred : ""]
         .filter(Boolean)
         .join(" • ")
     : t("noPackageLoaded");
@@ -873,6 +879,8 @@ function render() {
   el.busyTitle.textContent = state.busyTitle || t("busyDefaultTitle");
   el.busyMessage.textContent = state.busyMessage || t("busyDefaultMessage");
   el.progressBar.style.width = `${state.progress}%`;
+  el.cancelScanBtn?.classList.toggle("hidden", !state.scanInProgress);
+  if (el.cancelScanBtn) el.cancelScanBtn.disabled = state.scanCancelRequested;
 
   el.emptyState.classList.toggle("hidden", state.packagePath || state.isBusy || state.resources.length > 0);
   el.busyState.classList.toggle("hidden", !state.isBusy);
@@ -1093,57 +1101,102 @@ function parentFolderOfPath(path) {
   return raw.slice(0, slash) || ".";
 }
 
+const scanStatusMessages = {
+  en: {
+    open: "Opening the package without copying large resource payloads...",
+    names: "Reading names and package metadata...",
+    items: "Building the resource list...",
+    relations: "Preparing duplicate and conflict diagnostics...",
+    complete: "Resource list ready.",
+    deferred: "Duplicate/conflict verification deferred for this large package",
+    cancelling: "Cancelling...",
+  },
+  pt: {
+    open: "Abrindo o package sem copiar os recursos grandes...",
+    names: "Lendo nomes e metadados do package...",
+    items: "Montando a lista de recursos...",
+    relations: "Preparando diagnósticos de duplicatas e conflitos...",
+    complete: "Lista de recursos pronta.",
+    deferred: "Verificação de duplicatas/conflitos adiada para este package grande",
+    cancelling: "Cancelando...",
+  },
+  es: {
+    open: "Abriendo el package sin copiar recursos grandes...",
+    names: "Leyendo nombres y metadatos del package...",
+    items: "Construyendo la lista de recursos...",
+    relations: "Preparando diagnósticos de duplicados y conflictos...",
+    complete: "Lista de recursos lista.",
+    deferred: "Verificación de duplicados/conflictos aplazada para este package grande",
+    cancelling: "Cancelando...",
+  },
+};
+
 async function scanPackage() {
-  if (!state.packagePath) return;
-
+  if (!state.packagePath || state.isBusy) return;
+  const requestedPath = state.packagePath;
+  let unlisten = null;
+  let firstVisible = null;
+  state.scanInProgress = true;
+  state.scanCancelRequested = false;
+  state.relationsDeferred = false;
   setBusy(t("busyReadTitle"), t("busyReadMessage"));
-
   try {
-    const result = await invoke("scan_package_resources", {
-      payload: {
-        packagePath: state.packagePath,
-        resourceType: "all",
-        search: null,
-      },
+    unlisten = await listen("splitter-scan-progress", (event) => {
+      if (!state.scanInProgress || state.packagePath !== requestedPath) return;
+      const info = event.payload || {};
+      const messages = scanStatusMessages[state.language] || scanStatusMessages.en;
+      const percent = Math.max(0, Math.min(100, Number(info.percent) || 0));
+      state.progress = percent;
+      state.busyMessage = messages[info.stage] || messages.open;
+      // Do not re-render the virtualized list on every progress notification.
+      el.busyMessage.textContent = state.busyMessage;
+      el.progressBar.style.width = String(percent) + "%";
     });
-
+    const result = await invoke("scan_package_resources_async", {
+      payload: { packagePath: requestedPath, resourceType: "all", search: null },
+    });
+    if (state.scanCancelRequested || state.packagePath !== requestedPath) return;
     const relations = result.relations || {};
     state.resources = (result.items || []).map((item) => ({
       ...item,
       relation: relations[item.key] || null,
     }));
+    state.relationsDeferred = Boolean(result.relationsDeferred);
     state.manifestPackageCount = result.manifestPackageCount || 0;
-
     state.selectedKeys = [];
     state.selectionInitialized = true;
-
     state.selectionAnchorKey = null;
     state.preview = null;
-
-    const firstVisible = getVisibleResources()[0] || state.resources[0];
-    if (firstVisible) {
-      await loadPreview(firstVisible);
-    }
+    firstVisible = getVisibleResources()[0] || state.resources[0] || null;
   } catch (error) {
     console.error(error);
-    await appModal.showError({
-      titleText: t("modalErrorTitle"),
-      messageText: `${t("readError")}\n${error}`,
-      primaryLabel: t("modalClose"),
-    });
+    if (!state.scanCancelRequested) {
+      await appModal.showError({
+        titleText: t("modalErrorTitle"),
+        messageText: t("readError") + "\n" + error,
+        primaryLabel: t("modalClose"),
+      });
+    }
   } finally {
+    unlisten?.();
+    state.scanInProgress = false;
+    state.scanCancelRequested = false;
     clearBusy();
+  }
+  // A large texture may still need decoding; do not keep the loading
+  // screen displayed while its separate worker finishes.
+  if (firstVisible && state.packagePath === requestedPath) {
+    void loadPreview(firstVisible);
   }
 }
 
 async function loadPreview(item) {
+  const sourcePath = state.packagePath;
   try {
-    const preview = await invoke("get_resource_preview", {
-      payload: {
-        packagePath: state.packagePath,
-        resourceKey: item.key,
-      },
+    const preview = await invoke("get_resource_preview_async", {
+      payload: { packagePath: sourcePath, resourceKey: item.key },
     });
+    if (state.packagePath !== sourcePath) return;
     preview.label = item.label;
     state.preview = preview;
     render();
@@ -1523,6 +1576,15 @@ function setupEvents() {
 
   el.pickPackageBtn.addEventListener("click", pickPackage);
   el.scanBtn.addEventListener("click", scanPackage);
+  el.cancelScanBtn?.addEventListener("click", async () => {
+    if (!state.scanInProgress || state.scanCancelRequested) return;
+    state.scanCancelRequested = true;
+    const messages = scanStatusMessages[state.language] || scanStatusMessages.en;
+    state.busyMessage = messages.cancelling;
+    el.busyMessage.textContent = messages.cancelling;
+    el.cancelScanBtn.disabled = true;
+    try { await invoke("cancel_scan_package"); } catch (error) { console.error(error); }
+  });
   el.exportBtn.addEventListener("click", exportSelection);
   if (el.removeMergedBtn) {
     el.removeMergedBtn.addEventListener("click", removeSelectionFromMerged);
