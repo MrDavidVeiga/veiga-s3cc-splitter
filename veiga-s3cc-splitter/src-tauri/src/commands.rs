@@ -4720,10 +4720,19 @@ fn relation_hash_pair(data: &[u8]) -> (u64, u64) {
     (a, b)
 }
 
-fn relation_tgi_index(package: &DBPF<'_>) -> HashMap<ResourceKeyParts, Vec<usize>> {
+// The optional full verification can run against multi-gigabyte merges.
+// Check cancellation while indexing, comparing conflicting TGIs, expanding
+// individual logical resources and comparing exact decoded payloads.
+fn relation_tgi_index<F>(
+    package: &DBPF<'_>,
+    checkpoint: &F,
+) -> Result<HashMap<ResourceKeyParts, Vec<usize>>, String>
+where
+    F: Fn() -> Result<(), String>,
+{
     let mut index: HashMap<ResourceKeyParts, Vec<usize>> = HashMap::new();
-
     for (entry_index, entry) in package.files.iter().enumerate() {
+        if entry_index % 256 == 0 { checkpoint()?; }
         let parts = ResourceKeyParts {
             resource_type: entry.resource_type,
             resource_group: entry.resource_group,
@@ -4731,48 +4740,69 @@ fn relation_tgi_index(package: &DBPF<'_>) -> HashMap<ResourceKeyParts, Vec<usize
         };
         index.entry(parts).or_default().push(entry_index);
     }
-
-    index
+    checkpoint()?;
+    Ok(index)
 }
 
-fn relation_entries_have_same_payload(package: &DBPF<'_>, indices: &[usize]) -> bool {
+fn relation_entries_have_same_payload<F>(
+    package: &DBPF<'_>,
+    indices: &[usize],
+    checkpoint: &F,
+) -> Result<bool, String>
+where
+    F: Fn() -> Result<(), String>,
+{
     let Some(first_index) = indices.first().copied() else {
-        return true;
+        return Ok(true);
     };
+    checkpoint()?;
     let first = package.files[first_index].data();
-    indices
-        .iter()
-        .copied()
-        .skip(1)
-        .all(|entry_index| package.files[entry_index].data() == first)
+    checkpoint()?;
+    for (position, &entry_index) in indices.iter().enumerate().skip(1) {
+        if position % 8 == 1 { checkpoint()?; }
+        if package.files[entry_index].data() != first {
+            return Ok(false);
+        }
+        checkpoint()?;
+    }
+    Ok(true)
 }
 
-fn relation_tgi_conflicts(
+fn relation_tgi_conflicts<F>(
     package: &DBPF<'_>,
     tgi_index: &HashMap<ResourceKeyParts, Vec<usize>>,
-) -> HashMap<ResourceKeyParts, usize> {
+    checkpoint: &F,
+) -> Result<HashMap<ResourceKeyParts, usize>, String>
+where
+    F: Fn() -> Result<(), String>,
+{
     let mut conflicts = HashMap::new();
-
-    for (parts, indices) in tgi_index {
+    for (position, (parts, indices)) in tgi_index.iter().enumerate() {
+        if position % 128 == 0 { checkpoint()?; }
         if relation_ignored_resource(*parts) || indices.len() < 2 {
             continue;
         }
-        if !relation_entries_have_same_payload(package, indices) {
+        if !relation_entries_have_same_payload(package, indices, checkpoint)? {
             conflicts.insert(*parts, indices.len());
         }
     }
-
-    conflicts
+    checkpoint()?;
+    Ok(conflicts)
 }
 
-fn logical_profile_for_item(
+fn logical_profile_for_item<F>(
     package: &DBPF<'_>,
     item: &ResourceItem,
     name_map: &BTreeMap<u64, String>,
     tgi_index: &HashMap<ResourceKeyParts, Vec<usize>>,
     tgi_conflicts: &HashMap<ResourceKeyParts, usize>,
     atom_cache: &mut HashMap<usize, LogicalAtomKey>,
-) -> Result<(Option<LogicalProfile>, usize), String> {
+    checkpoint: &F,
+) -> Result<(Option<LogicalProfile>, usize), String>
+where
+    F: Fn() -> Result<(), String>,
+{
+    checkpoint()?;
     let base_keys: HashSet<String> = item
         .key
         .split("||")
@@ -4785,14 +4815,17 @@ fn logical_profile_for_item(
         return Ok((None, 0));
     }
 
+    // Reuse the same dependency expansion as export and the baseline report.
     let expanded = expand_selection_for_export(package, &base_keys, false, name_map)?;
+    checkpoint()?;
     let mut ordered_keys: Vec<String> = expanded.into_iter().collect();
     ordered_keys.sort();
 
     let mut atoms = Vec::new();
     let mut conflict_count = 0usize;
 
-    for key in ordered_keys {
+    for (position, key) in ordered_keys.into_iter().enumerate() {
+        if position % 8 == 0 { checkpoint()?; }
         let parts = parse_key(&key)?;
         if relation_ignored_resource(parts) {
             continue;
@@ -4822,6 +4855,7 @@ fn logical_profile_for_item(
                 hash_b,
             }
         });
+        checkpoint()?;
         atoms.push(LogicalAtom {
             key: atom_key,
             entry_index,
@@ -4836,26 +4870,32 @@ fn logical_profile_for_item(
     }
 
     atoms.sort_by_key(|atom| atom.key);
+    checkpoint()?;
     Ok((Some(LogicalProfile { atoms }), 0))
 }
 
-fn logical_profiles_exactly_equal(
+fn logical_profiles_exactly_equal<F>(
     package: &DBPF<'_>,
     left: &LogicalProfile,
     right: &LogicalProfile,
-) -> bool {
+    checkpoint: &F,
+) -> Result<bool, String>
+where
+    F: Fn() -> Result<(), String>,
+{
+    checkpoint()?;
     if left.atoms.len() != right.atoms.len() {
-        return false;
+        return Ok(false);
     }
-
     let left_keys: Vec<LogicalAtomKey> = left.atoms.iter().map(|atom| atom.key).collect();
     let right_keys: Vec<LogicalAtomKey> = right.atoms.iter().map(|atom| atom.key).collect();
     if left_keys != right_keys {
-        return false;
+        return Ok(false);
     }
 
     let mut start = 0usize;
     while start < left.atoms.len() {
+        checkpoint()?;
         let atom_key = left.atoms[start].key;
         let mut end = start + 1;
         while end < left.atoms.len() && left.atoms[end].key == atom_key {
@@ -4864,10 +4904,12 @@ fn logical_profiles_exactly_equal(
 
         let mut used = vec![false; end - start];
         for left_atom in &left.atoms[start..end] {
+            checkpoint()?;
             let left_data = package.files[left_atom.entry_index].data();
             let mut matched = false;
 
             for (offset, right_atom) in right.atoms[start..end].iter().enumerate() {
+                if offset % 8 == 0 { checkpoint()?; }
                 if used[offset] {
                     continue;
                 }
@@ -4878,16 +4920,14 @@ fn logical_profiles_exactly_equal(
                     break;
                 }
             }
-
             if !matched {
-                return false;
+                return Ok(false);
             }
         }
-
         start = end;
     }
-
-    true
+    checkpoint()?;
+    Ok(true)
 }
 
 fn build_resource_relations(
@@ -4912,8 +4952,10 @@ where
 {
     let total_work = items.len().saturating_mul(2).max(1);
     monitor(0, total_work)?;
-    let tgi_index = relation_tgi_index(package);
-    let tgi_conflicts = relation_tgi_conflicts(package, &tgi_index);
+    let tgi_index = relation_tgi_index(package, &|| monitor(0, total_work))?;
+    let tgi_conflicts = relation_tgi_conflicts(
+        package, &tgi_index, &|| monitor(0, total_work),
+    )?;
     let mut atom_cache: HashMap<usize, LogicalAtomKey> = HashMap::new();
     let mut profiles: Vec<Option<LogicalProfile>> = vec![None; items.len()];
     let mut relations: Vec<ResourceRelation> = vec![ResourceRelation::default(); items.len()];
@@ -4923,16 +4965,22 @@ where
 
     for (item_index, item) in items.iter().enumerate() {
         if item_index % 16 == 0 { monitor(item_index, total_work)?; }
-        let Ok((profile, conflict_count)) = logical_profile_for_item(
+        let (profile, conflict_count) = match logical_profile_for_item(
             package,
             item,
             name_map,
             &tgi_index,
             &tgi_conflicts,
             &mut atom_cache,
-        )
-        else {
-            continue;
+            &|| monitor(item_index, total_work),
+        ) {
+            Ok(profile) => profile,
+            Err(_) => {
+                // Historical behavior skips malformed individual resources;
+                // cancellation, however, must never be mistaken for damage.
+                monitor(item_index, total_work)?;
+                continue;
+            }
         };
         if conflict_count > 1 {
             relations[item_index].tgi_conflict_count = conflict_count;
@@ -4974,7 +5022,10 @@ where
                 };
 
                 if object_roots[seed] == object_roots[candidate]
-                    && logical_profiles_exactly_equal(package, seed_profile, candidate_profile)
+                    && logical_profiles_exactly_equal(
+                        package, seed_profile, candidate_profile,
+                        &|| monitor(items.len().saturating_add(checked_groups).min(total_work), total_work),
+                    )?
                 {
                     exact_group.push(candidate);
                 } else {
