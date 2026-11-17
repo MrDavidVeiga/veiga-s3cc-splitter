@@ -227,3 +227,69 @@ test("expensive comparison loops cooperatively check for cancellation", () => {
   }
   assert.match(backend, /build_resource_relations_monitored\([\s\S]*?Análise automática substituída ou cancelada/);
 });
+
+test("virtual row thumbnails use a bounded queue and reject results from old packages", async () => {
+  const queueSource = between(app,
+    "// A bounded lazy queue for visible virtual rows.", "function renderList() {");
+  const images = ["A", "B", "C"].map((key) => ({ dataset: { resourceKey: key }, src: "llama" }));
+  const invocations = [];
+  const ctx = {
+    state: { packagePath: "original.package", isBusy: false },
+    el: { resourceList: { querySelectorAll: () => images } },
+    noPreviewImage: "llama",
+    queueMicrotask,
+    console,
+    invoke: (command, args) => new Promise((resolve) => {
+      invocations.push({ command, args, resolve });
+    }),
+  };
+  vm.runInNewContext(queueSource, ctx);
+  ctx.queueListThumbnail("A");
+  ctx.queueListThumbnail("B");
+  ctx.queueListThumbnail("C");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(invocations.length, 2, "only two thumbnail workers may run");
+  assert.ok(invocations.every((call) => call.command === "get_resource_thumbnail_async"));
+  assert.equal(invocations[0].args.payload.packagePath, "original.package");
+
+  invocations[0].resolve("firstimage");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(invocations.length, 3, "queued visible row should start after one worker finishes");
+  assert.equal(images[0].src, "data:image/png;base64,firstimage");
+
+  ctx.resetListThumbnails();
+  ctx.state.packagePath = "new.package";
+  invocations[1].resolve("staleimage");
+  invocations[2].resolve("staleimage");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(images[1].src, "llama", "old package must not populate the new resource list");
+  assert.equal(images[2].src, "llama", "old pending request must be discarded");
+
+  ctx.queueListThumbnail("A");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(invocations.length, 4, "new package should fetch even the same resource key");
+  assert.equal(invocations[3].args.payload.packagePath, "new.package");
+  invocations[3].resolve(null);
+  await new Promise((resolve) => setImmediate(resolve));
+  ctx.queueListThumbnail("A");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(invocations.length, 4, "negative cache should avoid repeated expensive misses");
+});
+
+test("new thumbnail decoder and multilingual directory lookup are connected", () => {
+  const codec = read("../src-tauri/src/preview_images.rs");
+  const manifest = read("../src-tauri/Cargo.toml");
+  assert.match(commands, /mod preview_images;/);
+  assert.match(commands, /commands::get_resource_thumbnail_async/);
+  assert.match(backend, /pub async fn get_resource_thumbnail_async\(/);
+  assert.match(backend, /fn thumbnail_directory_candidates\(/);
+  for (const name of ["Os Sims 3", "Los Sims 3", "Les Sims 3", "Die Sims 3"]) {
+    assert.ok(backend.includes(name), "missing locale " + name);
+  }
+  assert.match(codec, /image::ImageFormat::Dds/);
+  assert.match(codec, /PreviewHint::Tga/);
+  assert.match(codec, /MAX_PIXELS/);
+  assert.match(manifest, /image = \{ version = "=0\.24\.9"/);
+  assert.match(app, /thumb\.className = "resource-item-thumbnail"/);
+});
