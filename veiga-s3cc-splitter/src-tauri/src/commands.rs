@@ -14,7 +14,7 @@ use num_traits::ToPrimitive;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sims3_core::dbpf::filetypes::{resource_is_png, ResourceType};
+use sims3_core::dbpf::filetypes::ResourceType;
 use sims3_core::dbpf::{DBPFEntry, DBPF};
 use sims3_pack::dbpf::{Package as WritablePackage, ResourceEntry as WritableEntry};
 use tauri::{AppHandle, Emitter, Manager};
@@ -3254,10 +3254,6 @@ fn build_skintone_group_items(
     items
 }
 
-fn is_valid_png(data: &[u8]) -> bool {
-    data.len() >= 8 && data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
-}
-
 fn encode_preview_image(data: &[u8], resource_type: u32, edge: u32) -> Option<String> {
     let hint = (resource_type == TYPE_IMAG_TGA).then_some(crate::preview_images::PreviewHint::Tga);
     crate::preview_images::preview_png(data, hint, edge)
@@ -3558,19 +3554,42 @@ fn external_thumbnail_base64(app: &AppHandle, key: ResourceKeyParts, edge: u32) 
 }
 
 fn pose_list_preview_base64(package: &DBPF<'_>, text: &str) -> Option<String> {
+    pose_list_preview_base64_sized(package, text, 320)
+}
+
+fn pose_list_preview_base64_sized(
+    package: &DBPF<'_>,
+    text: &str,
+    edge: u32,
+) -> Option<String> {
     let icon_hashes = pose_list_icon_hashes(text);
     encode_best_preview(
-        package
-            .files
-            .iter()
-            .filter(|entry| {
-                matches!(
-                    entry.resource_type,
-                    TYPE_IMG | TYPE_IMAG_JPG | TYPE_IMAG_PNG | TYPE_IMAG_TGA
-                ) && icon_hashes.contains(&entry.instance)
-            })
-            .map(|entry| (entry.data().len(), entry.data().to_vec())),
+        package.files.iter()
+            .filter(|entry| matches!(entry.resource_type,
+                TYPE_IMG | TYPE_IMAG_JPG | TYPE_IMAG_PNG | TYPE_IMAG_TGA)
+                && icon_hashes.contains(&entry.instance))
+            .map(|entry| (entry.resource_type, entry.data())),
+        edge,
     )
+}
+
+fn embedded_resource_thumbnail(
+    package: &DBPF<'_>,
+    key: ResourceKeyParts,
+    edge: u32,
+) -> Option<String> {
+    if key.resource_type == TYPE_XML {
+        if let Some(index) = package.entry_index(TYPE_XML, key.resource_group, key.instance) {
+            let entry = &package.files[index];
+            if is_pose_list_xml(entry) {
+                let xml = String::from_utf8_lossy(entry.data());
+                if let Some(preview) = pose_list_preview_base64_sized(package, &xml, edge) {
+                    return Some(preview);
+                }
+            }
+        }
+    }
+    find_preview_base64_with_size(package, key, edge)
 }
 
 fn selected_entry_indices(package: &DBPF<'_>, keys: &HashSet<String>) -> Vec<usize> {
@@ -8217,6 +8236,33 @@ pub async fn get_resource_preview_async(
     .map_err(|error| format!("Falha ao preparar a pré-visualização: {error}"))?
 }
 
+// Separate from the full preview's latest-request guard: virtual-list rows
+// can load concurrently without invalidating the selected item's preview.
+#[tauri::command]
+pub async fn get_resource_thumbnail_async(
+    app: AppHandle,
+    payload: PreviewPayload,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        validate_package_extension(&payload.package_path)?;
+        let key = parse_key(first_compound_key(&payload.resource_key))?;
+        let path = canonical_package_path(&payload.package_path);
+        let mut cache = preview_cache().lock()
+            .map_err(|_| "Cache de miniaturas indisponível.".to_string())?;
+        if cache.as_ref().map(|entry| !preview_cache_is_current(entry, &path)).unwrap_or(true) {
+            *cache = Some(build_preview_cache(&path)?);
+        }
+        let package = &cache.as_ref()
+            .ok_or_else(|| "Cache de miniaturas indisponível.".to_string())?
+            .package;
+        let embedded = embedded_resource_thumbnail(package, key, 96);
+        // Never hold the shared preview lock while scanning external caches.
+        drop(cache);
+        Ok(embedded.or_else(|| external_thumbnail_base64(&app, key, 96)))
+    }).await
+      .map_err(|error| format!("Falha ao carregar miniatura: {error}"))?
+}
+
 #[tauri::command]
 pub fn get_resource_preview(app: AppHandle, payload: PreviewPayload) -> Result<PreviewResult, String> {
     validate_package_extension(&payload.package_path)?;
@@ -8283,16 +8329,18 @@ pub fn get_resource_preview(app: AppHandle, payload: PreviewPayload) -> Result<P
         let entry = &package.files[entry_index];
         let name_map = &cached.name_map;
 
+        let label = object_display_label(package, entry, name_map);
+        let resource_key = key_string(entry);
+        let kind = kind_from_type(entry.resource_type).to_string();
+        let details = format!(
+            "Type 0x{:08X} • Group 0x{:08X}",
+            entry.resource_type, entry.resource_group
+        );
+        let embedded = find_preview_base64(package, key);
+        drop(cache);
         Ok(PreviewResult {
-            label: object_display_label(package, entry, name_map),
-            key: key_string(entry),
-            kind: kind_from_type(entry.resource_type).to_string(),
-            details: format!(
-                "Type 0x{:08X} • Group 0x{:08X}",
-                entry.resource_type, entry.resource_group
-            ),
-            thumb_base64: find_preview_base64(package, key)
-                .or_else(|| external_thumbnail_base64(&app, key)),
+            label, key: resource_key, kind, details,
+            thumb_base64: embedded.or_else(|| external_thumbnail_base64(&app, key, 320)),
         })
     }))
     .unwrap_or_else(|_| Err("A prévia deste recurso falhou inesperadamente; o arquivo original não foi alterado.".to_string()))
