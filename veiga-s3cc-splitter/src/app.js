@@ -1101,6 +1101,88 @@ function render() {
 }
 
 let cachedListCounts = { source: null, counts: null };
+// A bounded lazy queue for visible virtual rows. Never request thumbnails for
+// the full DBPF resource table, and never reuse images across rescans.
+const listThumbnailCache = new Map();
+let listThumbnailPending = new Set();
+let listThumbnailQueue = [];
+let listThumbnailRunning = 0;
+let listThumbnailGeneration = 0;
+const MAX_LIST_THUMBNAIL_CACHE = 160;
+const MAX_SIMULTANEOUS_LIST_THUMBNAILS = 2;
+
+function resetListThumbnails() {
+  ++listThumbnailGeneration;
+  listThumbnailCache.clear();
+  listThumbnailQueue = [];
+  listThumbnailPending = new Set();
+}
+
+function storeListThumbnail(key, base64) {
+  if (listThumbnailCache.has(key)) listThumbnailCache.delete(key);
+  listThumbnailCache.set(key, base64 || null); // null also caches missing images
+  if (listThumbnailCache.size > MAX_LIST_THUMBNAIL_CACHE) {
+    listThumbnailCache.delete(listThumbnailCache.keys().next().value);
+  }
+}
+
+function fillVisibleListThumbnails(key, base64) {
+  const images = el.resourceList.querySelectorAll(".resource-item-thumbnail");
+  for (const image of images) {
+    if (image.dataset.resourceKey === key) {
+      image.src = base64 ? `data:image/png;base64,${base64}` : noPreviewImage;
+    }
+  }
+}
+
+function listThumbnailStillVisible(key) {
+  return [...el.resourceList.querySelectorAll(".resource-item-thumbnail")]
+    .some((image) => image.dataset.resourceKey === key);
+}
+
+function pumpListThumbnails() {
+  while (listThumbnailRunning < MAX_SIMULTANEOUS_LIST_THUMBNAILS && listThumbnailQueue.length) {
+    const job = listThumbnailQueue.shift();
+    if (job.generation !== listThumbnailGeneration ||
+        job.packagePath !== state.packagePath || !listThumbnailStillVisible(job.key)) {
+      if (job.generation === listThumbnailGeneration) listThumbnailPending.delete(job.key);
+      continue;
+    }
+    listThumbnailRunning++;
+    void invoke("get_resource_thumbnail_async", {
+      payload: { packagePath: job.packagePath, resourceKey: job.key },
+    }).then((base64) => {
+      if (job.generation !== listThumbnailGeneration || job.packagePath !== state.packagePath) return;
+      storeListThumbnail(job.key, base64);
+      fillVisibleListThumbnails(job.key, base64);
+    }).catch((error) => {
+      // A damaged or unsupported texture must never hide the CC or block
+      // subsequent thumbnails. Record the miss and keep the llama fallback.
+      if (job.generation === listThumbnailGeneration) {
+        console.warn("Thumbnail unavailable:", error);
+        storeListThumbnail(job.key, null);
+      }
+    }).finally(() => {
+      listThumbnailRunning--;
+      if (job.generation === listThumbnailGeneration) listThumbnailPending.delete(job.key);
+      pumpListThumbnails();
+    });
+  }
+}
+
+function queueListThumbnail(key) {
+  if (!state.packagePath || state.isBusy || listThumbnailCache.has(key) ||
+      listThumbnailPending.has(key)) return;
+  listThumbnailPending.add(key);
+  listThumbnailQueue.push({
+    key, packagePath: state.packagePath, generation: listThumbnailGeneration,
+  });
+  // Schedule after the current virtual row is attached to the DOM.
+  if (listThumbnailQueue.length === 1) {
+    queueMicrotask(pumpListThumbnails);
+  }
+}
+
 function renderList() {
   const visibleResources = getVisibleResources();
   const rowHeight = 76;
@@ -1204,7 +1286,23 @@ function renderList() {
       addBadge("same-name-badge", t("sameNameHint"),
         t("sameNameLabel", relation.count), heading);
     }
-    button.append(heading, meta);
+    const thumb = document.createElement("img");
+    thumb.className = "resource-item-thumbnail";
+    thumb.dataset.resourceKey = item.key;
+    thumb.alt = ""; // Decorative; full resource name remains accessible.
+    thumb.loading = "lazy";
+    thumb.decoding = "async";
+    thumb.draggable = false;
+    const cachedThumb = listThumbnailCache.get(item.key);
+    thumb.src = cachedThumb ? `data:image/png;base64,${cachedThumb}` : noPreviewImage;
+    thumb.addEventListener("error", () => {
+      if (thumb.src !== noPreviewImage) thumb.src = noPreviewImage;
+    });
+
+    const textContent = document.createElement("div");
+    textContent.className = "resource-item-text";
+    textContent.append(heading, meta);
+    button.append(thumb, textContent);
     button.addEventListener("click", () => loadPreview(item));
 
     const pill = document.createElement("div");
@@ -1219,6 +1317,7 @@ function renderList() {
     row.style.boxSizing = "border-box";
     row.append(checkWrap, button, pill);
     content.appendChild(row);
+    if (!listThumbnailCache.has(item.key)) queueListThumbnail(item.key);
   }
 }
 
@@ -1308,6 +1407,7 @@ async function pickPackage() {
   const result = await open({ multiple: false, filters: [{ name: "*.package", extensions: ["package", "dbc"] }] });
   if (typeof result === "string" && isScannablePackagePath(result)) {
     invalidateRelationAnalysis();
+    resetListThumbnails();
     state.packagePath = result;
     ++previewRequestToken;
     state.pendingRelationUpdates = [];
@@ -1404,6 +1504,7 @@ async function scanPackage() {
   const requestedPath = state.packagePath;
   let firstVisible = null;
   invalidateRelationAnalysis();
+  resetListThumbnails();
   ++previewRequestToken; // invalidate any preview requested before this scan
   state.pendingRelationUpdates = [];
   state.scanGeneration = null;
@@ -1475,6 +1576,8 @@ async function loadPreview(item) {
     if (token !== previewRequestToken || state.packagePath !== requestedPath) return;
     preview.label = item.label;
     state.preview = preview;
+    // Reuse the selected item's thumbnail in its virtual row.
+    storeListThumbnail(item.key, preview.thumbBase64);
     render();
   } catch (error) {
     if (token === previewRequestToken) console.error(error);
@@ -1756,6 +1859,7 @@ async function exportSelection() {
 
 function clearAll() {
   invalidateRelationAnalysis();
+  resetListThumbnails();
   ++previewRequestToken;
   state.pendingRelationUpdates = [];
   state.scanGeneration = null;
@@ -1830,6 +1934,7 @@ function bindDragAndDrop() {
       const ext = path?.toLowerCase().split(".").pop();
       if (["package", "dbc"].includes(ext)) {
         invalidateRelationAnalysis();
+        resetListThumbnails();
         state.packagePath = path;
         ++previewRequestToken;
         state.pendingRelationUpdates = [];
