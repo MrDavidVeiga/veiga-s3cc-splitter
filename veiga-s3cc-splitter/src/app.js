@@ -27,6 +27,32 @@ const buttonIcons = {
   zip: `<svg class="btn-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m10 2 7 4v8l-7 4-7-4V6l7-4Z"/><path d="m3 6 7 4 7-4"/><path d="M10 10v8"/><path d="M8.5 3.2v2M11.5 3.2v2"/></svg>`
 };
 
+// Progress events include internal English stage keys; localize them in the UI
+// while leaving backend events stable for diagnostics and existing consumers.
+const scanStageMessages = {
+  en: {
+    "Opening package": "Mapping package resources.",
+    "Reading names": "Reading names and package metadata.",
+    "Building resource list": "Building the resource list.",
+    "Preparing relationship metadata": "Checking relationships and dependencies.",
+    "Ready": "Resource list ready.",
+  },
+  pt: {
+    "Opening package": "Mapeando os recursos do package.",
+    "Reading names": "Lendo nomes e metadados do package.",
+    "Building resource list": "Montando a lista de recursos.",
+    "Preparing relationship metadata": "Verificando relações e dependências.",
+    "Ready": "Lista de recursos pronta.",
+  },
+  es: {
+    "Opening package": "Mapeando los recursos del package.",
+    "Reading names": "Leyendo nombres y metadatos del package.",
+    "Building resource list": "Preparando la lista de recursos.",
+    "Preparing relationship metadata": "Comprobando relaciones y dependencias.",
+    "Ready": "Lista de recursos lista.",
+  },
+};
+
 const translations = {
   en: {
     scanCancelling: "Cancelling package read…",
@@ -477,32 +503,6 @@ const translations = {
     clear: "Limpiar Lista",
     readError: "Error al leer el package:",
     splittError: "Error en la exportación:",
-  },
-};
-
-// Progress events include internal English stage keys; localize them in the UI
-// while leaving backend events stable for diagnostics and existing consumers.
-const scanStageMessages = {
-  en: {
-    "Opening package": "Mapping package resources.",
-    "Reading names": "Reading names and package metadata.",
-    "Building resource list": "Building the resource list.",
-    "Preparing relationship metadata": "Checking relationships and dependencies.",
-    "Ready": "Resource list ready.",
-  },
-  pt: {
-    "Opening package": "Mapeando os recursos do package.",
-    "Reading names": "Lendo nomes e metadados do package.",
-    "Building resource list": "Montando a lista de recursos.",
-    "Preparing relationship metadata": "Verificando relações e dependências.",
-    "Ready": "Lista de recursos pronta.",
-  },
-  es: {
-    "Opening package": "Mapeando los recursos del package.",
-    "Reading names": "Leyendo nombres y metadatos del package.",
-    "Building resource list": "Preparando la lista de recursos.",
-    "Preparing relationship metadata": "Comprobando relaciones y dependencias.",
-    "Ready": "Lista de recursos lista.",
   },
 };
 
