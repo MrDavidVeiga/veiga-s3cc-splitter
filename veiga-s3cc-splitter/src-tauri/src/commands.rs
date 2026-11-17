@@ -4,7 +4,7 @@ use std::fs::{copy, create_dir_all, remove_file, rename, File, OpenOptions};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -73,6 +73,8 @@ const MAX_RELATION_ANALYSIS_ITEMS: usize = 8_000;
 static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 // Suppress late duplicate/conflict events from a previous scan of the same path.
 static SCAN_GENERATION: AtomicU64 = AtomicU64::new(0);
+static RELATION_ANALYSIS_GENERATION: AtomicU64 = AtomicU64::new(0);
+static RELATION_ANALYSIS_CANCELLED: AtomicBool = AtomicBool::new(false);
 static PREVIEW_CACHE: OnceLock<Mutex<Option<PreviewCacheEntry>>> = OnceLock::new();
 
 struct PreviewCacheEntry {
@@ -4739,6 +4741,23 @@ fn build_resource_relations(
     name_map: &BTreeMap<u64, String>,
     items: &[ResourceItem],
 ) -> BTreeMap<String, ResourceRelation> {
+    build_resource_relations_monitored(package, name_map, items, &|_, _| Ok(()))
+        .unwrap_or_default()
+}
+
+// The same exact TGI/hash comparisons, with cooperative checkpoints between
+// resource profiles and within large duplicate candidate groups.
+fn build_resource_relations_monitored<F>(
+    package: &DBPF<'_>,
+    name_map: &BTreeMap<u64, String>,
+    items: &[ResourceItem],
+    monitor: &F,
+) -> Result<BTreeMap<String, ResourceRelation>, String>
+where
+    F: Fn(usize, usize) -> Result<(), String>,
+{
+    let total_work = items.len().saturating_mul(2).max(1);
+    monitor(0, total_work)?;
     let tgi_index = relation_tgi_index(package);
     let tgi_conflicts = relation_tgi_conflicts(package, &tgi_index);
     let mut atom_cache: HashMap<usize, LogicalAtomKey> = HashMap::new();
@@ -4749,6 +4768,7 @@ fn build_resource_relations(
     let object_roots: Vec<_> = items.iter().map(object_catalog_anchor_tgis).collect();
 
     for (item_index, item) in items.iter().enumerate() {
+        if item_index % 16 == 0 { monitor(item_index, total_work)?; }
         let Ok((profile, conflict_count)) = logical_profile_for_item(
             package,
             item,
@@ -4776,7 +4796,10 @@ fn build_resource_relations(
         buckets.entry(summary).or_default().push(item_index);
     }
 
+    let mut checked_groups = 0usize;
     for candidates in buckets.values().filter(|candidates| candidates.len() > 1) {
+        monitor(items.len().saturating_add(checked_groups).min(total_work), total_work)?;
+        checked_groups += 1;
         let mut remaining = candidates.clone();
 
         while let Some(seed) = remaining.pop() {
@@ -4787,7 +4810,10 @@ fn build_resource_relations(
             let mut exact_group = vec![seed];
             let mut keep = Vec::new();
 
-            for candidate in remaining {
+            for (position, candidate) in remaining.into_iter().enumerate() {
+                if position % 16 == 0 {
+                    monitor(items.len().saturating_add(checked_groups).min(total_work), total_work)?;
+                }
                 let Some(candidate_profile) = profiles[candidate].as_ref() else {
                     keep.push(candidate);
                     continue;
@@ -4813,6 +4839,7 @@ fn build_resource_relations(
         }
     }
 
+    monitor(total_work.saturating_sub(1), total_work)?;
     let mut by_key = BTreeMap::new();
     for (item, relation) in items.iter().zip(relations.into_iter()) {
         if relation.duplicate_count > 1 || relation.tgi_conflict_count > 1 {
@@ -4820,7 +4847,8 @@ fn build_resource_relations(
         }
     }
 
-    by_key
+    monitor(total_work, total_work)?;
+    Ok(by_key)
 }
 
 fn manifest_removal_plan_sets(
