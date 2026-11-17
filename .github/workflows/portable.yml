@@ -158,7 +158,7 @@ jobs:
               export DEBIAN_FRONTEND=noninteractive
               apt-get update
               apt-get install -y --no-install-recommends \
-                ca-certificates curl build-essential pkg-config file \
+                ca-certificates curl build-essential pkg-config file libatomic1 \
                 libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
                 libxdo-dev libssl-dev librsvg2-dev
               # The rustup bootstrap shell script can see the host kernel's
@@ -169,6 +169,12 @@ jobs:
                 https://static.rust-lang.org/rustup/dist/i686-unknown-linux-gnu/rustup-init
               chmod +x /tmp/rustup-init
               file /tmp/rustup-init
+              # Verify all dynamically linked runtime libraries exist before bootstrapping.
+              ldd /tmp/rustup-init | tee /tmp/rustup-deps.txt
+              if grep -q 'not found' /tmp/rustup-deps.txt; then
+                echo 'Missing i386 runtime library for rustup-init' >&2
+                exit 1
+              fi
               /tmp/rustup-init -y --profile minimal \
                 --default-host i686-unknown-linux-gnu --default-toolchain stable
               . "$HOME/.cargo/env"
