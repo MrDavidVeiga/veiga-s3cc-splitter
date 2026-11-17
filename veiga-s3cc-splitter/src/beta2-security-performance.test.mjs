@@ -27,6 +27,7 @@ test("resource rows preserve untrusted CC names as literal text rather than pars
       this.tag = tag;
       this.children = [];
       this.style = {};
+      this.dataset = {};
       this.classList = { add() {} };
       this.scrollTop = 0;
       this.clientHeight = 90;
@@ -66,13 +67,21 @@ test("resource rows preserve untrusted CC names as literal text rather than pars
     getDisplayDetails: (value) => value.details,
     handleSelectionClick: () => {},
     loadPreview: () => {},
+    queueListThumbnail: () => {},
+    listThumbnailCache: new Map(),
+    noPreviewImage: "llama-placeholder.png",
     t: (key) => key,
   };
   vm.runInNewContext(renderList + "\nrenderList();", context);
   const rows = list.children[0].children;
   assert.equal(rows.length, 1);
   const button = rows[0].children.find((node) => node.tag === "button");
-  const heading = button.children[0], meta = button.children[1];
+  const thumbnail = button.children[0];
+  const textWrap = button.children[1];
+  const heading = textWrap.children[0], meta = textWrap.children[1];
+  assert.equal(thumbnail.tag, "img");
+  assert.equal(thumbnail.dataset.resourceKey, "test-key");
+  assert.equal(thumbnail.src, "llama-placeholder.png");
   assert.equal(heading.children[0].text, label);
   assert.equal(meta.children.find((node) => node.tag === "text" && node.text === details).text, details);
   assert.equal(button.children.length, 2);
