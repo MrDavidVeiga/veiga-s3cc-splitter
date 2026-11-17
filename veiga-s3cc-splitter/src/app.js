@@ -1576,8 +1576,8 @@ async function loadPreview(item) {
     if (token !== previewRequestToken || state.packagePath !== requestedPath) return;
     preview.label = item.label;
     state.preview = preview;
-    // Reuse the selected item's thumbnail in its virtual row.
-    storeListThumbnail(item.key, preview.thumbBase64);
+    // The full preview may decode IMG/IMAG. Never put it into the
+    // ICON/THUM-only row cache; that cache is filled by its strict loader.
     render();
   } catch (error) {
     if (token === previewRequestToken) console.error(error);
