@@ -88,6 +88,35 @@ mod tests {
     }
 
     #[test]
+    fn dxt3_and_dxt5_dds_blocks_keep_color_and_transparency() {
+        for fourcc in [b"DXT3", b"DXT5"] {
+            let mut dds = vec![0u8; 128 + 16];
+            dds[..4].copy_from_slice(b"DDS ");
+            dds[4..8].copy_from_slice(&124u32.to_le_bytes());
+            dds[12..16].copy_from_slice(&4u32.to_le_bytes());
+            dds[16..20].copy_from_slice(&4u32.to_le_bytes());
+            dds[76..80].copy_from_slice(&32u32.to_le_bytes());
+            dds[80..84].copy_from_slice(&4u32.to_le_bytes());
+            dds[84..88].copy_from_slice(fourcc);
+            if fourcc == b"DXT3" {
+                dds[128..136].fill(0xFF);
+            } else {
+                dds[128] = 255; // DXT5 alpha0
+                dds[129] = 0; // DXT5 alpha1, all 3-bit indices = 0
+            }
+            dds[136..138].copy_from_slice(&0xf800u16.to_le_bytes());
+            dds[138..140].copy_from_slice(&0x07e0u16.to_le_bytes());
+            let png = preview_png(&dds, None, 96).expect("DDS must decode");
+            let result = image::load_from_memory_with_format(
+                &png, image::ImageFormat::Png,
+            ).unwrap().to_rgba8();
+            assert_eq!(result.dimensions(), (4, 4));
+            let pixel = result.get_pixel(0, 0);
+            assert!(pixel[0] > 200 && pixel[3] > 240, "Invalid DDS preview: {:?}", pixel);
+        }
+    }
+
+    #[test]
     fn rle_tga_is_supported_only_with_an_explicit_tga_resource_hint() {
         // 2x2 TGA type 10, 24 bpp; one four-pixel red run.
         let mut tga = vec![0u8; 18];
