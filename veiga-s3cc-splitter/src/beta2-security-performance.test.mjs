@@ -305,6 +305,21 @@ test("selecting an IMG/IMAG full preview never contaminates the ICON/THUM row ca
   assert.equal(renders, 1);
 });
 
+test("Cancel is not lost while a scan is queued before its blocking worker starts", () => {
+  const outer = between(backend,
+    "pub async fn scan_package_resources(app: AppHandle, payload: ScanPayload)",
+    "// Build exactly the same logical resources for initial scanning");
+  assert.match(outer,
+    /CANCEL_REQUESTED\.store\(false, Ordering::Release\);[\s\S]*?spawn_blocking/);
+
+  const worker = between(backend,
+    "fn scan_package_resources_inner(",
+    "pub async fn analyze_remove_selection(");
+  assert.doesNotMatch(worker, /CANCEL_REQUESTED\.store\(false, Ordering::Release\)/,
+    "Queued worker must not erase an early cancellation request");
+  assert.match(worker, /check_scan_cancelled\(\)\?/);
+});
+
 test("new thumbnail decoder and multilingual directory lookup are connected", () => {
   const codec = read("../src-tauri/src/preview_images.rs");
   const manifest = read("../src-tauri/Cargo.toml");
