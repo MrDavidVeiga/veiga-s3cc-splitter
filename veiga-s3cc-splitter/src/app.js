@@ -1775,6 +1775,7 @@ async function removeSelectionFromMerged() {
       () => appModal.showConfirm({
         titleText: t("removeFromMerged"),
         messageText: t("removeConfirm", confirmPlan),
+        emphasizeLastParagraph: true,
         cancelLabel: t("modalCancel"),
         primaryLabel: t("modalRemove"),
         danger: true,
