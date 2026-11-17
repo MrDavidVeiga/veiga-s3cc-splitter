@@ -3317,6 +3317,23 @@ fn is_object_thumbnail_type(resource_type: u32) -> bool {
     )
 }
 
+// List thumbnails must only decode genuine Sims 3 ICON or THUM resources.
+// Do not use regular IMG/IMAG textures or SNAP screenshots as list pictures.
+fn is_icon_or_thum_resource_type(resource_type: u32) -> bool {
+    matches!(resource_type,
+        TYPE_ICON | 0x2E75C764 | 0x2E75C766 | 0x2E75C767
+            | 0xD84E7FC5 | 0xD84E7FC6 | 0xD84E7FC7
+            | TYPE_THUM_SMALL | TYPE_THUM_MED | TYPE_THUM_LARGE
+            | 0x0580A2B4 | 0x0580A2B5 | 0x0580A2B6
+            | 0x0589DC44 | 0x0589DC45 | 0x0589DC46
+            | 0x05B1B524 | 0x05B1B525 | 0x05B1B526
+            | 0x05B17698 | 0x05B17699 | 0x05B1769A
+            | 0x2653E3C8 | 0x2653E3C9 | 0x2653E3CA
+            | 0x2D4284F0 | 0x2D4284F1 | 0x2D4284F2
+            | 0x5DE9DBA0 | 0x5DE9DBA1 | 0x5DE9DBA2
+    )
+}
+
 fn object_unique_icon_ref(package: &DBPF<'_>) -> Option<ResourceKeyParts> {
     // One lone ICON in a *multi-object* s3pe merge is not evidence of which
     // object owns it. Never copy it to every split object.
@@ -3506,7 +3523,9 @@ fn thumbnail_cache_file_order(resource_type: u32) -> [&'static str; 3] {
     }
 }
 
-fn thumbnail_from_cache_package(path: &Path, instance: u64, edge: u32) -> Option<String> {
+fn thumbnail_from_cache_package(
+    path: &Path, instance: u64, edge: u32, only_icon_or_thum: bool,
+) -> Option<String> {
     // Cache packages can be gigabytes: mmap, then find only matching indices.
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if !path.is_file() { return None; }
@@ -3516,6 +3535,7 @@ fn thumbnail_from_cache_package(path: &Path, instance: u64, edge: u32) -> Option
         encode_best_preview(
             package.entries_for_instance(instance).iter()
                 .filter_map(|&index| package.files.get(index))
+                .filter(|entry| !only_icon_or_thum || is_icon_or_thum_resource_type(entry.resource_type))
                 .map(|entry| (entry.resource_type, entry.data())),
             edge,
         )
@@ -3526,17 +3546,18 @@ fn external_thumbnail_base64_from_dir(
     thumbnails_dir: &Path,
     key: ResourceKeyParts,
 ) -> Option<String> {
-    external_thumbnail_base64_from_dir_sized(thumbnails_dir, key, 320)
+    external_thumbnail_base64_from_dir_sized(thumbnails_dir, key, 320, false)
 }
 
 fn external_thumbnail_base64_from_dir_sized(
     thumbnails_dir: &Path,
     key: ResourceKeyParts,
     edge: u32,
+    only_icon_or_thum: bool,
 ) -> Option<String> {
     for file_name in thumbnail_cache_file_order(key.resource_type) {
         if let Some(preview) =
-            thumbnail_from_cache_package(&thumbnails_dir.join(file_name), key.instance, edge)
+            thumbnail_from_cache_package(&thumbnails_dir.join(file_name), key.instance, edge, only_icon_or_thum)
         {
             return Some(preview);
         }
@@ -3546,7 +3567,21 @@ fn external_thumbnail_base64_from_dir_sized(
 
 fn external_thumbnail_base64(app: &AppHandle, key: ResourceKeyParts, edge: u32) -> Option<String> {
     for thumbnails_dir in sims3_thumbnails_dirs(app) {
-        if let Some(preview) = external_thumbnail_base64_from_dir_sized(&thumbnails_dir, key, edge) {
+        if let Some(preview) = external_thumbnail_base64_from_dir_sized(&thumbnails_dir, key, edge, false) {
+            return Some(preview);
+        }
+    }
+    None
+}
+
+// Apply the same strict resource-type filter to the game's thumbnail caches.
+fn external_list_thumbnail_base64(
+    app: &AppHandle, key: ResourceKeyParts, edge: u32,
+) -> Option<String> {
+    for thumbnails_dir in sims3_thumbnails_dirs(app) {
+        if let Some(preview) =
+            external_thumbnail_base64_from_dir_sized(&thumbnails_dir, key, edge, true)
+        {
             return Some(preview);
         }
     }
@@ -3573,23 +3608,82 @@ fn pose_list_preview_base64_sized(
     )
 }
 
+// Read linked thumbnail instances without borrowing regular textures.
+// The full selected-item preview retains its independent IMG/IMAG handling.
+fn linked_embedded_thumbnail_base64(
+    package: &DBPF<'_>,
+    key: ResourceKeyParts,
+    edge: u32,
+) -> Option<String> {
+    if !matches!(
+        key.resource_type,
+        TYPE_CASP | TYPE_FACE | TYPE_SKINTONE | TYPE_PATTERN | TYPE_XML
+            | TYPE_OBJD | TYPE_OBJK | TYPE_VPXY | TYPE_MODL | TYPE_MLOD
+            | TYPE_TXTC | TYPE_FTPT
+    ) { return None; }
+
+    let index = package.entry_index(key.resource_type, key.resource_group, key.instance)?;
+    let data = package.files.get(index)?.data();
+    if data.len() < 8 || data.len() > 1024 * 1024 { return None; }
+
+    let mut seen = HashSet::new();
+    let mut thumbs = Vec::new();
+    for window in data.windows(8) {
+        let instance = u64::from_le_bytes(window.try_into().ok()?);
+        if !seen.insert(instance) { continue; }
+        for &candidate_index in package.entries_for_instance(instance) {
+            let Some(entry) = package.files.get(candidate_index) else { continue };
+            if is_icon_or_thum_resource_type(entry.resource_type) {
+                thumbs.push((entry.resource_type, entry.data()));
+                if thumbs.len() >= 16 { break; }
+            }
+        }
+        if thumbs.len() >= 16 { break; }
+    }
+    encode_best_preview(thumbs.into_iter(), edge)
+}
+
 fn embedded_resource_thumbnail(
     package: &DBPF<'_>,
     key: ResourceKeyParts,
     edge: u32,
 ) -> Option<String> {
-    if key.resource_type == TYPE_XML {
-        if let Some(index) = package.entry_index(TYPE_XML, key.resource_group, key.instance) {
-            let entry = &package.files[index];
-            if is_pose_list_xml(entry) {
-                let xml = String::from_utf8_lossy(entry.data());
-                if let Some(preview) = pose_list_preview_base64_sized(package, &xml, edge) {
-                    return Some(preview);
-                }
+    // Direct ICON/THUM entries, including small and large variants.
+    if is_icon_or_thum_resource_type(key.resource_type) {
+        if let Some(entry) = package
+            .entry_index(key.resource_type, key.resource_group, key.instance)
+            .and_then(|index| package.files.get(index))
+        {
+            if let Some(preview) = encode_preview_image(entry.data(), entry.resource_type, edge) {
+                return Some(preview);
             }
         }
     }
-    find_preview_base64_with_size(package, key, edge)
+
+    // Prefer associated thumbnail entries, never arbitrary IMG/IMAG textures.
+    if let Some(preview) = encode_best_preview(
+        package.entries_for_instance(key.instance).iter()
+            .filter_map(|&index| package.files.get(index))
+            .filter(|entry| is_icon_or_thum_resource_type(entry.resource_type))
+            .map(|entry| (entry.resource_type, entry.data())),
+        edge,
+    ) {
+        return Some(preview);
+    }
+
+    // Catalog metadata can refer to ICON with a different instance.
+    if let Some(icon) = object_manifest_icon_ref(package, key) {
+        if let Some(entry) = package
+            .entry_index(icon.resource_type, icon.resource_group, icon.instance)
+            .and_then(|index| package.files.get(index))
+        {
+            if let Some(preview) = encode_preview_image(entry.data(), entry.resource_type, edge) {
+                return Some(preview);
+            }
+        }
+    }
+
+    linked_embedded_thumbnail_base64(package, key, edge)
 }
 
 fn selected_entry_indices(package: &DBPF<'_>, keys: &HashSet<String>) -> Vec<usize> {
@@ -8270,7 +8364,7 @@ pub async fn get_resource_thumbnail_async(
         let embedded = embedded_resource_thumbnail(package, key, 96);
         // Never hold the shared preview lock while scanning external caches.
         drop(cache);
-        Ok(embedded.or_else(|| external_thumbnail_base64(&app, key, 96)))
+        Ok(embedded.or_else(|| external_list_thumbnail_base64(&app, key, 96)))
     }).await
       .map_err(|error| format!("Falha ao carregar miniatura: {error}"))?
 }
@@ -9375,6 +9469,101 @@ mod remove_selected_tests {
             assert!(!keys.contains(&global_xml), "A global XML is not per-object metadata");
         }
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn list_thumbnail_ignores_img_imag_and_preserves_full_preview() {
+        let path = test_path("strict-list-thumb-reject-images");
+        let instance = 0xBA11_0000_0000_1234u64;
+        let png = valid_preview_png([230, 40, 70, 255]);
+        write_test_package(&path, &[
+            (TYPE_CASP, 0, instance, vec![0; 24]),
+            (TYPE_IMG, 0, instance, png.clone()),
+            (TYPE_IMAG_PNG, 0, instance, png),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let key = ResourceKeyParts { resource_type: TYPE_CASP, resource_group: 0, instance };
+
+        assert!(embedded_resource_thumbnail(&package, key, 96).is_none(),
+            "IMG/IMAG must not supply the virtual-list thumbnail");
+        assert!(find_preview_base64(&package, key).is_some(),
+            "Full selected-item preview must keep its IMG/IMAG support");
+
+        drop(package);
+        drop(mmap);
+        let _ = remove_file(&path);
+    }
+
+    #[test]
+    fn list_thumbnail_prefers_linked_thum_over_img_and_accepts_icon_variants() {
+        let path = test_path("strict-list-thumb-linked");
+        let casp_instance = 0xA111_2222_3333_4444u64;
+        let thumb_instance = 0xB111_2222_3333_4444u64;
+        let thumb = valid_preview_png([10, 160, 85, 255]);
+        let texture = valid_preview_png([210, 30, 170, 255]);
+        let mut metadata = vec![4; 32];
+        metadata.extend_from_slice(&thumb_instance.to_le_bytes());
+        metadata.extend_from_slice(&[2; 16]);
+        write_test_package(&path, &[
+            (TYPE_CASP, 0, casp_instance, metadata),
+            (TYPE_IMG, 0, thumb_instance, texture),
+            (TYPE_THUM_MED, 0, thumb_instance, thumb.clone()),
+            (0x2E75C764, 0, 0x9999, valid_preview_png([25, 60, 240, 255])),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let casp_key = ResourceKeyParts {
+            resource_type: TYPE_CASP, resource_group: 0, instance: casp_instance,
+        };
+        let rendered = STANDARD.decode(
+            embedded_resource_thumbnail(&package, casp_key, 96).expect("Linked THUM missing")
+        ).unwrap();
+        assert_eq!(
+            image::load_from_memory(&rendered).unwrap().to_rgba8(),
+            image::load_from_memory(&thumb).unwrap().to_rgba8(),
+            "IMG texture must not replace a linked THUM"
+        );
+
+        let icon_key = ResourceKeyParts {
+            resource_type: 0x2E75C764, resource_group: 0, instance: 0x9999,
+        };
+        assert!(embedded_resource_thumbnail(&package, icon_key, 96).is_some(),
+            "Small ICON variant must be recognized");
+
+        drop(package);
+        drop(mmap);
+        let _ = remove_file(&path);
+    }
+
+    #[test]
+    fn strict_thumbnail_cache_skips_non_thumb_types() {
+        let root = test_dir("strict-list-thumbnail-cache");
+        let thumbnails = root.join("Thumbnails");
+        std::fs::create_dir_all(&thumbnails).unwrap();
+        let instance = 0x7654_3210_1234_4321u64;
+        let wrong = valid_preview_png([240, 18, 20, 255]);
+        let right = valid_preview_png([25, 180, 70, 255]);
+        write_test_package(&thumbnails.join("CASThumbnails.package"),
+            &[(TYPE_IMG, 1, instance, wrong.clone())]);
+        write_test_package(&thumbnails.join("ObjectThumbnails.package"),
+            &[(TYPE_THUM_LARGE, 1, instance, right.clone())]);
+        let key = ResourceKeyParts {
+            resource_type: TYPE_CASP, resource_group: 0, instance,
+        };
+        let strict = external_thumbnail_base64_from_dir_sized(&thumbnails, key, 96, true)
+            .expect("Strict cache must accept THUM from next cache package");
+        assert_eq!(
+            image::load_from_memory(&STANDARD.decode(strict).unwrap()).unwrap().to_rgba8(),
+            image::load_from_memory(&right).unwrap().to_rgba8()
+        );
+        let unrestricted = external_thumbnail_base64_from_dir_sized(&thumbnails, key, 96, false)
+            .expect("Existing full preview cache behavior must remain");
+        assert_eq!(
+            image::load_from_memory(&STANDARD.decode(unrestricted).unwrap()).unwrap().to_rgba8(),
+            image::load_from_memory(&wrong).unwrap().to_rgba8()
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
