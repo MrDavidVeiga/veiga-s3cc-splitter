@@ -12,6 +12,7 @@ on:
       - "build/beta2-windows-x64-20261117"
     paths:
       - ".github/workflows/portable.yml"
+      - ".github/scripts/build-linux-i386.sh"
       - "veiga-s3cc-splitter/**"
       - "sims3-core/**"
       - "sims3-pack/**"
@@ -48,73 +49,9 @@ jobs:
         working-directory: veiga-s3cc-splitter
         run: node --test
 
-      - name: Build Linux x86 ELF using Debian's native i386 toolchain
+      - name: Build and validate Linux i386 ELF with verified native libraries
         shell: bash
-        run: |
-          set -euo pipefail
-          # Tauri's JavaScript CLI does not provide an i386 Linux host build.
-          # Compile the frontend on x64, then the native Rust binary in a
-          # Debian i386 container with complete i386 WebKit/AppIndicator libs.
-          (cd veiga-s3cc-splitter && npm run build)
-          docker run --rm --platform linux/386 \
-            -v "$GITHUB_WORKSPACE:/work" -w /work \
-            -e CARGO_TARGET_DIR=/work/target/i686-unknown-linux-gnu \
-            debian:bookworm bash -c '
-              set -euo pipefail
-              export DEBIAN_FRONTEND=noninteractive
-              echo "Debian native architecture: $(dpkg --print-architecture)"
-              test "$(dpkg --print-architecture)" = i386
-              apt-get update
-              apt-get install -y --no-install-recommends \
-                ca-certificates curl build-essential pkg-config file libatomic1 \
-                libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-                libxdo-dev libssl-dev librsvg2-dev
-              # The rustup bootstrap shell script can see the host kernel's
-              # x86_64 architecture under QEMU, even inside a 32-bit image.
-              # Download the explicitly i686 rustup binary to install an
-              # executable 32-bit Cargo/rustc rather than a broken x64 toolchain.
-              curl -fsSLo /tmp/rustup-init \
-                https://static.rust-lang.org/rustup/dist/i686-unknown-linux-gnu/rustup-init
-              chmod +x /tmp/rustup-init
-              file /tmp/rustup-init
-              # Debian installs the i386 libatomic package correctly, but
-              # the emulated loader may not consult its multiarch directory.
-              # Discover the real package path rather than assuming /lib32.
-              atomic_path="$(dpkg-query -L libatomic1 2>/dev/null | grep -m1 "/libatomic.so.1$" || true)"
-              if [ -z "$atomic_path" ] || [ ! -e "$atomic_path" ]; then
-                atomic_path="$(find /usr/lib /lib -name libatomic.so.1 -print -quit 2>/dev/null || true)"
-              fi
-              if [ -z "$atomic_path" ] || [ ! -e "$atomic_path" ]; then
-                echo "Native i386 libatomic.so.1 missing after installing libatomic1" >&2
-                dpkg-query -L libatomic1 || true
-                exit 1
-              fi
-              export LD_LIBRARY_PATH="$(dirname "$atomic_path")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-              echo "Using i386 libatomic from: $atomic_path"
-              # Verify all dynamically linked runtime libraries before bootstrapping.
-              ldd /tmp/rustup-init | tee /tmp/rustup-deps.txt
-              if grep -q "not found" /tmp/rustup-deps.txt; then
-                echo "Missing i386 runtime library for rustup-init" >&2
-                exit 1
-              fi
-              /tmp/rustup-init -y --profile minimal \
-                --default-host i686-unknown-linux-gnu --default-toolchain stable
-              . "$HOME/.cargo/env"
-              rustc -vV
-              cargo --version
-              test "$(rustc -vV | sed -n "s/^host: //p")" = i686-unknown-linux-gnu
-              cargo build --locked --release \
-                --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml \
-                --bin veiga-s3cc-splitter
-              test -s target/i686-unknown-linux-gnu/release/veiga-s3cc-splitter
-              readelf -h target/i686-unknown-linux-gnu/release/veiga-s3cc-splitter | grep -E "Class:.*ELF32"
-              readelf -h target/i686-unknown-linux-gnu/release/veiga-s3cc-splitter | grep -E "Machine:.*Intel 80386"
-              file target/i686-unknown-linux-gnu/release/veiga-s3cc-splitter
-              cp target/i686-unknown-linux-gnu/release/veiga-s3cc-splitter \
-                "target/i686-unknown-linux-gnu/release/Veiga'\''s S3CC Splitter"
-            '
-          file "target/i686-unknown-linux-gnu/release/Veiga's S3CC Splitter"
-
+        run: bash .github/scripts/build-linux-i386.sh
       - name: Locate Linux ELF binary
         id: locate_unix
         shell: bash
