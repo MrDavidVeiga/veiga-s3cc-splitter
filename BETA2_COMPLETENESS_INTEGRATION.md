@@ -68,3 +68,14 @@ On a *copy* of the input packages, record: package bytes, logical resource count
 2. Manual large-package and cancellation tests must show no wrong list/preview, lost original package, or false `no duplicates` status.
 3. Real CC round-trip and in-game A/B validation remain mandatory for release; synthetic tests alone cannot certify gameplay correctness.
 4. The downloadable Windows x64 artifact is not confirmed until `actions/upload-artifact` succeeds and the SHA-256 file is accessible. The other seven targets require separate builds.
+
+
+## TS3 real-thumbnail improvements (experimental, November 17, 2026)
+
+- **DDS/DXT texture reading:** preview IMG/IMAG DDS DXT1/DXT3/DXT5 using the already locked `image 0.24.9` decoder, convert to displayable PNG and bound decoded dimensions (max 16M pixels), source size (32 MiB) and output thumbnail edge (96px for rows, 320px for full preview). No writing back to DBPF. Unknown compressed formats retain the llama fallback.
+- **RLE:** supports run-length encoded **TGA** when the resource is explicitly typed as TGA. **Sims 4 RLE2/RLES is not a The Sims 3 DDS format and is not supported by this TS3-specific decoder.**
+- **Localized game folders:** search the configured OS Documents directory under `Electronic Arts` for `The Sims 3`, `Os Sims 3`, `Los Sims 3`, `Les Sims 3`, `Die Sims 3`, `I Sims 3`, `De Sims 3` and `Sims 3`. The internal thumbnail cache filename and `Thumbnails` subfolder remain unchanged. Iterate all existing candidate directories if more than one is installed.
+- **Cache access:** use DBPF's per-instance index rather than scanning every resource whenever probing a cache package; release the main preview mutex before searching cache files.
+- **Thumbnails inside the virtualized list:** add 46px thumbnail to each visible row, preserve existing native 76px row geometry and WinUI controls, reuse the selected-item preview, and lazy-load only the visible buffered rows using a maximum of two parallel backend workers. Cache at most 160 positive or negative results and invalidate cache/queue on every new package or scan. The selected item's full preview uses an independent worker and retains fallback behavior.
+- **Validation:** synthetic codec tests cover DDS DXT1, RLE TGA, PNG resizing and oversized/unsupported inputs; integration tests cover localized lookup, safe DOM rendering, request throttling, stale results after source switch, and negative caching. The final head must pass the same Node/Linux/Windows workflow before use on real CC.
+- **Remaining limitations:** rendered images cannot substitute for game-generated thumbnails when no matching IMG, ICON, THUM or cache entry exists. Complicated CC texture ownership and in-game appearance must still be checked on real TS3 packages, notably skins and objects with shared IMG dependencies. No claim of supporting TS4 RLE2/RLES or all possible DDS formats.
