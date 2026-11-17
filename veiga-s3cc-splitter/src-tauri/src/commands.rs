@@ -7483,6 +7483,68 @@ pub async fn scan_package_resources(app: AppHandle, payload: ScanPayload) -> Res
         .map_err(|error| format!("Falha ao executar a leitura do package: {error}"))?
 }
 
+// Build exactly the same logical resources for initial scanning and for
+// explicit duplicate verification; never compare raw DBPF entries against
+// the grouped list shown to the user.
+fn build_scanned_items(
+    package: &DBPF<'_>,
+    resource_type: &str,
+    query: &str,
+    name_map: &BTreeMap<u64, String>,
+    ea_catalog: Option<&EaSkinCatalog>,
+    merge_manifest: Option<&MergeManifest>,
+) -> Vec<ResourceItem> {
+    let items = if resource_type == "all" && merge_manifest.is_some() {
+            build_merge_manifest_items(
+                package,
+                merge_manifest.unwrap(),
+                &query,
+                &name_map,
+            )
+        } else if resource_type == "skintone" {
+            build_skintone_group_items(package, &query, &name_map, ea_catalog)
+        } else if resource_type == "face" {
+            build_face_group_items(package, &query, &name_map)
+        } else if resource_type == "casp" {
+            build_casp_group_items(package, &query, &name_map)
+        } else if resource_type == "clip" {
+            build_clip_group_items(package, &query, &name_map)
+        } else if resource_type == "all" {
+            let mut items: Vec<ResourceItem> = package
+                .files
+                .iter()
+                .filter(|entry| filter_matches(entry, "all"))
+                .filter(|entry| entry.resource_type != TYPE_SKINTONE)
+                .filter(|entry| entry.resource_type != TYPE_FACE)
+                .filter(|entry| entry.resource_type != TYPE_XML)
+                .filter(|entry| entry.resource_type != TYPE_CASP)
+                .filter(|entry| entry.resource_type != TYPE_CLIP)
+                .map(|entry| build_item(package, entry, &name_map))
+                .filter(|item| item_matches_query(item, &query))
+                .collect();
+
+            items.extend(build_casp_group_items(package, &query, &name_map));
+            items.extend(build_skintone_group_items(package, &query, &name_map, ea_catalog));
+            items.extend(build_face_group_items(package, &query, &name_map));
+            items.extend(build_clip_group_items(package, &query, &name_map));
+            items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+            items
+        } else {
+            let mut items: Vec<ResourceItem> = package
+                .files
+                .iter()
+                .filter(|entry| filter_matches(entry, &resource_type))
+                .filter(|entry| !(resource_type == "casp" && entry.resource_type == TYPE_XML))
+                .map(|entry| build_item(package, entry, &name_map))
+                .filter(|item| item_matches_query(item, &query))
+                .collect();
+
+            items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+            items
+        };
+    items
+}
+
 fn scan_package_resources_inner(
     app: Option<&AppHandle>,
     payload: ScanPayload,
@@ -7533,54 +7595,10 @@ fn scan_package_resources_inner(
             "Building and sorting resource metadata.", 2, 5, package.files.len(), mmap.len(),
         );
         check_cancelled()?;
-        let items = if resource_type == "all" && merge_manifest.is_some() {
-            build_merge_manifest_items(
-                &package,
-                merge_manifest.as_ref().unwrap(),
-                &query,
-                &name_map,
-            )
-        } else if resource_type == "skintone" {
-            build_skintone_group_items(&package, &query, &name_map, ea_catalog.as_ref())
-        } else if resource_type == "face" {
-            build_face_group_items(&package, &query, &name_map)
-        } else if resource_type == "casp" {
-            build_casp_group_items(&package, &query, &name_map)
-        } else if resource_type == "clip" {
-            build_clip_group_items(&package, &query, &name_map)
-        } else if resource_type == "all" {
-            let mut items: Vec<ResourceItem> = package
-                .files
-                .iter()
-                .filter(|entry| filter_matches(entry, "all"))
-                .filter(|entry| entry.resource_type != TYPE_SKINTONE)
-                .filter(|entry| entry.resource_type != TYPE_FACE)
-                .filter(|entry| entry.resource_type != TYPE_XML)
-                .filter(|entry| entry.resource_type != TYPE_CASP)
-                .filter(|entry| entry.resource_type != TYPE_CLIP)
-                .map(|entry| build_item(&package, entry, &name_map))
-                .filter(|item| item_matches_query(item, &query))
-                .collect();
-
-            items.extend(build_casp_group_items(&package, &query, &name_map));
-            items.extend(build_skintone_group_items(&package, &query, &name_map, ea_catalog.as_ref()));
-            items.extend(build_face_group_items(&package, &query, &name_map));
-            items.extend(build_clip_group_items(&package, &query, &name_map));
-            items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
-            items
-        } else {
-            let mut items: Vec<ResourceItem> = package
-                .files
-                .iter()
-                .filter(|entry| filter_matches(entry, &resource_type))
-                .filter(|entry| !(resource_type == "casp" && entry.resource_type == TYPE_XML))
-                .map(|entry| build_item(&package, entry, &name_map))
-                .filter(|item| item_matches_query(item, &query))
-                .collect();
-
-            items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
-            items
-        };
+        let items = build_scanned_items(
+            &package, &resource_type, &query, &name_map,
+            ea_catalog.as_ref(), merge_manifest.as_ref(),
+        );
 
         check_cancelled()?;
         emit_package_progress(
