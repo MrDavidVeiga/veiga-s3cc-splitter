@@ -1190,6 +1190,9 @@ async function pickPackage() {
   const result = await open({ multiple: false, filters: [{ name: "*.package", extensions: ["package", "dbc"] }] });
   if (typeof result === "string" && isScannablePackagePath(result)) {
     state.packagePath = result;
+    ++previewRequestToken;
+    state.pendingRelationUpdates = [];
+    state.relationsStatus = "complete";
     state.resources = [];
     state.selectedKeys = [];
     state.selectionInitialized = false;
@@ -1634,6 +1637,9 @@ function bindDragAndDrop() {
       const ext = path?.toLowerCase().split(".").pop();
       if (["package", "dbc"].includes(ext)) {
         state.packagePath = path;
+    ++previewRequestToken;
+    state.pendingRelationUpdates = [];
+    state.relationsStatus = "complete";
         state.resources = [];
         state.selectedKeys = [];
         state.selectionInitialized = false;
