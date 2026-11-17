@@ -352,7 +352,8 @@ pub async fn analyze_package_relations_async(
         })
     })
     .await
-    .map_err(|e| format!("Falha ao executar a verificação: {e}"))?;
+    .map_err(|e| format!("Falha ao executar a verificação: {e}"))
+    .and_then(|worker_result| worker_result);
 
     // Do not clear the newer operation if the user started a replacement.
     if let Ok(mut operations) = relation_operations().lock() {
@@ -7824,8 +7825,16 @@ fn scan_package_resources_inner(
             eprintln!("[package-relations] skip optional large manifest analysis");
             (BTreeMap::new(), "skipped")
         } else if mmap.len() <= MAX_RELATION_ANALYSIS_PACKAGE_BYTES {
-            let relations = build_resource_relations(&package, &name_map, &items);
-            check_cancelled()?;
+            let relations = build_resource_relations_monitored(
+                &package, &name_map, &items,
+                &|_, _| {
+                    check_cancelled()?;
+                    if SCAN_GENERATION.load(Ordering::Acquire) != scan_generation {
+                        return Err("A leitura foi substituída.".to_string());
+                    }
+                    Ok(())
+                },
+            )?;
             (relations, "complete")
         } else if let Some(relation_app) = app.cloned() {
             // Relationship detection hashes/decompresses payloads. For large
@@ -7842,11 +7851,19 @@ fn scan_package_resources_inner(
                 let result = (|| -> Result<BTreeMap<String, ResourceRelation>, String> {
                     let mmap = open_package(&relation_path)?;
                     let package = parse_package(&mmap)?;
-                    Ok(build_resource_relations(
+                    build_resource_relations_monitored(
                         &package,
                         &relation_name_map,
                         &relation_items,
-                    ))
+                        &|_, _| {
+                            if SCAN_GENERATION.load(Ordering::Acquire) != relation_generation
+                                || CANCEL_REQUESTED.load(Ordering::Acquire)
+                            {
+                                return Err("Análise automática substituída ou cancelada.".to_string());
+                            }
+                            Ok(())
+                        },
+                    )
                 })();
                 match result {
                     Ok(relations) => {
@@ -7877,7 +7894,9 @@ fn scan_package_resources_inner(
         } else {
             // Unit tests do not own a Tauri AppHandle; calculate this result
             // synchronously so they still cover relation-analysis behavior.
-            (build_resource_relations(&package, &name_map, &items), "complete")
+            (build_resource_relations_monitored(
+                &package, &name_map, &items, &|_, _| check_cancelled(),
+            )?, "complete")
         };
         check_cancelled()?;
         emit_package_progress(
