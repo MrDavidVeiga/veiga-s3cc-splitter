@@ -53,6 +53,7 @@ pub fn preview_png(data: &[u8], hint: Option<PreviewHint>, max_edge: u32) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::GenericImageView;
 
     #[test]
     fn valid_png_is_decoded_and_scaled_without_mutating_input() {
