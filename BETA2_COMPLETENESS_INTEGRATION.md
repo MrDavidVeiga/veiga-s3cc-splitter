@@ -47,3 +47,24 @@
 - Historical Beta 2 version identifiers differ across branches; this branch keeps its selected experimental base's v2.1.0 identity. Do not silently relabel production versions.
 - The Windows test-suite entrypoint issue seen in PR #33 is a test-harness problem and is addressed in the separate workflow using a validated manifest embedding sequence. A successful CI run is required to confirm the new workflow works.
 - The official Beta 1, official Beta 2, PR #32 and PR #33 are deliberately unchanged. No automatic merge/release.
+
+
+## Additional performance and safety hardening
+
+- **Untrusted CC metadata:** resource names/details are rendered using DOM `textContent` and text nodes, not `innerHTML`. The duplicated names, original titles and Unicode characters remain visible literally.
+- **Virtualized list:** avoids re-creating the rendered window when scrolling within the same buffered range; selection membership uses a cached Set while preserving array order for export and Shift-select.
+- **Full duplicate/TGI verification on demand:** above the initial 8,000-item fast-load budget, the user can explicitly verify the full set of logically grouped resources via the results-header button. The list remains interactive. The backend performs the original exact TGI/hash comparisons in a blocking worker and emits periodic progress/cancellation checkpoints. This check is **read-only**, and the initial skipped status must never be described as verified.
+- **Cancellation isolation:** duplicate verification uses a separate generation and cancellation flag from main scanning and Merger tasks. File changes/new scans invalidate old results and work. The UI waits for cancellation acknowledgment before allowing another verification.
+- **Preview coalescing:** a short 45-ms delay discards rapidly superseded selection requests before image decoding, with an additional generation check on queued Rust workers. This does not interrupt image decode already in progress.
+- **Artifact quota:** the prior Windows x64 build compiled successfully but upload failed because the GitHub Actions artifact-storage quota was exceeded. Automated PR pushes now run the test matrix without uploading a new executable each time. The optional Windows x64 artifact job is manual (`workflow_dispatch`) with three-day retention and higher compression. **The account storage quota must be freed before a manual artifact can be uploaded**; this is not a code-build defect and this branch cannot delete account artifacts through available permissions.
+
+### Recommended repeatable benchmark
+
+On a *copy* of the input packages, record: package bytes, logical resource count, scanned-list time, peak process memory, time to first preview, rapid-selection responsiveness, time to cancel optional relation verification, merge/unmerge wall time and resulting SHA-256/TGI/decoded-hash differences. Repeat on the same hardware for Beta 1 v2.0.0, Beta 2 before integration, and this PR head. Avoid attributing changes in in-game lag to DBPF byte-size differences alone; use the same The Sims 3 save, CC set and cache protocol.
+
+### Acceptance gates
+
+1. GitHub Actions JS, Linux Rust and Windows Rust tests must all pass on the *same final head SHA*.
+2. Manual large-package and cancellation tests must show no wrong list/preview, lost original package, or false `no duplicates` status.
+3. Real CC round-trip and in-game A/B validation remain mandatory for release; synthetic tests alone cannot certify gameplay correctness.
+4. The downloadable Windows x64 artifact is not confirmed until `actions/upload-artifact` succeeds and the SHA-256 file is accessible. The other seven targets require separate builds.
