@@ -7841,6 +7841,9 @@ fn build_merge_manifest_items(
 
 #[tauri::command]
 pub async fn scan_package_resources(app: AppHandle, payload: ScanPayload) -> Result<ScanResult, String> {
+    // Clear stale cancellation BEFORE queueing the worker. If the user presses
+    // Cancel while spawn_blocking is still queued, the worker must preserve it.
+    CANCEL_REQUESTED.store(false, Ordering::Release);
     tauri::async_runtime::spawn_blocking(move || scan_package_resources_inner(Some(&app), payload))
         .await
         .map_err(|error| format!("Falha ao executar a leitura do package: {error}"))?
@@ -7930,7 +7933,6 @@ fn scan_package_resources_inner(
     // other's global scan generation or share the UI cancellation flag.
     let live_scan = app.is_some();
     let scan_generation = if live_scan {
-        CANCEL_REQUESTED.store(false, Ordering::Release);
         SCAN_GENERATION.fetch_add(1, Ordering::AcqRel) + 1
     } else {
         0
