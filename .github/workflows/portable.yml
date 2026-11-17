@@ -99,20 +99,10 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
-      - name: Install Linux x86 dependencies
+      - name: Verify Docker for native Debian i386 compilation
         if: matrix.target == 'i686-unknown-linux-gnu'
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y \
-            gcc-i686-linux-gnu \
-            g++-i686-linux-gnu \
-            pkg-config \
-            libwebkit2gtk-4.1-dev:i386 \
-            libssl-dev:i386 \
-            librsvg2-dev:i386 \
-            libayatana-appindicator3-dev:i386 \
-            libxdo-dev:i386
+        shell: bash
+        run: docker version
 
       - name: Setup Node
         uses: actions/setup-node@v5
@@ -148,16 +138,35 @@ jobs:
         working-directory: veiga-s3cc-splitter
         run: npm run tauri build -- ${{ matrix.build_args }}
 
-      - name: Build Linux x86 portable binary
+      - name: Build Linux x86 ELF using Debian's native i386 toolchain
         if: matrix.target == 'i686-unknown-linux-gnu'
-        working-directory: veiga-s3cc-splitter
-        env:
-          PKG_CONFIG_ALLOW_CROSS: "1"
-          PKG_CONFIG_LIBDIR: /usr/lib/i386-linux-gnu/pkgconfig:/usr/share/pkgconfig
-          CC_i686_unknown_linux_gnu: i686-linux-gnu-gcc
-          CXX_i686_unknown_linux_gnu: i686-linux-gnu-g++
-          CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER: i686-linux-gnu-gcc
-        run: npm run tauri build -- ${{ matrix.build_args }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Tauri's JavaScript CLI does not provide an i386 Linux host build.
+          # Compile the frontend on x64, then the native Rust binary in a
+          # Debian i386 container with complete i386 WebKit/AppIndicator libs.
+          (cd veiga-s3cc-splitter && npm run build)
+          docker run --rm --platform linux/386 \
+            -v "$GITHUB_WORKSPACE:/work" -w /work \
+            -e CARGO_TARGET_DIR=/work/target/i686-unknown-linux-gnu \
+            debian:bookworm bash -c '
+              set -euo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                ca-certificates curl build-essential pkg-config file \
+                libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+                libxdo-dev libssl-dev librsvg2-dev
+              curl -fsSL https://sh.rustup.rs | sh -s -- \
+                -y --profile minimal --default-toolchain stable
+              . "$HOME/.cargo/env"
+              cargo build --locked --release \
+                --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml
+              cp target/i686-unknown-linux-gnu/release/veiga-s3cc-splitter \
+                "target/i686-unknown-linux-gnu/release/Veiga'\''s S3CC Splitter"
+            '
+          file "target/i686-unknown-linux-gnu/release/Veiga's S3CC Splitter"
 
       - name: Locate Windows binary
         if: startsWith(matrix.platform, 'windows')
