@@ -55,6 +55,10 @@ const scanStageMessages = {
 
 const translations = {
   en: {
+    relationCheckAction: "Verify Duplicates",
+    relationCheckCancel: "Cancel Check",
+    relationCheckProgress: (percent) => "Checking duplicates/conflicts… " + percent + "%",
+    relationCheckError: "Duplicate/conflict check failed:",
     scanCancelling: "Cancelling package read…",
     relationCheckSkipped: "Duplicate/conflict checks were not run for this large package.",
     relationCheckRunning: "Checking duplicates/conflicts in the background…",
@@ -205,6 +209,10 @@ const translations = {
     splittError: "Export failed:",
   },
   pt: {
+    relationCheckAction: "Verificar Duplicatas",
+    relationCheckCancel: "Cancelar Verificação",
+    relationCheckProgress: (percent) => "Verificando duplicatas/conflitos… " + percent + "%",
+    relationCheckError: "Falha ao verificar duplicatas/conflitos:",
     scanCancelling: "Cancelando leitura do package…",
     relationCheckSkipped: "Verificação de duplicatas/conflitos não realizada para este package grande.",
     relationCheckRunning: "Verificando duplicatas/conflitos em segundo plano…",
@@ -355,6 +363,10 @@ const translations = {
     splittError: "Falha na exportação:",
   },
   es: {
+    relationCheckAction: "Verificar Duplicados",
+    relationCheckCancel: "Cancelar Verificación",
+    relationCheckProgress: (percent) => "Verificando duplicados/conflictos… " + percent + "%",
+    relationCheckError: "Error al verificar duplicados/conflictos:",
     scanCancelling: "Cancelando la lectura del package…",
     relationCheckSkipped: "No se verificaron duplicados/conflictos en este package grande.",
     relationCheckRunning: "Verificando duplicados/conflictos en segundo plano…",
@@ -530,6 +542,8 @@ const state = {
   manifestPackageCount: 0,
   pendingRelationUpdates: [],
   relationsStatus: "complete",
+  relationAnalysisInProgress: false,
+  relationAnalysisProgress: 0,
   mergerSources: [],
   mergerBusy: false,
   mergerResult: null,
@@ -537,6 +551,7 @@ const state = {
 
 // Ignore old previews after a new scan, a source change, or a newer click.
 let previewRequestToken = 0;
+let relationAnalysisRequestToken = 0;
 
 const el = {
   modeSplitterBtn: document.querySelector("#mode-splitter-btn"),
@@ -588,6 +603,8 @@ const el = {
   optClone: document.querySelector("#opt-clone"),
   resultsTitle: document.querySelector("#results-title"),
   resultsSummary: document.querySelector("#results-summary"),
+  relationAnalyzeBtn: document.querySelector("#relation-analyze-btn"),
+  relationCancelBtn: document.querySelector("#relation-cancel-btn"),
   selectedCount: document.querySelector("#selected-count"),
   emptyState: document.querySelector("#empty-state"),
   busyState: document.querySelector("#busy-state"),
@@ -1007,14 +1024,27 @@ function render() {
 
   const visibleResources = getVisibleResources();
   el.selectedCount.textContent = t("selectedCount", state.selectedKeys.length);
-  const relationsLabel = state.relationsStatus === "skipped"
-    ? t("relationCheckSkipped")
-    : state.relationsStatus === "deferred" ? t("relationCheckRunning") : "";
+  const relationsLabel = state.relationAnalysisInProgress
+    ? t("relationCheckProgress", state.relationAnalysisProgress)
+    : state.relationsStatus === "skipped"
+      ? t("relationCheckSkipped")
+      : state.relationsStatus === "deferred" ? t("relationCheckRunning") : "";
   el.resultsSummary.textContent = state.packagePath
     ? [t("packageReady", visibleResources.length), state.manifestPackageCount ? t("manifestFound", state.manifestPackageCount) : "", relationsLabel]
         .filter(Boolean)
         .join(" • ")
     : t("noPackageLoaded");
+
+  if (el.relationAnalyzeBtn) {
+    el.relationAnalyzeBtn.classList.toggle("hidden",
+      state.relationsStatus !== "skipped" || state.relationAnalysisInProgress ||
+      state.isBusy || !state.resources.length);
+    el.relationAnalyzeBtn.textContent = t("relationCheckAction");
+  }
+  if (el.relationCancelBtn) {
+    el.relationCancelBtn.classList.toggle("hidden", !state.relationAnalysisInProgress);
+    el.relationCancelBtn.textContent = t("relationCheckCancel");
+  }
 
   el.busyTitle.textContent = state.busyTitle || t("busyDefaultTitle");
   el.busyMessage.textContent = state.busyMessage || t("busyDefaultMessage");
@@ -1262,6 +1292,7 @@ function isScannablePackagePath(path) {
 async function pickPackage() {
   const result = await open({ multiple: false, filters: [{ name: "*.package", extensions: ["package", "dbc"] }] });
   if (typeof result === "string" && isScannablePackagePath(result)) {
+    invalidateRelationAnalysis();
     state.packagePath = result;
     ++previewRequestToken;
     state.pendingRelationUpdates = [];
@@ -1290,10 +1321,54 @@ function parentFolderOfPath(path) {
   return raw.slice(0, slash) || ".";
 }
 
+// Abort only optional duplicate verification, not a scan/merge/export.
+function invalidateRelationAnalysis() {
+  ++relationAnalysisRequestToken;
+  if (state.relationAnalysisInProgress) {
+    void invoke("cancel_package_relation_analysis").catch((error) =>
+      console.error("Could not cancel duplicate verification:", error));
+  }
+  state.relationAnalysisInProgress = false;
+  state.relationAnalysisProgress = 0;
+}
+
+async function analyzeAllRelations() {
+  if (state.isBusy || state.relationAnalysisInProgress ||
+      state.relationsStatus !== "skipped" || !state.packagePath || !state.resources.length) return;
+  const requestedPath = state.packagePath;
+  const token = ++relationAnalysisRequestToken;
+  state.relationAnalysisInProgress = true;
+  state.relationAnalysisProgress = 0;
+  render();
+
+  try {
+    const result = await invoke("analyze_package_relations_async", {
+      payload: { packagePath: requestedPath },
+    });
+    if (token !== relationAnalysisRequestToken || state.packagePath !== requestedPath) return;
+    applyRelationUpdate(result);
+  } catch (error) {
+    if (token !== relationAnalysisRequestToken || state.packagePath !== requestedPath) return;
+    console.error(error);
+    await appModal.showError({
+      titleText: t("modalErrorTitle"),
+      messageText: `${t("relationCheckError")}\n${error}`,
+      primaryLabel: t("modalClose"),
+    });
+  } finally {
+    if (token === relationAnalysisRequestToken) {
+      state.relationAnalysisInProgress = false;
+      state.relationAnalysisProgress = 0;
+      render();
+    }
+  }
+}
+
 async function scanPackage() {
   if (state.isBusy || !isScannablePackagePath(state.packagePath)) return;
   const requestedPath = state.packagePath;
   let firstVisible = null;
+  invalidateRelationAnalysis();
   ++previewRequestToken; // invalidate any preview requested before this scan
   state.pendingRelationUpdates = [];
   state.relationsStatus = "complete";
@@ -1639,6 +1714,7 @@ async function exportSelection() {
 }
 
 function clearAll() {
+  invalidateRelationAnalysis();
   ++previewRequestToken;
   state.pendingRelationUpdates = [];
   state.relationsStatus = "complete";
@@ -1711,6 +1787,7 @@ function bindDragAndDrop() {
       const path = paths[0];
       const ext = path?.toLowerCase().split(".").pop();
       if (["package", "dbc"].includes(ext)) {
+        invalidateRelationAnalysis();
         state.packagePath = path;
     ++previewRequestToken;
     state.pendingRelationUpdates = [];
@@ -1761,6 +1838,11 @@ function setupEvents() {
 
   el.pickPackageBtn.addEventListener("click", pickPackage);
   el.scanBtn.addEventListener("click", scanPackage);
+  el.relationAnalyzeBtn?.addEventListener("click", analyzeAllRelations);
+  el.relationCancelBtn?.addEventListener("click", () => {
+    invalidateRelationAnalysis();
+    render();
+  });
   el.exportBtn.addEventListener("click", exportSelection);
   if (el.removeMergedBtn) {
     el.removeMergedBtn.addEventListener("click", removeSelectionFromMerged);
@@ -1877,6 +1959,16 @@ async function setupProgressEvents() {
       }
       applyRelationUpdate(payload);
       render();
+    });
+    await listen("package-relations-progress", (event) => {
+      const payload = event.payload || {};
+      if (!state.relationAnalysisInProgress || payload.packagePath !== state.packagePath) return;
+      const percent = Math.max(0, Math.min(100, Number(payload.percent) || 0));
+      // Refresh every 5 percent while leaving the resource list usable.
+      if (Math.floor(percent / 5) !== Math.floor(state.relationAnalysisProgress / 5)) {
+        state.relationAnalysisProgress = percent;
+        render();
+      }
     });
   } catch (error) {
     console.error("Could not attach package progress listener:", error);
