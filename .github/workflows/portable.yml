@@ -171,17 +171,17 @@ jobs:
           cache: npm
           cache-dependency-path: veiga-s3cc-splitter/package-lock.json
 
-      - name: Install Rust toolchain (macOS uses Rust 1.99 for objc2 0.4 compatibility)
+      - name: Install Rust toolchain (Linux/macOS pin Rust 1.99 for legacy dependency compatibility)
         if: matrix.target == ''
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ startsWith(matrix.platform, 'macos') && '1.99.0' || 'stable' }}
+          toolchain: ${{ (startsWith(matrix.platform, 'macos') || startsWith(matrix.platform, 'ubuntu')) && '1.99.0' || 'stable' }}
 
       - name: Install Rust toolchain for cross-target builds
         if: matrix.target != ''
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ startsWith(matrix.platform, 'macos') && '1.99.0' || 'stable' }}
+          toolchain: ${{ (startsWith(matrix.platform, 'macos') || startsWith(matrix.platform, 'ubuntu')) && '1.99.0' || 'stable' }}
           targets: ${{ matrix.target }}
 
       - name: Install frontend dependencies
