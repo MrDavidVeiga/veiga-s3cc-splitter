@@ -832,6 +832,18 @@ function itemMatchesSearch(item, query) {
 }
 
 let cachedVisibleResources = { source: null, filter: null, search: null, items: [] };
+// Selection remains an ordered array for export, but row membership is O(1).
+let cachedSelection = { source: null, keys: new Set() };
+let renderedListWindow = {
+  items: null, first: -1, last: -1, selection: null,
+  previewKey: null, language: null,
+};
+function selectedResourceKeys() {
+  if (cachedSelection.source !== state.selectedKeys) {
+    cachedSelection = { source: state.selectedKeys, keys: new Set(state.selectedKeys) };
+  }
+  return cachedSelection.keys;
+}
 function getVisibleResources() {
   const filter = state.activeContentFilter;
   const search = state.search;
@@ -1053,6 +1065,22 @@ function renderList() {
   const firstIndex = Math.max(0, Math.floor(scrollTop / rowHeight) - 6);
   const lastIndex = Math.min(visibleResources.length,
     Math.ceil((scrollTop + viewportHeight) / rowHeight) + 6);
+  const selection = selectedResourceKeys();
+  // Scrolling within the buffered window should not rebuild the DOM.
+  if (renderedListWindow.items === visibleResources &&
+      renderedListWindow.first === firstIndex &&
+      renderedListWindow.last === lastIndex &&
+      renderedListWindow.selection === state.selectedKeys &&
+      renderedListWindow.previewKey === (state.preview?.key || null) &&
+      renderedListWindow.language === state.language &&
+      el.resourceList.firstElementChild) {
+    return;
+  }
+  renderedListWindow = {
+    items: visibleResources, first: firstIndex, last: lastIndex,
+    selection: state.selectedKeys, previewKey: state.preview?.key || null,
+    language: state.language,
+  };
   const content = document.createElement("div");
   content.className = "resource-virtual-content";
   content.style.position = "relative";
@@ -1088,36 +1116,50 @@ function renderList() {
 
     const check = document.createElement("input");
     check.type = "checkbox";
-    check.checked = state.selectedKeys.includes(item.key);
+    check.checked = selection.has(item.key);
     check.addEventListener("click", (event) => handleSelectionClick(item.key, event));
     checkWrap.appendChild(check);
 
     const button = document.createElement("button");
     button.className = "resource-button";
 
-    let sameNameBadge = "";
-    const metaLines = [];
-    if (displayType) metaLines.push(displayType);
-    if (displayDetails) metaLines.push(displayDetails);
-    if (relation?.kind === "tgi-conflict") {
-      metaLines.push(
-        `<span class="tgi-conflict-badge" title="${t("tgiConflictHint")}">${t("tgiConflictLabel", relation.count)}</span>`,
-      );
-    } else if (relation?.kind === "duplicate") {
-      metaLines.push(
-        `<span class="duplicate-badge" title="${t("duplicateHint")}">${t("duplicateLabel", relation.count)}</span>`,
-      );
-    } else if (relation?.kind === "same-name") {
-      sameNameBadge = `<span class="same-name-badge" title="${t("sameNameHint")}">${t("sameNameLabel", relation.count)}</span>`;
-    }
+    // Package metadata is untrusted. Never interpolate labels or details
+    // into innerHTML: this also preserves literal <, &, quotes and accents.
+    const heading = document.createElement("div");
+    heading.className = "resource-heading";
+    const name = document.createElement("div");
+    name.className = "resource-name";
+    name.textContent = item.label || "";
+    heading.appendChild(name);
+    const meta = document.createElement("div");
+    meta.className = "resource-meta";
+    const appendMeta = (value) => {
+      if (meta.childNodes.length) meta.appendChild(document.createElement("br"));
+      meta.appendChild(document.createTextNode(String(value)));
+    };
+    if (displayType) appendMeta(displayType);
+    if (displayDetails) appendMeta(displayDetails);
 
-    button.innerHTML = `
-      <div class="resource-heading">
-        <div class="resource-name">${item.label}</div>
-        ${sameNameBadge}
-      </div>
-      <div class="resource-meta">${metaLines.join("<br />")}</div>
-    `;
+    const addBadge = (className, hint, label, destination) => {
+      const badge = document.createElement("span");
+      badge.className = className;
+      badge.title = hint;
+      badge.textContent = label;
+      destination.appendChild(badge);
+    };
+    if (relation?.kind === "tgi-conflict") {
+      if (meta.childNodes.length) meta.appendChild(document.createElement("br"));
+      addBadge("tgi-conflict-badge", t("tgiConflictHint"),
+        t("tgiConflictLabel", relation.count), meta);
+    } else if (relation?.kind === "duplicate") {
+      if (meta.childNodes.length) meta.appendChild(document.createElement("br"));
+      addBadge("duplicate-badge", t("duplicateHint"),
+        t("duplicateLabel", relation.count), meta);
+    } else if (relation?.kind === "same-name") {
+      addBadge("same-name-badge", t("sameNameHint"),
+        t("sameNameLabel", relation.count), heading);
+    }
+    button.append(heading, meta);
     button.addEventListener("click", () => loadPreview(item));
 
     const pill = document.createElement("div");
@@ -1200,7 +1242,7 @@ function handleSelectionClick(key, event) {
     state.selectedKeys = [...selected];
   } else {
     if (targetChecked) {
-      if (!state.selectedKeys.includes(key)) {
+      if (!selectedResourceKeys().has(key)) {
         state.selectedKeys = [...state.selectedKeys, key];
       }
     } else {
