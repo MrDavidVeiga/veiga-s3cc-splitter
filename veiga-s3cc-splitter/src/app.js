@@ -1427,6 +1427,10 @@ async function revealPreviewSource() {
 async function loadPreview(item) {
   const requestedPath = state.packagePath;
   const token = ++previewRequestToken;
+  // Coalesce rapid list navigation before requesting expensive image decoding.
+  // This also prevents queued worker jobs for previews the user never sees.
+  await new Promise((resolve) => setTimeout(resolve, 45));
+  if (token !== previewRequestToken || state.packagePath !== requestedPath) return;
   try {
     const preview = await invoke("get_resource_preview_async", {
       payload: { packagePath: requestedPath, resourceKey: item.key },
