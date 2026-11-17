@@ -11191,6 +11191,41 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn parallel_headless_scans_do_not_cancel_each_others_relationship_analysis() {
+        // Windows runs Rust tests in parallel. Only real Tauri/UI scans should
+        // advance the global generation or receive global UI cancellation.
+        let root = test_dir("parallel-headless-scans");
+        let path = root.join("IndependentScans.package");
+        write_test_package(&path, &[
+            (TYPE_CASP, 0, 0xCA5101, vec![1, 2, 3, 4]),
+            (TYPE_CASP, 0, 0xCA5102, vec![1, 2, 3, 4]),
+            (TYPE_CASP, 0, 0xCA5103, vec![5, 6, 7, 8]),
+        ]);
+        let source_path = path.display().to_string();
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..12).map(|_| {
+                let source_path = source_path.clone();
+                scope.spawn(move || {
+                    for _ in 0..6 {
+                        let result = scan_package_resources_inner(None, ScanPayload {
+                            package_path: source_path.clone(),
+                            resource_type: "casp".to_string(),
+                            search: None,
+                        }).expect("parallel headless scans should not replace each other");
+                        assert_eq!(result.scan_generation, 0);
+                        assert!(!result.items.is_empty());
+                        assert_eq!(result.relations_status, "complete");
+                    }
+                })
+            }).collect();
+            for worker in workers {
+                worker.join().expect("headless scan worker");
+            }
+        });
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn scan_groups_pose_list_but_keeps_unidentified_clip_as_clip() {
         let root = test_dir("pose-list-clip-detection");
         let path = root.join("MixedPoseAndClip.package");
