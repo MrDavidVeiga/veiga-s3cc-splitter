@@ -4,7 +4,7 @@ use std::fs::{copy, create_dir_all, remove_file, rename, File, OpenOptions};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -71,6 +71,8 @@ const MAX_RELATION_ANALYSIS_PACKAGE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_RELATION_ANALYSIS_ITEMS: usize = 8_000;
 
 static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
+// Suppress late duplicate/conflict events from a previous scan of the same path.
+static SCAN_GENERATION: AtomicU64 = AtomicU64::new(0);
 static PREVIEW_CACHE: OnceLock<Mutex<Option<PreviewCacheEntry>>> = OnceLock::new();
 
 struct PreviewCacheEntry {
@@ -7471,6 +7473,7 @@ fn scan_package_resources_inner(
     };
 
     CANCEL_REQUESTED.store(false, Ordering::Release);
+    let scan_generation = SCAN_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
     let started = Instant::now();
     emit_package_progress(
         app, started, "Opening package",
@@ -7583,6 +7586,7 @@ fn scan_package_resources_inner(
             let relation_path = package_path.to_string();
             let relation_name_map = name_map.clone();
             let relation_items = items.clone();
+            let relation_generation = scan_generation;
             std::thread::spawn(move || {
                 let result = (|| -> Result<BTreeMap<String, ResourceRelation>, String> {
                     let mmap = open_package(&relation_path)?;
@@ -7595,6 +7599,13 @@ fn scan_package_resources_inner(
                 })();
                 match result {
                     Ok(relations) => {
+                        if SCAN_GENERATION.load(Ordering::Acquire) != relation_generation
+                            || CANCEL_REQUESTED.load(Ordering::Acquire)
+                        {
+                            // The user started another scan or cancelled this one;
+                            // never apply badges from obsolete heavy work.
+                            return;
+                        }
                         let _ = relation_app.emit(
                             "package-relations",
                             PackageRelationUpdate {
