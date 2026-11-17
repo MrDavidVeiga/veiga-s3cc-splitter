@@ -20,7 +20,141 @@ on:
   workflow_dispatch:
 
 jobs:
+  linux-i386-preflight:
+    name: Linux x86 - compile and package first
+    runs-on: ubuntu-22.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Verify Docker for native Debian i386 compilation
+        shell: bash
+        run: docker version
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: veiga-s3cc-splitter/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: veiga-s3cc-splitter
+        run: npm ci
+
+      - name: Run full JavaScript regressions
+        working-directory: veiga-s3cc-splitter
+        run: node --test
+
+      - name: Build Linux x86 ELF using Debian's native i386 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Tauri's JavaScript CLI does not provide an i386 Linux host build.
+          # Compile the frontend on x64, then the native Rust binary in a
+          # Debian i386 container with complete i386 WebKit/AppIndicator libs.
+          (cd veiga-s3cc-splitter && npm run build)
+          docker run --rm --platform linux/386 \
+            -v "$GITHUB_WORKSPACE:/work" -w /work \
+            -e CARGO_TARGET_DIR=/work/target/i686-unknown-linux-gnu \
+            debian:bookworm bash -c '
+              set -euo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+              echo "Debian native architecture: $(dpkg --print-architecture)"
+              test "$(dpkg --print-architecture)" = i386
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                ca-certificates curl build-essential pkg-config file libatomic1 \
+                libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+                libxdo-dev libssl-dev librsvg2-dev
+              # The rustup bootstrap shell script can see the host kernel's
+              # x86_64 architecture under QEMU, even inside a 32-bit image.
+              # Download the explicitly i686 rustup binary to install an
+              # executable 32-bit Cargo/rustc rather than a broken x64 toolchain.
+              curl -fsSLo /tmp/rustup-init \
+                https://static.rust-lang.org/rustup/dist/i686-unknown-linux-gnu/rustup-init
+              chmod +x /tmp/rustup-init
+              file /tmp/rustup-init
+              # Debian installs the i386 libatomic package correctly, but
+              # the emulated loader may not consult its multiarch directory.
+              # Discover the real package path rather than assuming /lib32.
+              atomic_path="$(dpkg-query -L libatomic1 2>/dev/null | grep -m1 "/libatomic.so.1$" || true)"
+              if [ -z "$atomic_path" ] || [ ! -e "$atomic_path" ]; then
+                atomic_path="$(find /usr/lib /lib -name libatomic.so.1 -print -quit 2>/dev/null || true)"
+              fi
+              if [ -z "$atomic_path" ] || [ ! -e "$atomic_path" ]; then
+                echo "Native i386 libatomic.so.1 missing after installing libatomic1" >&2
+                dpkg-query -L libatomic1 || true
+                exit 1
+              fi
+              export LD_LIBRARY_PATH="$(dirname "$atomic_path")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+              echo "Using i386 libatomic from: $atomic_path"
+              # Verify all dynamically linked runtime libraries before bootstrapping.
+              ldd /tmp/rustup-init | tee /tmp/rustup-deps.txt
+              if grep -q "not found" /tmp/rustup-deps.txt; then
+                echo "Missing i386 runtime library for rustup-init" >&2
+                exit 1
+              fi
+              /tmp/rustup-init -y --profile minimal \
+                --default-host i686-unknown-linux-gnu --default-toolchain stable
+              . "$HOME/.cargo/env"
+              rustc -vV
+              cargo --version
+              test "$(rustc -vV | sed -n "s/^host: //p")" = i686-unknown-linux-gnu
+              cargo build --locked --release \
+                --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml \
+                --bin veiga-s3cc-splitter
+              test -s target/i686-unknown-linux-gnu/release/veiga-s3cc-splitter
+              readelf -h target/i686-unknown-linux-gnu/release/veiga-s3cc-splitter | grep -E "Class:.*ELF32"
+              readelf -h target/i686-unknown-linux-gnu/release/veiga-s3cc-splitter | grep -E "Machine:.*Intel 80386"
+              file target/i686-unknown-linux-gnu/release/veiga-s3cc-splitter
+              cp target/i686-unknown-linux-gnu/release/veiga-s3cc-splitter \
+                "target/i686-unknown-linux-gnu/release/Veiga'\''s S3CC Splitter"
+            '
+          file "target/i686-unknown-linux-gnu/release/Veiga's S3CC Splitter"
+
+      - name: Locate Linux ELF binary
+        id: locate_unix
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          file_path="$(find target -type f -name "Veiga's S3CC Splitter" ! -path "*/bundle/*" | grep "/release/" | head -n 1 || true)"
+
+          if [ -z "$file_path" ]; then
+            echo "Files found in target:"
+            find target -type f | sort || true
+            exit 1
+          fi
+
+          echo "artifact_path=$file_path" >> "$GITHUB_OUTPUT"
+
+      - name: Package Linux ELF and preserve executable permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$(mktemp -d)"
+          out="portable/S3CC-Splitter-v2.0.0-Beta2-WinUI3-Linux-x86"
+          mkdir -p "$out"
+          cp "${{ steps.locate_unix.outputs.artifact_path }}" "$stage/Veiga's S3CC Splitter"
+          chmod 755 "$stage/Veiga's S3CC Splitter"
+          cp LICENSE.txt README.txt "$stage/"
+          tar -czf "$out/S3CC-Splitter-v2.0.0-Beta2-WinUI3-Linux-x86.tar.gz" -C "$stage" .
+          (cd "$out" && sha256sum 'S3CC-Splitter-v2.0.0-Beta2-WinUI3-Linux-x86.tar.gz' > SHA256.txt)
+
+      - name: Upload complete portable package
+        uses: actions/upload-artifact@v6
+        with:
+          name: S3CC-Splitter-v2.0.0-Beta2-WinUI3-Linux-x86
+          path: portable/S3CC-Splitter-v2.0.0-Beta2-WinUI3-Linux-x86/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
   build-portable:
+    needs: linux-i386-preflight
     name: ${{ matrix.artifact_name }}
 
     strategy:
@@ -50,12 +184,6 @@ jobs:
             build_args: --no-bundle
             binary_name: "Veiga's S3CC Splitter"
             artifact_name: S3CC-Splitter-v2.0.0-Beta2-WinUI3-Linux-x64
-
-          - platform: ubuntu-22.04
-            target: i686-unknown-linux-gnu
-            build_args: --target i686-unknown-linux-gnu --no-bundle
-            binary_name: "Veiga's S3CC Splitter"
-            artifact_name: S3CC-Splitter-v2.0.0-Beta2-WinUI3-Linux-x86
 
           - platform: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
@@ -99,11 +227,6 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
-      - name: Verify Docker for native Debian i386 compilation
-        if: matrix.target == 'i686-unknown-linux-gnu'
-        shell: bash
-        run: docker version
-
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
@@ -140,73 +263,6 @@ jobs:
         if: matrix.target != 'i686-unknown-linux-gnu'
         working-directory: veiga-s3cc-splitter
         run: npm run tauri build -- ${{ matrix.build_args }}
-
-      - name: Build Linux x86 ELF using Debian's native i386 toolchain
-        if: matrix.target == 'i686-unknown-linux-gnu'
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Tauri's JavaScript CLI does not provide an i386 Linux host build.
-          # Compile the frontend on x64, then the native Rust binary in a
-          # Debian i386 container with complete i386 WebKit/AppIndicator libs.
-          (cd veiga-s3cc-splitter && npm run build)
-          docker run --rm --platform linux/386 \
-            -v "$GITHUB_WORKSPACE:/work" -w /work \
-            -e CARGO_TARGET_DIR=/work/target/i686-unknown-linux-gnu \
-            debian:bookworm bash -c '
-              set -euo pipefail
-              export DEBIAN_FRONTEND=noninteractive
-              echo "Debian native architecture: $(dpkg --print-architecture)"
-              test "$(dpkg --print-architecture)" = i386
-              apt-get update
-              apt-get install -y --no-install-recommends \
-                ca-certificates curl build-essential pkg-config file libatomic1 \
-                libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-                libxdo-dev libssl-dev librsvg2-dev
-              # The rustup bootstrap shell script can see the host kernel's
-              # x86_64 architecture under QEMU, even inside a 32-bit image.
-              # Download the explicitly i686 rustup binary to install an
-              # executable 32-bit Cargo/rustc rather than a broken x64 toolchain.
-              curl -fsSLo /tmp/rustup-init \
-                https://static.rust-lang.org/rustup/dist/i686-unknown-linux-gnu/rustup-init
-              chmod +x /tmp/rustup-init
-              file /tmp/rustup-init
-              # Debian installs the i386 libatomic package correctly, but
-              # the emulated loader may not consult its multiarch directory.
-              # Discover the real package path rather than assuming /lib32.
-              atomic_path="$(dpkg-query -L libatomic1 2>/dev/null | grep -m1 "/libatomic.so.1$" || true)"
-              if [ -z "$atomic_path" ] || [ ! -e "$atomic_path" ]; then
-                atomic_path="$(find /usr/lib /lib -name libatomic.so.1 -print -quit 2>/dev/null || true)"
-              fi
-              if [ -z "$atomic_path" ] || [ ! -e "$atomic_path" ]; then
-                echo "Native i386 libatomic.so.1 missing after installing libatomic1" >&2
-                dpkg-query -L libatomic1 || true
-                exit 1
-              fi
-              export LD_LIBRARY_PATH="$(dirname "$atomic_path")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-              ldconfig
-              echo "Using i386 libatomic from: $atomic_path"
-              # Verify all dynamically linked runtime libraries before bootstrapping.
-              ldd /tmp/rustup-init | tee /tmp/rustup-deps.txt
-              if grep -q "not found" /tmp/rustup-deps.txt; then
-                echo "Missing i386 runtime library for rustup-init" >&2
-                exit 1
-              fi
-              /tmp/rustup-init -y --profile minimal \
-                --default-host i686-unknown-linux-gnu --default-toolchain stable
-              . "$HOME/.cargo/env"
-              rustc -vV
-              cargo --version
-              test "$(rustc -vV | sed -n "s/^host: //p")" = i686-unknown-linux-gnu
-              cargo build --locked --release \
-                --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml \
-                --bin veiga-s3cc-splitter
-              test -s target/i686-unknown-linux-gnu/release/veiga-s3cc-splitter
-              file target/i686-unknown-linux-gnu/release/veiga-s3cc-splitter
-              cp target/i686-unknown-linux-gnu/release/veiga-s3cc-splitter \
-                "target/i686-unknown-linux-gnu/release/Veiga'\''s S3CC Splitter"
-            '
-          file "target/i686-unknown-linux-gnu/release/Veiga's S3CC Splitter"
 
       - name: Locate Windows binary
         if: startsWith(matrix.platform, 'windows')
@@ -300,7 +356,7 @@ jobs:
 
   publish-prerelease:
     name: Publish Beta 2 prerelease only when all eight targets pass
-    needs: build-portable
+    needs: [linux-i386-preflight, build-portable]
     if: github.event_name == 'push' && github.ref == 'refs/heads/build/beta2-windows-x64-20261117'
     runs-on: ubuntu-24.04
     permissions:
