@@ -277,6 +277,34 @@ test("virtual row thumbnails use a bounded queue and reject results from old pac
   assert.equal(invocations.length, 4, "negative cache should avoid repeated expensive misses");
 });
 
+test("selecting an IMG/IMAG full preview never contaminates the ICON/THUM row cache", async () => {
+  const loadSource = between(app, "async function loadPreview(item) {", "function isMergerPackagePath");
+  const state = { packagePath: "example.package", preview: null };
+  const listCacheWrites = [];
+  let renders = 0;
+  const context = {
+    state,
+    previewRequestToken: 0,
+    setTimeout,
+    render: () => { renders++; },
+    storeListThumbnail: (key, base64) => { listCacheWrites.push({ key, base64 }); },
+    invoke: async (command) => {
+      assert.equal(command, "get_resource_preview_async");
+      return { key: "selected", label: "original", thumbBase64: "DECODED_IMG_TEXTURE" };
+    },
+    console,
+  };
+
+  vm.runInNewContext(loadSource, context);
+  await context.loadPreview({ key: "selected", label: "selected item" });
+  assert.equal(state.preview.thumbBase64, "DECODED_IMG_TEXTURE",
+    "The full preview must retain IMG/IMAG support");
+  assert.equal(state.preview.label, "selected item");
+  assert.deepEqual(listCacheWrites, [],
+    "Only the strict get_resource_thumbnail_async command may fill row thumbnails");
+  assert.equal(renders, 1);
+});
+
 test("new thumbnail decoder and multilingual directory lookup are connected", () => {
   const codec = read("../src-tauri/src/preview_images.rs");
   const manifest = read("../src-tauri/Cargo.toml");
