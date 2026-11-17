@@ -69,6 +69,13 @@ test("scan stage and cancellation notices are localized while preserving backend
   assert.match(app, /state\.scanInProgress = false/);
 });
 
+test("late duplicate badge updates are rejected after a newer scan", () => {
+  assert.match(backend, /static SCAN_GENERATION: AtomicU64 = AtomicU64::new\(0\)/);
+  assert.match(backend, /SCAN_GENERATION\.fetch_add\(1, Ordering::AcqRel\)/);
+  assert.match(backend, /SCAN_GENERATION\.load\(Ordering::Acquire\) != relation_generation/);
+  assert.match(backend, /CANCEL_REQUESTED\.load\(Ordering::Acquire\)/);
+});
+
 test("Beta 1 sidebar geometry is retained in the Beta 2 interface", () => {
   assert.match(managerCss, /\.left-panel > \.winui-social-footer/);
   assert.match(managerCss, /#lang-toggle-btn/);
