@@ -6,12 +6,17 @@ on:
       - "integration/beta2-complete-beta1-parity-20261116"
     paths:
       - ".github/workflows/beta2-complete-parity-validation.yml"
+      - "BETA2_COMPLETENESS_INTEGRATION.md"
       - "veiga-s3cc-splitter/**"
       - "sims3-core/**"
       - "sims3-pack/**"
       - "Cargo.toml"
       - "Cargo.lock"
   workflow_dispatch:
+
+concurrency:
+  group: beta2-completeness-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
