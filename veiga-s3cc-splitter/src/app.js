@@ -29,6 +29,8 @@ const buttonIcons = {
 
 const translations = {
   en: {
+    relationCheckSkipped: "Duplicate/conflict checks were not run for this large package.",
+    relationCheckRunning: "Checking duplicates/conflicts in the background…",
     appTitle: "Veiga's S3CC Splitter",
     langLabel: "Language:",
     pickPackage: "Open Package",
@@ -176,6 +178,8 @@ const translations = {
     splittError: "Export failed:",
   },
   pt: {
+    relationCheckSkipped: "Verificação de duplicatas/conflitos não realizada para este package grande.",
+    relationCheckRunning: "Verificando duplicatas/conflitos em segundo plano…",
     appTitle: "Veiga's S3CC Splitter",
     langLabel: "Idioma:",
     pickPackage: "Abrir Package",
@@ -323,6 +327,8 @@ const translations = {
     splittError: "Falha na exportação:",
   },
   es: {
+    relationCheckSkipped: "No se verificaron duplicados/conflictos en este package grande.",
+    relationCheckRunning: "Verificando duplicados/conflictos en segundo plano…",
     appTitle: "Veiga's S3CC Splitter",
     langLabel: "Idioma:",
     pickPackage: "Abrir Package",
@@ -493,10 +499,14 @@ const state = {
   isContentFilterOpen: false,
   manifestPackageCount: 0,
   pendingRelationUpdates: [],
+  relationsStatus: "complete",
   mergerSources: [],
   mergerBusy: false,
   mergerResult: null,
 };
+
+// Ignore old previews after a new scan, a source change, or a newer click.
+let previewRequestToken = 0;
 
 const el = {
   modeSplitterBtn: document.querySelector("#mode-splitter-btn"),
@@ -712,6 +722,7 @@ function applyRelationUpdate(payload) {
     ...item,
     relation: relations[item.key] || null,
   }));
+  state.relationsStatus = "complete";
 }
 
 function clearBusy() {
@@ -953,8 +964,11 @@ function render() {
 
   const visibleResources = getVisibleResources();
   el.selectedCount.textContent = t("selectedCount", state.selectedKeys.length);
+  const relationsLabel = state.relationsStatus === "skipped"
+    ? t("relationCheckSkipped")
+    : state.relationsStatus === "deferred" ? t("relationCheckRunning") : "";
   el.resultsSummary.textContent = state.packagePath
-    ? [t("packageReady", visibleResources.length), state.manifestPackageCount ? t("manifestFound", state.manifestPackageCount) : ""]
+    ? [t("packageReady", visibleResources.length), state.manifestPackageCount ? t("manifestFound", state.manifestPackageCount) : "", relationsLabel]
         .filter(Boolean)
         .join(" • ")
     : t("noPackageLoaded");
@@ -1202,7 +1216,11 @@ function parentFolderOfPath(path) {
 
 async function scanPackage() {
   if (state.isBusy || !isScannablePackagePath(state.packagePath)) return;
-
+  const requestedPath = state.packagePath;
+  let firstVisible = null;
+  ++previewRequestToken; // invalidate any preview requested before this scan
+  state.pendingRelationUpdates = [];
+  state.relationsStatus = "complete";
   setBusy(t("busyReadTitle"), t("busyReadMessage"));
   state.operationCancellable = true;
   state.operationCancelRequested = false;
@@ -1210,39 +1228,36 @@ async function scanPackage() {
 
   try {
     const result = await invoke("scan_package_resources", {
-      payload: {
-        packagePath: state.packagePath,
-        resourceType: "all",
-        search: null,
-      },
+      payload: { packagePath: requestedPath, resourceType: "all", search: null },
     });
-
+    // A cancelled or superseded scan must never replace the visible resources.
+    if (state.operationCancelRequested || state.packagePath !== requestedPath) return;
     const relations = result.relations || {};
     state.resources = (result.items || []).map((item) => ({
       ...item,
       relation: relations[item.key] || null,
     }));
+    state.relationsStatus = result.relationsStatus || "complete";
     state.manifestPackageCount = result.manifestPackageCount || 0;
-
     state.selectedKeys = [];
     state.selectionInitialized = true;
-
     state.selectionAnchorKey = null;
     state.preview = null;
-
-    const firstVisible = getVisibleResources()[0] || state.resources[0];
-    if (firstVisible) {
-      await loadPreview(firstVisible);
-    }
+    firstVisible = getVisibleResources()[0] || state.resources[0] || null;
   } catch (error) {
     console.error(error);
-    await appModal.showError({
-      titleText: t("modalErrorTitle"),
-      messageText: `${t("readError")}\n${error}`,
-      primaryLabel: t("modalClose"),
-    });
+    if (!state.operationCancelRequested && state.packagePath === requestedPath) {
+      await appModal.showError({
+        titleText: t("modalErrorTitle"),
+        messageText: `${t("readError")}\n${error}`,
+        primaryLabel: t("modalClose"),
+      });
+    }
   } finally {
-    clearBusy();
+    clearBusy(); // show the virtualized list before any expensive thumbnail work
+  }
+  if (firstVisible && state.packagePath === requestedPath) {
+    void loadPreview(firstVisible); // do not block initial list rendering
   }
 }
 
@@ -1257,18 +1272,18 @@ async function revealPreviewSource() {
 }
 
 async function loadPreview(item) {
+  const requestedPath = state.packagePath;
+  const token = ++previewRequestToken;
   try {
-    const preview = await invoke("get_resource_preview", {
-      payload: {
-        packagePath: state.packagePath,
-        resourceKey: item.key,
-      },
+    const preview = await invoke("get_resource_preview_async", {
+      payload: { packagePath: requestedPath, resourceKey: item.key },
     });
+    if (token !== previewRequestToken || state.packagePath !== requestedPath) return;
     preview.label = item.label;
     state.preview = preview;
     render();
   } catch (error) {
-    console.error(error);
+    if (token === previewRequestToken) console.error(error);
   }
 }
 
@@ -1546,6 +1561,9 @@ async function exportSelection() {
 }
 
 function clearAll() {
+  ++previewRequestToken;
+  state.pendingRelationUpdates = [];
+  state.relationsStatus = "complete";
   state.packagePath = "";
   state.resources = [];
   state.selectedKeys = [];
