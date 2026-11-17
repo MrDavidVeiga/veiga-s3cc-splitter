@@ -7831,8 +7831,26 @@ fn scan_package_resources_inner(
         _ => "all".to_string(),
     };
 
-    CANCEL_REQUESTED.store(false, Ordering::Release);
-    let scan_generation = SCAN_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    // Headless scans (unit tests and read-only offline verification) do not
+    // represent the active Tauri UI request. They must not invalidate each
+    // other's global scan generation or share the UI cancellation flag.
+    let live_scan = app.is_some();
+    let scan_generation = if live_scan {
+        CANCEL_REQUESTED.store(false, Ordering::Release);
+        SCAN_GENERATION.fetch_add(1, Ordering::AcqRel) + 1
+    } else {
+        0
+    };
+    let check_scan_cancelled = || -> Result<(), String> {
+        if !live_scan {
+            return Ok(());
+        }
+        check_cancelled()?;
+        if SCAN_GENERATION.load(Ordering::Acquire) != scan_generation {
+            return Err("A leitura foi substituída.".to_string());
+        }
+        Ok(())
+    };
     let started = Instant::now();
     emit_package_progress(
         app, started, "Opening package",
@@ -7841,9 +7859,9 @@ fn scan_package_resources_inner(
 
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mmap = open_package(package_path)?;
-        check_cancelled()?;
+        check_scan_cancelled()?;
         let package = parse_package(&mmap)?;
-        check_cancelled()?;
+        check_scan_cancelled()?;
         emit_package_progress(
             app, started, "Reading names",
             "Reading package metadata and resource names.", 1, 5, package.files.len(), mmap.len(),
@@ -7852,7 +7870,7 @@ fn scan_package_resources_inner(
         let name_map = package_resource_names(&package);
         // Optional user-supplied EA full-TGI reference, not bundled copyrighted data.
         let ea_catalog = EaSkinCatalog::load_for_package(Path::new(package_path));
-        check_cancelled()?;
+        check_scan_cancelled()?;
         let merge_manifest = read_valid_merge_manifest_from_dbpf(&package);
         let manifest_package_count = merge_manifest
             .as_ref()
@@ -7863,13 +7881,13 @@ fn scan_package_resources_inner(
             app, started, "Building resource list",
             "Building and sorting resource metadata.", 2, 5, package.files.len(), mmap.len(),
         );
-        check_cancelled()?;
+        check_scan_cancelled()?;
         let items = build_scanned_items(
             &package, &resource_type, &query, &name_map,
             ea_catalog.as_ref(), merge_manifest.as_ref(),
         );
 
-        check_cancelled()?;
+        check_scan_cancelled()?;
         emit_package_progress(
             app, started, "Preparing relationship metadata",
             "Keeping large-package loading responsive.", 3, 5, package.files.len(), mmap.len(),
@@ -7890,13 +7908,7 @@ fn scan_package_resources_inner(
         } else if mmap.len() <= MAX_RELATION_ANALYSIS_PACKAGE_BYTES {
             let relations = build_resource_relations_monitored(
                 &package, &name_map, &items,
-                &|_, _| {
-                    check_cancelled()?;
-                    if SCAN_GENERATION.load(Ordering::Acquire) != scan_generation {
-                        return Err("A leitura foi substituída.".to_string());
-                    }
-                    Ok(())
-                },
+                &|_, _| check_scan_cancelled(),
             )?;
             (relations, "complete")
         } else if let Some(relation_app) = app.cloned() {
@@ -7958,10 +7970,10 @@ fn scan_package_resources_inner(
             // Unit tests do not own a Tauri AppHandle; calculate this result
             // synchronously so they still cover relation-analysis behavior.
             (build_resource_relations_monitored(
-                &package, &name_map, &items, &|_, _| check_cancelled(),
+                &package, &name_map, &items, &|_, _| check_scan_cancelled(),
             )?, "complete")
         };
-        check_cancelled()?;
+        check_scan_cancelled()?;
         emit_package_progress(
             app, started, "Ready", "Resource list ready.", 5, 5, package.files.len(), mmap.len(),
         );
