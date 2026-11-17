@@ -9373,8 +9373,7 @@ mod remove_selected_tests {
         let mut metadata = vec![42; 19];
         metadata.extend_from_slice(&thumb_id.to_le_bytes());
         metadata.extend_from_slice(&[1; 24]);
-        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-        png.extend_from_slice(&[7; 45]);
+        let png = valid_preview_png([242, 85, 12, 255]);
         write_test_package(&path, &[
             (TYPE_CASP, 0, casp_id, metadata),
             (TYPE_THUM_LARGE, 0, thumb_id, png.clone()),
@@ -9384,7 +9383,10 @@ mod remove_selected_tests {
         let key = ResourceKeyParts {
             resource_type: TYPE_CASP, resource_group: 0, instance: casp_id,
         };
-        assert_eq!(STANDARD.decode(find_preview_base64(&package, key).unwrap()).unwrap(), png);
+        let converted = STANDARD.decode(find_preview_base64(&package, key).unwrap()).unwrap();
+        let source_pixels = image::load_from_memory(&png).unwrap().to_rgba8();
+        let result_pixels = image::load_from_memory(&converted).unwrap().to_rgba8();
+        assert_eq!(result_pixels, source_pixels);
         drop(package);
         drop(mmap);
         let _ = remove_file(&path);
@@ -9419,10 +9421,8 @@ mod remove_selected_tests {
         std::fs::create_dir_all(&thumbnails).unwrap();
 
         let instance = 0x1234_5678_9ABC_DEF0u64;
-        let mut cas_png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-        cas_png.extend_from_slice(&[1; 32]);
-        let mut object_png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-        object_png.extend_from_slice(&[2; 64]);
+        let cas_png = valid_preview_png([13, 78, 218, 255]);
+        let object_png = valid_preview_png([210, 88, 36, 255]);
 
         write_test_package(
             &thumbnails.join("CASThumbnails.package"),
@@ -9447,8 +9447,13 @@ mod remove_selected_tests {
         let cas_found = external_thumbnail_base64_from_dir(&thumbnails, cas_key).unwrap();
         let object_found = external_thumbnail_base64_from_dir(&thumbnails, object_key).unwrap();
 
-        assert_eq!(STANDARD.decode(cas_found).unwrap(), cas_png);
-        assert_eq!(STANDARD.decode(object_found).unwrap(), object_png);
+        let cas_pixels = image::load_from_memory(&STANDARD.decode(cas_found).unwrap())
+            .unwrap().to_rgba8();
+        let object_pixels = image::load_from_memory(&STANDARD.decode(object_found).unwrap())
+            .unwrap().to_rgba8();
+        assert_eq!(cas_pixels, image::load_from_memory(&cas_png).unwrap().to_rgba8());
+        assert_eq!(object_pixels, image::load_from_memory(&object_png).unwrap().to_rgba8());
+        assert_ne!(cas_pixels, object_pixels, "CAS and object cache priority must differ");
 
         let missing = ResourceKeyParts {
             resource_type: TYPE_CASP,
@@ -9640,6 +9645,14 @@ mod remove_selected_tests {
 
         let _ = remove_file(&source);
         let _ = remove_file(&rebuilt);
+    }
+
+    fn valid_preview_png(rgba: [u8; 4]) -> Vec<u8> {
+        let source = image::RgbaImage::from_pixel(8, 8, image::Rgba(rgba));
+        let mut output = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(source)
+            .write_to(&mut output, image::ImageOutputFormat::Png).unwrap();
+        output.into_inner()
     }
 
     fn test_dir(label: &str) -> PathBuf {
