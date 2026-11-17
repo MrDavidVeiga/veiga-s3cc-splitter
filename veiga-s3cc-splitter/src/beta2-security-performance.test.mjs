@@ -109,3 +109,112 @@ test("duplicate verification controls are localized in PT EN and ES", () => {
   assert.match(app, /state\.relationsStatus !== "skipped"/);
   assert.match(app, /state\.relationAnalysisInProgress/);
 });
+
+test("stale automatic and manual relation results never replace the active scan", () => {
+  const source = between(app, "function applyRelationUpdate(payload) {", "function clearBusy()");
+  const item = { key: "0xA-0xB-0xC", relation: null };
+  const state = {
+    packagePath: "same.package",
+    scanGeneration: 12,
+    relationsStatus: "deferred",
+    relationAnalysisInProgress: false,
+    activeRelationRequestId: null,
+    resources: [item],
+  };
+  const ctx = { state };
+  vm.runInNewContext(source, ctx);
+
+  const updated = { "0xA-0xB-0xC": { duplicateCount: 3 } };
+  const automatic = {
+    packagePath: "same.package", scanGeneration: 11,
+    requestId: null, relations: updated,
+  };
+  assert.equal(ctx.applyRelationUpdate(automatic), false);
+  assert.equal(state.resources[0], item);
+
+  automatic.scanGeneration = 12;
+  assert.equal(ctx.applyRelationUpdate(automatic), true);
+  assert.equal(state.resources[0].relation.duplicateCount, 3);
+
+  state.relationsStatus = "skipped";
+  state.relationAnalysisInProgress = true;
+  state.activeRelationRequestId = 17;
+  const manual = { ...automatic, requestId: 16, relations: {} };
+  assert.equal(ctx.applyRelationUpdate(manual), false);
+  assert.equal(state.resources[0].relation.duplicateCount, 3);
+  manual.requestId = 17;
+  assert.equal(ctx.applyRelationUpdate(manual), true);
+  assert.equal(state.relationsStatus, "complete");
+  assert.equal(state.resources[0].relation, null);
+
+  state.relationAnalysisInProgress = false;
+  assert.equal(ctx.applyRelationUpdate(manual), false);
+  state.scanGeneration = null;
+  assert.equal(ctx.applyRelationUpdate(automatic), false);
+});
+
+test("progress handlers ignore previous requests even when the package path is unchanged", async () => {
+  const source = between(app, "async function setupProgressEvents() {", "void setupProgressEvents();");
+  const callbacks = new Map();
+  const state = {
+    packagePath: "same.package",
+    scanGeneration: 45,
+    activeRelationRequestId: 9,
+    relationAnalysisInProgress: true,
+    relationAnalysisProgress: 0,
+    isBusy: false,
+    language: "en",
+  };
+  let renders = 0;
+  const context = {
+    state,
+    listen: async (name, cb) => { callbacks.set(name, cb); },
+    applyRelationUpdate: () => false,
+    render: () => { renders++; },
+    console,
+    el: {},
+    t: () => "",
+    scanStageMessages: { en: {} },
+    Math,
+    Number,
+  };
+  vm.runInNewContext(source + "\nsetupProgressEvents()", context);
+  // await the three sequential listener registrations
+  for (let n = 0; n < 4; n++) await Promise.resolve();
+  const progress = callbacks.get("package-relations-progress");
+  assert.equal(typeof progress, "function");
+
+  progress({ payload: { packagePath: "same.package", scanGeneration: 44, requestId: 9, percent: 70 } });
+  progress({ payload: { packagePath: "same.package", scanGeneration: 45, requestId: 8, percent: 80 } });
+  assert.equal(state.relationAnalysisProgress, 0);
+  assert.equal(renders, 0);
+  progress({ payload: { packagePath: "same.package", scanGeneration: 45, requestId: 9, percent: 25 } });
+  assert.equal(state.relationAnalysisProgress, 25);
+  assert.equal(renders, 1);
+});
+
+test("Rust request IDs and cancellation are correlated, including cancel-before-start", () => {
+  assert.match(backend, /pub struct RelationCancelPayload/);
+  assert.match(backend, /scan_generation: u64,\s*pub request_id: u64/);
+  assert.match(backend, /cancelled_before_start\.insert\(id\)/);
+  assert.match(backend, /cancelled_before_start\.remove\(&id\)/);
+  assert.match(backend, /operations\.active == Some\(id\)/);
+  assert.match(backend, /request_id: Some\(payload\.request_id\)/);
+  assert.match(backend, /request_id: None/);
+  assert.match(backend, /scan_generation: relation_generation/);
+  assert.match(app, /payload\.scanGeneration !== state\.scanGeneration/);
+  assert.match(app, /payload\.requestId !== state\.activeRelationRequestId/);
+  assert.match(app, /payload: \{ requestId, scanGeneration \}/);
+  assert.match(app, /packagePath: requestedPath, scanGeneration, requestId: token/);
+});
+
+test("expensive comparison loops cooperatively check for cancellation", () => {
+  for (const name of ["relation_tgi_index", "relation_entries_have_same_payload",
+    "relation_tgi_conflicts", "logical_profile_for_item", "logical_profiles_exactly_equal"]) {
+    const start = backend.indexOf("fn " + name + "<F>");
+    assert.ok(start >= 0, name + " must be instrumented");
+    const remainder = backend.slice(start, start + 3400);
+    assert.match(remainder, /checkpoint\(\)\?/);
+  }
+  assert.match(backend, /build_resource_relations_monitored\([\s\S]*?Análise automática substituída ou cancelada/);
+});
