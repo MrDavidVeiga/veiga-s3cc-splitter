@@ -108,9 +108,28 @@ jobs:
             </dependency>
           </assembly>
           '@ | Set-Content -LiteralPath $manifestPath -Encoding utf8
-          $tests = @(Get-ChildItem -LiteralPath 'target\debug\deps' -Filter 'veiga_s3cc_splitter*.exe' -File)
-          if ($tests.Count -eq 0) { throw 'No compiled Rust test executable found' }
+          # Cargo can place Tauri test harnesses under target/debug/build/*/out
+          # rather than target/debug/deps, depending on workspace configuration.
+          # Resolve the actual target directory instead of assuming the CI cwd.
+          $cargoMetadata = cargo metadata --locked --format-version 1 --no-deps | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $cargoMetadata.target_directory) {
+            throw 'Cannot determine Cargo target directory'
+          }
+          $targetDir = $cargoMetadata.target_directory
+          if (-not (Test-Path -LiteralPath $targetDir -PathType Container)) {
+            throw "Cargo target directory not found: $targetDir"
+          }
+          $tests = @(Get-ChildItem -LiteralPath $targetDir -Filter 'veiga_s3cc_splitter*.exe' -File -Recurse |
+            Where-Object {
+              $_.FullName -match '[\\/]debug[\\/]' -and
+              $_.FullName -match '[\\/](deps|out)[\\/]'
+            })
+          if ($tests.Count -eq 0) {
+            throw "No compiled Tauri test harness found below $targetDir"
+          }
+          Write-Host "Found $($tests.Count) Tauri test executable(s) under $targetDir"
           foreach ($exe in $tests) {
+            Write-Host "Embedding v6 Common Controls into $($exe.FullName)"
             & $mt.FullName '-nologo' '-manifest' $manifestPath "-outputresource:$($exe.FullName);#1"
             if ($LASTEXITCODE -ne 0) { throw "Manifest embed failed: $($exe.Name)" }
           }
@@ -151,7 +170,11 @@ jobs:
       - name: Verify candidate and record SHA-256
         shell: pwsh
         run: |
-          $binary = Join-Path $PWD 'target\release\veiga-s3cc-splitter.exe'
+          $cargoMetadata = cargo metadata --locked --format-version 1 --no-deps | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $cargoMetadata.target_directory) {
+            throw 'Cannot determine Cargo target directory for portable build'
+          }
+          $binary = Join-Path $cargoMetadata.target_directory 'release\veiga-s3cc-splitter.exe'
           if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
             throw "Expected executable not found: $binary"
           }
