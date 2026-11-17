@@ -76,6 +76,8 @@ static SCAN_GENERATION: AtomicU64 = AtomicU64::new(0);
 static RELATION_ANALYSIS_GENERATION: AtomicU64 = AtomicU64::new(0);
 static RELATION_ANALYSIS_CANCELLED: AtomicBool = AtomicBool::new(false);
 static PREVIEW_CACHE: OnceLock<Mutex<Option<PreviewCacheEntry>>> = OnceLock::new();
+// A newer preview supersedes worker requests still waiting to run.
+static PREVIEW_REQUEST_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 struct PreviewCacheEntry {
     // The DBPF borrows the memory map; declaration order keeps the DBPF
@@ -8019,9 +8021,15 @@ pub async fn get_resource_preview_async(
     app: AppHandle,
     payload: PreviewPayload,
 ) -> Result<PreviewResult, String> {
-    tauri::async_runtime::spawn_blocking(move || get_resource_preview(app, payload))
-        .await
-        .map_err(|error| format!("Falha ao preparar a pré-visualização: {error}"))?
+    let generation = PREVIEW_REQUEST_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    tauri::async_runtime::spawn_blocking(move || {
+        if PREVIEW_REQUEST_GENERATION.load(Ordering::Acquire) != generation {
+            return Err("Pré-visualização substituída por outra seleção.".to_string());
+        }
+        get_resource_preview(app, payload)
+    })
+    .await
+    .map_err(|error| format!("Falha ao preparar a pré-visualização: {error}"))?
 }
 
 #[tauri::command]
