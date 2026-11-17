@@ -9472,6 +9472,101 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn list_thumbnail_ignores_img_imag_and_preserves_full_preview() {
+        let path = test_path("strict-list-thumb-reject-images");
+        let instance = 0xBA11_0000_0000_1234u64;
+        let png = valid_preview_png([230, 40, 70, 255]);
+        write_test_package(&path, &[
+            (TYPE_CASP, 0, instance, vec![0; 24]),
+            (TYPE_IMG, 0, instance, png.clone()),
+            (TYPE_IMAG_PNG, 0, instance, png),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let key = ResourceKeyParts { resource_type: TYPE_CASP, resource_group: 0, instance };
+
+        assert!(embedded_resource_thumbnail(&package, key, 96).is_none(),
+            "IMG/IMAG must not supply the virtual-list thumbnail");
+        assert!(find_preview_base64(&package, key).is_some(),
+            "Full selected-item preview must keep its IMG/IMAG support");
+
+        drop(package);
+        drop(mmap);
+        let _ = remove_file(&path);
+    }
+
+    #[test]
+    fn list_thumbnail_prefers_linked_thum_over_img_and_accepts_icon_variants() {
+        let path = test_path("strict-list-thumb-linked");
+        let casp_instance = 0xA111_2222_3333_4444u64;
+        let thumb_instance = 0xB111_2222_3333_4444u64;
+        let thumb = valid_preview_png([10, 160, 85, 255]);
+        let texture = valid_preview_png([210, 30, 170, 255]);
+        let mut metadata = vec![4; 32];
+        metadata.extend_from_slice(&thumb_instance.to_le_bytes());
+        metadata.extend_from_slice(&[2; 16]);
+        write_test_package(&path, &[
+            (TYPE_CASP, 0, casp_instance, metadata),
+            (TYPE_IMG, 0, thumb_instance, texture),
+            (TYPE_THUM_MED, 0, thumb_instance, thumb.clone()),
+            (0x2E75C764, 0, 0x9999, valid_preview_png([25, 60, 240, 255])),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let casp_key = ResourceKeyParts {
+            resource_type: TYPE_CASP, resource_group: 0, instance: casp_instance,
+        };
+        let rendered = STANDARD.decode(
+            embedded_resource_thumbnail(&package, casp_key, 96).expect("Linked THUM missing")
+        ).unwrap();
+        assert_eq!(
+            image::load_from_memory(&rendered).unwrap().to_rgba8(),
+            image::load_from_memory(&thumb).unwrap().to_rgba8(),
+            "IMG texture must not replace a linked THUM"
+        );
+
+        let icon_key = ResourceKeyParts {
+            resource_type: 0x2E75C764, resource_group: 0, instance: 0x9999,
+        };
+        assert!(embedded_resource_thumbnail(&package, icon_key, 96).is_some(),
+            "Small ICON variant must be recognized");
+
+        drop(package);
+        drop(mmap);
+        let _ = remove_file(&path);
+    }
+
+    #[test]
+    fn strict_thumbnail_cache_skips_non_thumb_types() {
+        let root = test_dir("strict-list-thumbnail-cache");
+        let thumbnails = root.join("Thumbnails");
+        std::fs::create_dir_all(&thumbnails).unwrap();
+        let instance = 0x7654_3210_1234_4321u64;
+        let wrong = valid_preview_png([240, 18, 20, 255]);
+        let right = valid_preview_png([25, 180, 70, 255]);
+        write_test_package(&thumbnails.join("CASThumbnails.package"),
+            &[(TYPE_IMG, 1, instance, wrong.clone())]);
+        write_test_package(&thumbnails.join("ObjectThumbnails.package"),
+            &[(TYPE_THUM_LARGE, 1, instance, right.clone())]);
+        let key = ResourceKeyParts {
+            resource_type: TYPE_CASP, resource_group: 0, instance,
+        };
+        let strict = external_thumbnail_base64_from_dir_sized(&thumbnails, key, 96, true)
+            .expect("Strict cache must accept THUM from next cache package");
+        assert_eq!(
+            image::load_from_memory(&STANDARD.decode(strict).unwrap()).unwrap().to_rgba8(),
+            image::load_from_memory(&right).unwrap().to_rgba8()
+        );
+        let unrestricted = external_thumbnail_base64_from_dir_sized(&thumbnails, key, 96, false)
+            .expect("Existing full preview cache behavior must remain");
+        assert_eq!(
+            image::load_from_memory(&STANDARD.decode(unrestricted).unwrap()).unwrap().to_rgba8(),
+            image::load_from_memory(&wrong).unwrap().to_rgba8()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn uses_thumbnail_referenced_by_resource_in_same_package() {
         let path = test_path("embedded-casp-thumb");
         let casp_id = 0x1000_1234_5678_0001u64;
