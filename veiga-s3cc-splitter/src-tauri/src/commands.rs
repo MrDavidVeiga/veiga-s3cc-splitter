@@ -4705,20 +4705,37 @@ fn object_catalog_anchor_tgis(item: &ResourceItem) -> Option<Vec<(u32, u32, u64)
     Some(anchors)
 }
 
-fn relation_hash_pair(data: &[u8]) -> (u64, u64) {
+// Preserve the exact original rolling hash while allowing a user to stop
+// hashing a single unusually large decompressed resource. Data decompression
+// itself is delegated to DBPF and may still run until that resource finishes.
+fn relation_hash_pair_monitored<F>(
+    data: &[u8],
+    checkpoint: &F,
+) -> Result<(u64, u64), String>
+where
+    F: Fn() -> Result<(), String>,
+{
     let mut a = 0xcbf29ce484222325u64;
     let mut b = 0x84222325cbf29ce4u64 ^ data.len() as u64;
+    checkpoint()?;
+    for chunk in data.chunks(1024 * 1024) {
+        checkpoint()?;
+        for &byte in chunk {
+            a ^= byte as u64;
+            a = a.wrapping_mul(0x100000001b3);
 
-    for &byte in data {
-        a ^= byte as u64;
-        a = a.wrapping_mul(0x100000001b3);
-
-        b ^= (byte as u64).wrapping_add(0x9e3779b97f4a7c15);
-        b = b.rotate_left(13).wrapping_mul(0xff51afd7ed558ccd);
-        b ^= b >> 29;
+            b ^= (byte as u64).wrapping_add(0x9e3779b97f4a7c15);
+            b = b.rotate_left(13).wrapping_mul(0xff51afd7ed558ccd);
+            b ^= b >> 29;
+        }
     }
+    checkpoint()?;
+    Ok((a, b))
+}
 
-    (a, b)
+#[cfg(test)]
+fn relation_hash_pair(data: &[u8]) -> (u64, u64) {
+    relation_hash_pair_monitored(data, &|| Ok(())).expect("infallible test hash")
 }
 
 // The optional full verification can run against multi-gigabyte merges.
@@ -4845,17 +4862,22 @@ where
         }
 
         let entry_index = indices[0];
-        let atom_key = *atom_cache.entry(entry_index).or_insert_with(|| {
+        let atom_key = if let Some(existing) = atom_cache.get(&entry_index) {
+            *existing
+        } else {
+            checkpoint()?;
             let data = package.files[entry_index].data();
-            let (hash_a, hash_b) = relation_hash_pair(data);
-            LogicalAtomKey {
+            let (hash_a, hash_b) = relation_hash_pair_monitored(data, checkpoint)?;
+            let computed = LogicalAtomKey {
                 resource_type: parts.resource_type,
                 resource_group: parts.resource_group,
                 data_len: data.len(),
                 hash_a,
                 hash_b,
-            }
-        });
+            };
+            atom_cache.insert(entry_index, computed);
+            computed
+        };
         checkpoint()?;
         atoms.push(LogicalAtom {
             key: atom_key,
@@ -9586,6 +9608,24 @@ mod remove_selected_tests {
         drop(package);
         drop(mmap);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hash_is_unchanged_and_can_cancel_midway_through_large_payload() {
+        let bytes = vec![0x5Au8; 2 * 1024 * 1024 + 35];
+        let expected = relation_hash_pair(&bytes);
+        let actual = relation_hash_pair_monitored(&bytes, &|| Ok(())).unwrap();
+        assert_eq!(actual, expected);
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let error = relation_hash_pair_monitored(&bytes, &|| {
+            if calls.fetch_add(1, Ordering::SeqCst) >= 2 {
+                Err("hash interrupted between MiB chunks".to_string())
+            } else {
+                Ok(())
+            }
+        }).unwrap_err();
+        assert!(error.contains("between MiB chunks"));
+        assert!(calls.load(Ordering::SeqCst) >= 3);
     }
 
     #[test]
