@@ -177,13 +177,14 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or -not $cargoMetadata.target_directory) {
             throw 'Cannot determine Cargo target directory for portable build'
           }
-          $binary = Join-Path $cargoMetadata.target_directory 'release\veiga-s3cc-splitter.exe'
+          $binary = Join-Path $cargoMetadata.target_directory "release\Veiga's S3CC Splitter.exe"
           if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
             throw "Expected executable not found: $binary"
           }
           $folder = Join-Path $PWD 'portable\Beta2-Experimental-Windows-x64'
           New-Item -ItemType Directory -Force -Path $folder | Out-Null
-          Copy-Item -LiteralPath $binary -Destination (Join-Path $folder 'Veiga-S3CC-Splitter-Beta2.exe')
+          Copy-Item -LiteralPath $binary -Destination (Join-Path $folder "Veiga's S3CC Splitter.exe")
+          Copy-Item -LiteralPath 'LICENSE.txt' -Destination (Join-Path $folder 'LICENSE.txt')
           $hash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
           "SHA256: $hash" | Set-Content -LiteralPath (Join-Path $folder 'SHA256.txt')
           @'
