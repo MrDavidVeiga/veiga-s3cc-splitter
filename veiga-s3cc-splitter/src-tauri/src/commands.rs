@@ -75,6 +75,17 @@ static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SCAN_GENERATION: AtomicU64 = AtomicU64::new(0);
 static RELATION_ANALYSIS_GENERATION: AtomicU64 = AtomicU64::new(0);
 static RELATION_ANALYSIS_CANCELLED: AtomicBool = AtomicBool::new(false);
+// Pair every action with the scan and request that originated it. A cancelled
+// request can reach Rust before its async start command, so remember those IDs.
+#[derive(Default)]
+struct RelationOperationState {
+    active: Option<(u64, u64)>,
+    cancelled_before_start: HashSet<(u64, u64)>,
+}
+static RELATION_OPERATIONS: OnceLock<Mutex<RelationOperationState>> = OnceLock::new();
+fn relation_operations() -> &'static Mutex<RelationOperationState> {
+    RELATION_OPERATIONS.get_or_init(|| Mutex::new(RelationOperationState::default()))
+}
 static PREVIEW_CACHE: OnceLock<Mutex<Option<PreviewCacheEntry>>> = OnceLock::new();
 // A newer preview supersedes worker requests still waiting to run.
 static PREVIEW_REQUEST_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -107,6 +118,10 @@ struct PackageProgress {
 #[serde(rename_all = "camelCase")]
 pub struct PackageRelationUpdate {
     package_path: String,
+    scan_generation: u64,
+    // None denotes automatic background analysis associated with a scan.
+    // Some(request_id) denotes the explicit on-demand verification.
+    request_id: Option<u64>,
     relations: BTreeMap<String, ResourceRelation>,
 }
 
@@ -204,6 +219,7 @@ pub struct ResourceRelation {
 #[serde(rename_all = "camelCase")]
 pub struct ScanResult {
     pub items: Vec<ResourceItem>,
+    pub scan_generation: u64,
     pub manifest_package_count: usize,
     pub relations: BTreeMap<String, ResourceRelation>,
     // complete: checked; deferred: checks continue after list rendering;
@@ -215,12 +231,23 @@ pub struct ScanResult {
 #[serde(rename_all = "camelCase")]
 pub struct RelationCheckPayload {
     pub package_path: String,
+    pub scan_generation: u64,
+    pub request_id: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelationCancelPayload {
+    pub scan_generation: u64,
+    pub request_id: u64,
 }
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct RelationCheckProgress {
     package_path: String,
+    scan_generation: u64,
+    request_id: u64,
     percent: u32,
 }
 
@@ -229,9 +256,24 @@ struct RelationCheckProgress {
 // It never writes to the input package and does not use the global Merger
 // cancellation flag.
 #[tauri::command]
-pub fn cancel_package_relation_analysis() {
-    RELATION_ANALYSIS_CANCELLED.store(true, Ordering::Release);
-    RELATION_ANALYSIS_GENERATION.fetch_add(1, Ordering::AcqRel);
+pub fn cancel_package_relation_analysis(payload: RelationCancelPayload) -> Result<(), String> {
+    let id = (payload.scan_generation, payload.request_id);
+    let mut operations = relation_operations()
+        .lock()
+        .map_err(|_| "Controle de verificações indisponível.".to_string())?;
+    if operations.active == Some(id) {
+        operations.active = None;
+        RELATION_ANALYSIS_CANCELLED.store(true, Ordering::Release);
+        RELATION_ANALYSIS_GENERATION.fetch_add(1, Ordering::AcqRel);
+    } else {
+        // Invokes can be processed out of order: cancellation must still win
+        // if it arrives before a queued start. Bound memory for stale IDs.
+        if operations.cancelled_before_start.len() >= 128 {
+            operations.cancelled_before_start.clear();
+        }
+        operations.cancelled_before_start.insert(id);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -239,14 +281,27 @@ pub async fn analyze_package_relations_async(
     app: AppHandle,
     payload: RelationCheckPayload,
 ) -> Result<PackageRelationUpdate, String> {
-    let generation = RELATION_ANALYSIS_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
-    RELATION_ANALYSIS_CANCELLED.store(false, Ordering::Release);
-    let active_scan = SCAN_GENERATION.load(Ordering::Acquire);
-    tauri::async_runtime::spawn_blocking(move || {
+    let id = (payload.scan_generation, payload.request_id);
+    let generation = {
+        let mut operations = relation_operations()
+            .lock()
+            .map_err(|_| "Controle de verificações indisponível.".to_string())?;
+        if operations.cancelled_before_start.remove(&id) {
+            return Err("Verificação de duplicatas cancelada.".to_string());
+        }
+        if payload.scan_generation != SCAN_GENERATION.load(Ordering::Acquire) {
+            return Err("Verificação referente a uma leitura anterior.".to_string());
+        }
+        operations.active = Some(id);
+        RELATION_ANALYSIS_CANCELLED.store(false, Ordering::Release);
+        RELATION_ANALYSIS_GENERATION.fetch_add(1, Ordering::AcqRel) + 1
+    };
+
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let check = || -> Result<(), String> {
             if RELATION_ANALYSIS_CANCELLED.load(Ordering::Acquire)
                 || RELATION_ANALYSIS_GENERATION.load(Ordering::Acquire) != generation
-                || SCAN_GENERATION.load(Ordering::Acquire) != active_scan
+                || SCAN_GENERATION.load(Ordering::Acquire) != payload.scan_generation
             {
                 return Err("Verificação de duplicatas cancelada.".to_string());
             }
@@ -260,6 +315,7 @@ pub async fn analyze_package_relations_async(
         let package = parse_package(&mmap)?;
         check()?;
         let name_map = package_resource_names(&package);
+        check()?;
         let ea_catalog = EaSkinCatalog::load_for_package(Path::new(path));
         let manifest = read_valid_merge_manifest_from_dbpf(&package);
         check()?;
@@ -278,6 +334,8 @@ pub async fn analyze_package_relations_async(
                         "package-relations-progress",
                         RelationCheckProgress {
                             package_path: payload.package_path.clone(),
+                            scan_generation: payload.scan_generation,
+                            request_id: payload.request_id,
                             percent,
                         },
                     );
@@ -288,11 +346,21 @@ pub async fn analyze_package_relations_async(
         check()?;
         Ok(PackageRelationUpdate {
             package_path: payload.package_path,
+            scan_generation: payload.scan_generation,
+            request_id: Some(payload.request_id),
             relations,
         })
     })
     .await
-    .map_err(|e| format!("Falha ao executar a verificação: {e}"))?
+    .map_err(|e| format!("Falha ao executar a verificação: {e}"))?;
+
+    // Do not clear the newer operation if the user started a replacement.
+    if let Ok(mut operations) = relation_operations().lock() {
+        if operations.active == Some(id) {
+            operations.active = None;
+        }
+    }
+    result
 }
 
 #[derive(Debug, Deserialize)]
@@ -7742,6 +7810,8 @@ fn scan_package_resources_inner(
                             "package-relations",
                             PackageRelationUpdate {
                                 package_path: relation_path,
+                                scan_generation: relation_generation,
+                                request_id: None,
                                 relations,
                             },
                         );
@@ -7765,6 +7835,7 @@ fn scan_package_resources_inner(
 
         Ok(ScanResult {
             items,
+            scan_generation,
             manifest_package_count,
             relations,
             relations_status: relations_status.to_string(),
