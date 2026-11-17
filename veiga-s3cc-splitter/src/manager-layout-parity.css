@@ -320,6 +320,10 @@ html[data-theme-choice] body.release-v1 #app-modal .app-modal-message {
   white-space:pre-line;
   overflow-wrap:anywhere;
 }
+html[data-theme-choice] body.release-v1 #app-modal .app-modal-emphasis {
+  font-weight:700;
+  color:var(--fluent-text-primary);
+}
 html[data-theme-choice] body.release-v1 #app-modal .app-modal-icon {
   display:grid;
   place-items:center;
