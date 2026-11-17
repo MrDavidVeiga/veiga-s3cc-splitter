@@ -28,9 +28,9 @@ test("Beta 1 nonblocking first preview is preserved without removing Beta 2 cach
   assert.doesNotMatch(scan, /await loadPreview\(/);
   assert.ok(scan.indexOf("clearBusy()") < scan.indexOf("void loadPreview(firstVisible)"));
   assert.match(backend, /pub async fn get_resource_preview_async\(/);
-  assert.match(backend, /PREVIEW_REQUEST_GENERATION\\.fetch_add/);
-  assert.match(backend, /get_resource_preview\\(app, payload\\)/);
-  assert.match(app, /setTimeout\\(resolve, 45\\)/);
+  assert.match(backend, /PREVIEW_REQUEST_GENERATION\.fetch_add/);
+  assert.match(backend, /get_resource_preview\(app, payload\)/);
+  assert.match(app, /setTimeout\(resolve, 45\)/);
   assert.match(lib, /commands::get_resource_preview_async,/);
   assert.match(app, /invoke\("get_resource_preview_async"/);
   assert.match(backend, /build_preview_cache\(&path\)/);
