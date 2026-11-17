@@ -145,7 +145,11 @@
             <div class="results-header">
               <div>
                 <div id="results-title" class="state-title">Resources</div>
-                <div id="results-summary" class="state-subtitle">No package loaded.</div>
+                <div id="results-summary" class="state-subtitle" aria-live="polite">No package loaded.</div>
+                <div class="relation-check-controls">
+                  <button id="relation-analyze-btn" class="secondary-btn hidden" type="button">Verify Duplicates</button>
+                  <button id="relation-cancel-btn" class="secondary-btn hidden" type="button">Cancel Check</button>
+                </div>
               </div>
               <div class="selected-pill"><span id="selected-count">0 selected</span></div>
             </div>
