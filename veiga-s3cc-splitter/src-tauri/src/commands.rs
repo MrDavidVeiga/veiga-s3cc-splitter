@@ -3462,7 +3462,7 @@ fn find_preview_base64_with_size(
         }
     }
 
-    // 5) TS3 textures: PNG/JPEG/DDS and RLE-compressed TGA.
+    // 5) TS3 textures: PNG/DDS and RLE-compressed TGA.
     encode_best_preview(
         package.entries_for_instance(key.instance).iter()
             .filter_map(|&index| package.files.get(index))
