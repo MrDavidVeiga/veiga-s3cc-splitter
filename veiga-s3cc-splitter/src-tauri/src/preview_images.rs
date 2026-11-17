@@ -15,7 +15,7 @@ pub enum PreviewHint {
 }
 
 fn select_format(data: &[u8], hint: Option<PreviewHint>) -> Option<image::ImageFormat> {
-    if data.starts_with(b"\\x89PNG\\r\\n\\x1a\\n") {
+    if data.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some(image::ImageFormat::Png)
     } else if data.starts_with(b"DDS ") {
         Some(image::ImageFormat::Dds)
