@@ -6814,6 +6814,7 @@ name = "veiga-s3cc-splitter"
 version = "2.1.0"
 dependencies = [
  "base64 0.22.1",
+ "image 0.24.9",
   "memmap 0.7.0",
  "num-traits",
  "rayon",
