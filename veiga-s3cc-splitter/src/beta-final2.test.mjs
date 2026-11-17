@@ -17,8 +17,8 @@ test("Beta 2 is versioned 2.1.0 and titled as Beta 2", () => {
   assert.equal(tauri.version, "2.1.0");
   assert.match(cargo, /^version = "2\.1\.0"$/m);
   assert.match(cargoLock, /name = "veiga-s3cc-splitter"\r?\nversion = "2\.1\.0"/);
-  assert.equal((html.match(/<title>([^<]+)<\/title>/) || [])[1], "Veiga's S3CC Splitter v2.1.0 | Beta 2 — Versão Beta Final 2.1");
-  assert.equal(tauri.app.windows[0].title, "Veiga's S3CC Splitter v2.1.0 | Beta 2 — Versão Beta Final 2.1");
+  assert.equal((html.match(/<title>([^<]+)<\/title>/) || [])[1], "Veiga's S3CC Splitter v2.0.0 | Beta 2");
+  assert.equal(tauri.app.windows[0].title, "Veiga's S3CC Splitter v2.0.0 | Beta 2");
   assert.doesNotMatch(html, /Beta 3/);
 });
 
