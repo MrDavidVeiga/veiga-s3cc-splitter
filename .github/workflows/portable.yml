@@ -203,7 +203,7 @@ jobs:
           $out = Join-Path $PWD 'portable/${{ matrix.artifact_name }}'
           $stage = Join-Path $env:RUNNER_TEMP 'S3CC-Beta2'
           New-Item -ItemType Directory -Force -Path $out, $stage | Out-Null
-          Copy-Item -LiteralPath '${{ steps.locate_windows.outputs.artifact_path }}' -Destination (Join-Path $stage "Veiga's S3CC Splitter.exe")
+          Copy-Item -LiteralPath "${{ steps.locate_windows.outputs.artifact_path }}" -Destination (Join-Path $stage "Veiga's S3CC Splitter.exe")
           Copy-Item -LiteralPath 'LICENSE.txt' -Destination (Join-Path $stage 'LICENSE.txt')
           Copy-Item -LiteralPath 'README.txt' -Destination (Join-Path $stage 'README.txt')
           $archive = Join-Path $out '${{ matrix.artifact_name }}.zip'
