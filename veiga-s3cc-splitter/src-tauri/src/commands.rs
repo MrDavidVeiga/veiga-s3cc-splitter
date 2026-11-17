@@ -3258,11 +3258,24 @@ fn is_valid_png(data: &[u8]) -> bool {
     data.len() >= 8 && data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
 }
 
-fn encode_best_preview(entries: impl Iterator<Item = (usize, Vec<u8>)>) -> Option<String> {
-    entries
-        .filter_map(|(size, data)| is_valid_png(&data).then_some((size, STANDARD.encode(&data))))
-        .max_by_key(|(size, _)| *size)
-        .map(|(_, b64)| b64)
+fn encode_preview_image(data: &[u8], resource_type: u32, edge: u32) -> Option<String> {
+    let hint = (resource_type == TYPE_IMAG_TGA).then_some(crate::preview_images::PreviewHint::Tga);
+    crate::preview_images::preview_png(data, hint, edge)
+        .map(|png| STANDARD.encode(png))
+}
+
+fn encode_best_preview<'a>(
+    entries: impl Iterator<Item = (u32, &'a [u8])>,
+    edge: u32,
+) -> Option<String> {
+    // Prefer higher-resolution candidates but decode only until the first
+    // valid image. Avoid copying multiple potentially huge DDS payloads.
+    let mut candidates: Vec<_> = entries
+        .filter(|(_, data)| !data.is_empty() && data.len() <= 32 * 1024 * 1024)
+        .collect();
+    candidates.sort_by_key(|(_, data)| std::cmp::Reverse(data.len()));
+    candidates.into_iter()
+        .find_map(|(resource_type, data)| encode_preview_image(data, resource_type, edge))
 }
 
 fn parse_thumbnail_triplet(value: &str) -> Option<ResourceKeyParts> {
@@ -3359,7 +3372,11 @@ fn object_manifest_icon_ref(package: &DBPF<'_>, key: ResourceKeyParts) -> Option
 
 // Resolve thumbnail references within this package's resource metadata,
 // rather than borrowing an unrelated thumbnail or showing a stock preview.
-fn linked_embedded_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> Option<String> {
+fn linked_embedded_preview_base64(
+    package: &DBPF<'_>,
+    key: ResourceKeyParts,
+    edge: u32,
+) -> Option<String> {
     if !matches!(
         key.resource_type,
         TYPE_CASP | TYPE_FACE | TYPE_SKINTONE | TYPE_PATTERN | TYPE_XML
@@ -3377,8 +3394,6 @@ fn linked_embedded_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> 
     for window in data.windows(8) {
         let instance = u64::from_le_bytes(window.try_into().ok()?);
         let matches = package.entries_for_instance(instance);
-        // Most sliding 8-byte windows do not identify any real resource:
-        // don't allocate an entry in the set for those false candidates.
         if matches.is_empty() || !seen.insert(instance) { continue; }
         for &candidate_index in matches {
             let Some(entry) = package.files.get(candidate_index) else { continue };
@@ -3386,99 +3401,100 @@ fn linked_embedded_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> 
                 entry.resource_type, TYPE_THUM_SMALL | TYPE_THUM_MED | TYPE_THUM_LARGE
                     | 0x0580A2B4 | 0x0580A2B5 | 0x0580A2B6 | TYPE_ICON
             );
-            let is_image = matches!(entry.resource_type, TYPE_IMG | TYPE_IMAG_PNG);
-            if !(is_thumb || is_image) || !is_valid_png(entry.data()) { continue; }
-            let bytes = entry.data().to_vec();
-            if is_thumb { thumbs.push((bytes.len(), bytes)); }
-            else { images.push((bytes.len(), bytes)); }
+            let is_image = matches!(entry.resource_type,
+                TYPE_IMG | TYPE_IMAG_JPG | TYPE_IMAG_PNG | TYPE_IMAG_TGA);
+            if !(is_thumb || is_image) { continue; }
+            let bytes = entry.data();
+            if is_thumb { thumbs.push((entry.resource_type, bytes)); }
+            else { images.push((entry.resource_type, bytes)); }
         }
         if thumbs.len() >= 16 || images.len() >= 16 { break; }
     }
-    encode_best_preview(thumbs.into_iter())
-        .or_else(|| encode_best_preview(images.into_iter()))
+    encode_best_preview(thumbs.into_iter(), edge)
+        .or_else(|| encode_best_preview(images.into_iter(), edge))
 }
 
 fn find_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> Option<String> {
+    find_preview_base64_with_size(package, key, 320)
+}
+
+fn find_preview_base64_with_size(
+    package: &DBPF<'_>,
+    key: ResourceKeyParts,
+    edge: u32,
+) -> Option<String> {
     let thum_types = [
-        TYPE_THUM_SMALL,
-        TYPE_THUM_MED,
-        TYPE_THUM_LARGE,
-        0x0580A2B4,
-        0x0580A2B5,
-        0x0580A2B6,
+        TYPE_THUM_SMALL, TYPE_THUM_MED, TYPE_THUM_LARGE,
+        0x0580A2B4, 0x0580A2B5, 0x0580A2B6,
     ];
 
-    // 1) THUM com a mesma instance do recurso selecionado
+    // 1) Embedded THUM with the same instance.
     if let Some(b64) = encode_best_preview(
         package.entries_for_instance(key.instance).iter()
             .filter_map(|&index| package.files.get(index))
-            .filter(|entry| {
-                thum_types.contains(&entry.resource_type)
-                    || (resource_is_png(entry.resource_type)
-                        && matches!(
-                            entry.resource_type,
-                            TYPE_THUM_SMALL | TYPE_THUM_MED | TYPE_THUM_LARGE
-                        ))
-            })
-            .map(|entry| (entry.data().len(), entry.data().to_vec())),
-    ) {
-        return Some(b64);
-    }
+            .filter(|entry| thum_types.contains(&entry.resource_type))
+            .map(|entry| (entry.resource_type, entry.data())),
+        edge,
+    ) { return Some(b64); }
 
-    // 2) Se o próprio recurso selecionado for ICON, usar ele diretamente
+    // 2) A selected ICON can be previewed directly.
     if key.resource_type == TYPE_ICON {
         if let Some(entry) = package.entry_index(TYPE_ICON, key.resource_group, key.instance)
             .and_then(|index| package.files.get(index)) {
-            let data = entry.data();
-            if is_valid_png(data) {
-                return Some(STANDARD.encode(data));
+            if let Some(b64) = encode_preview_image(entry.data(), TYPE_ICON, edge) {
+                return Some(b64);
             }
         }
     }
 
-    // 3) ICON com a mesma instance do recurso selecionado
+    // 3) ICON with matching instance.
     if let Some(b64) = encode_best_preview(
-        package
-            .files
-            .iter()
-            .filter(|entry| entry.resource_type == TYPE_ICON && entry.instance == key.instance)
-            .map(|entry| (entry.data().len(), entry.data().to_vec())),
-    ) {
-        return Some(b64);
-    }
+        package.entries_for_instance(key.instance).iter()
+            .filter_map(|&index| package.files.get(index))
+            .filter(|entry| entry.resource_type == TYPE_ICON)
+            .map(|entry| (entry.resource_type, entry.data())),
+        edge,
+    ) { return Some(b64); }
 
-    // 4) ICON apontado por manifest / XML de objeto
+    // 4) ICON referenced by the object's metadata/manifest.
     if let Some(icon) = object_manifest_icon_ref(package, key) {
         if let Some(entry) = package.entry_index(icon.resource_type, icon.resource_group, icon.instance)
             .and_then(|index| package.files.get(index)) {
-            let data = entry.data();
-            if is_valid_png(data) {
-                return Some(STANDARD.encode(data));
+            if let Some(b64) = encode_preview_image(entry.data(), icon.resource_type, edge) {
+                return Some(b64);
             }
         }
     }
 
-    // 5) IMG / IMAG (skin e afins)
+    // 5) TS3 textures: PNG/JPEG/DDS and RLE-compressed TGA.
     encode_best_preview(
         package.entries_for_instance(key.instance).iter()
             .filter_map(|&index| package.files.get(index))
-            .filter(|entry| {
-                matches!(
-                    entry.resource_type,
-                    TYPE_IMG | TYPE_IMAG_JPG | TYPE_IMAG_PNG | TYPE_IMAG_TGA
-                )
-            })
-            .map(|entry| (entry.data().len(), entry.data().to_vec())),
-    ).or_else(|| linked_embedded_preview_base64(package, key))
+            .filter(|entry| matches!(entry.resource_type,
+                TYPE_IMG | TYPE_IMAG_JPG | TYPE_IMAG_PNG | TYPE_IMAG_TGA))
+            .map(|entry| (entry.resource_type, entry.data())),
+        edge,
+    ).or_else(|| linked_embedded_preview_base64(package, key, edge))
 }
 
-fn sims3_thumbnails_dir(app: &AppHandle) -> Option<PathBuf> {
-    let documents = app.path().document_dir().ok()?;
-    let path = documents
-        .join("Electronic Arts")
-        .join("The Sims 3")
-        .join("Thumbnails");
-    path.is_dir().then_some(path)
+// The game keeps its cache filenames in English, but the user folder varies
+// by installed locale. Use the OS Documents API rather than a literal path.
+fn thumbnail_directory_candidates(documents: &Path) -> Vec<PathBuf> {
+    const NAMES: &[&str] = &[
+        "The Sims 3", "Os Sims 3", "Los Sims 3", "Les Sims 3",
+        "Die Sims 3", "I Sims 3", "De Sims 3", "Sims 3",
+    ];
+    NAMES.iter()
+        .map(|name| documents.join("Electronic Arts").join(name).join("Thumbnails"))
+        .collect()
+}
+
+fn sims3_thumbnails_dirs(app: &AppHandle) -> Vec<PathBuf> {
+    let Ok(documents) = app.path().document_dir() else { return Vec::new() };
+    thumbnail_directory_candidates(&documents)
+        .into_iter()
+        .filter(|candidate| candidate.is_dir())
+        .collect()
 }
 
 fn thumbnail_cache_file_order(resource_type: u32) -> [&'static str; 3] {
@@ -3494,35 +3510,37 @@ fn thumbnail_cache_file_order(resource_type: u32) -> [&'static str; 3] {
     }
 }
 
-fn thumbnail_from_cache_package(path: &Path, instance: u64) -> Option<String> {
-    // Large Sims 3 thumbnail caches can be several gigabytes. Use a memory map
-    // instead of allocating a full heap copy for the automatic first preview.
+fn thumbnail_from_cache_package(path: &Path, instance: u64, edge: u32) -> Option<String> {
+    // Cache packages can be gigabytes: mmap, then find only matching indices.
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if !path.is_file() {
-            return None;
-        }
+        if !path.is_file() { return None; }
         let file = File::open(path).ok()?;
         let mmap = unsafe { Mmap::map(&file).ok()? };
         let package = DBPF::new(&mmap[..]).ok()?;
         encode_best_preview(
-            package
-                .files
-                .iter()
-                .filter(|entry| entry.instance == instance)
-                .map(|entry| (entry.data().len(), entry.data().to_vec())),
+            package.entries_for_instance(instance).iter()
+                .filter_map(|&index| package.files.get(index))
+                .map(|entry| (entry.resource_type, entry.data())),
+            edge,
         )
-    }))
-    .ok()
-    .flatten()
+    })).ok().flatten()
 }
 
 fn external_thumbnail_base64_from_dir(
     thumbnails_dir: &Path,
     key: ResourceKeyParts,
 ) -> Option<String> {
+    external_thumbnail_base64_from_dir_sized(thumbnails_dir, key, 320)
+}
+
+fn external_thumbnail_base64_from_dir_sized(
+    thumbnails_dir: &Path,
+    key: ResourceKeyParts,
+    edge: u32,
+) -> Option<String> {
     for file_name in thumbnail_cache_file_order(key.resource_type) {
         if let Some(preview) =
-            thumbnail_from_cache_package(&thumbnails_dir.join(file_name), key.instance)
+            thumbnail_from_cache_package(&thumbnails_dir.join(file_name), key.instance, edge)
         {
             return Some(preview);
         }
@@ -3530,9 +3548,13 @@ fn external_thumbnail_base64_from_dir(
     None
 }
 
-fn external_thumbnail_base64(app: &AppHandle, key: ResourceKeyParts) -> Option<String> {
-    let thumbnails_dir = sims3_thumbnails_dir(app)?;
-    external_thumbnail_base64_from_dir(&thumbnails_dir, key)
+fn external_thumbnail_base64(app: &AppHandle, key: ResourceKeyParts, edge: u32) -> Option<String> {
+    for thumbnails_dir in sims3_thumbnails_dirs(app) {
+        if let Some(preview) = external_thumbnail_base64_from_dir_sized(&thumbnails_dir, key, edge) {
+            return Some(preview);
+        }
+    }
+    None
 }
 
 fn pose_list_preview_base64(package: &DBPF<'_>, text: &str) -> Option<String> {
