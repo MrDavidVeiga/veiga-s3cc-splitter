@@ -1,12 +1,99 @@
-name: portable
+name: Portable Builds
 
-run-name: portable by @${{ github.actor }}
+run-name: Eight-target native original Splitter v1.0.0 by @${{ github.actor }}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 on:
+  push:
+    branches:
+      - "build/v1.0.0"
+    paths:
+      - ".github/workflows/portable.yml"
+      - ".github/scripts/build-linux-i386.sh"
+      - "veiga-s3cc-splitter/**"
+      - "sims3-core/**"
+      - "sims3-pack/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
   workflow_dispatch:
 
 jobs:
+  linux-i386-preflight:
+    name: Linux x86 - compile and package first
+    runs-on: ubuntu-22.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Verify Docker for native Debian i386 compilation
+        shell: bash
+        run: docker version
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: veiga-s3cc-splitter/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: veiga-s3cc-splitter
+        run: npm ci
+
+      - name: Run full JavaScript regressions
+        working-directory: veiga-s3cc-splitter
+        run: node --test
+
+      - name: Build and validate Linux i386 ELF with verified native libraries
+        shell: bash
+        run: bash .github/scripts/build-linux-i386.sh
+      - name: Locate Linux ELF binary
+        id: locate_unix
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          file_path="$(find target -type f -name "Veiga's S3CC Splitter" ! -path "*/bundle/*" | grep "/release/" | head -n 1 || true)"
+
+          if [ -z "$file_path" ]; then
+            echo "Files found in target:"
+            find target -type f | sort || true
+            exit 1
+          fi
+
+          echo "artifact_path=$file_path" >> "$GITHUB_OUTPUT"
+
+      - name: Package Linux ELF and preserve executable permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$(mktemp -d)"
+          out="portable/S3CC-Splitter-v1.0.0-Linux-x86"
+          mkdir -p "$out"
+          cp "${{ steps.locate_unix.outputs.artifact_path }}" "$stage/Veiga's S3CC Splitter"
+          chmod 755 "$stage/Veiga's S3CC Splitter"
+          cp LICENSE.txt README.txt "$stage/"
+          tar -czf "$out/S3CC-Splitter-v1.0.0-Linux-x86.tar.gz" -C "$stage" .
+          (cd "$out" && sha256sum 'S3CC-Splitter-v1.0.0-Linux-x86.tar.gz' > SHA256.txt)
+
+      - name: Upload complete portable package
+        uses: actions/upload-artifact@v6
+        with:
+          name: S3CC-Splitter-v1.0.0-Linux-x86
+          path: portable/S3CC-Splitter-v1.0.0-Linux-x86/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
   build-portable:
+    needs: linux-i386-preflight
+    name: ${{ matrix.artifact_name }}
+
     strategy:
       fail-fast: false
       matrix:
@@ -14,34 +101,56 @@ jobs:
           - platform: windows-2022
             target: ""
             build_args: --no-bundle
-            binary_name: veiga-s3cc-splitter.exe
-            artifact_name: windows-portable-exe
+            binary_name: "Veiga's S3CC Splitter.exe"
+            artifact_name: S3CC-Splitter-v1.0.0-Windows-x64
+
+          - platform: windows-2022
+            target: i686-pc-windows-msvc
+            build_args: --target i686-pc-windows-msvc --no-bundle
+            binary_name: "Veiga's S3CC Splitter.exe"
+            artifact_name: S3CC-Splitter-v1.0.0-Windows-x86
+
+          - platform: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            build_args: --target aarch64-pc-windows-msvc --no-bundle
+            binary_name: "Veiga's S3CC Splitter.exe"
+            artifact_name: S3CC-Splitter-v1.0.0-Windows-ARM64
 
           - platform: ubuntu-22.04
             target: ""
             build_args: --no-bundle
-            binary_name: veiga-s3cc-splitter
-            artifact_name: linux-portable-binary
+            binary_name: "Veiga's S3CC Splitter"
+            artifact_name: S3CC-Splitter-v1.0.0-Linux-x64
+
+          - platform: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            build_args: --target aarch64-unknown-linux-gnu --no-bundle
+            binary_name: "Veiga's S3CC Splitter"
+            artifact_name: S3CC-Splitter-v1.0.0-Linux-ARM64
 
           - platform: macos-15-intel
             target: x86_64-apple-darwin
-            build_args: --target x86_64-apple-darwin --no-bundle
-            binary_name: veiga-s3cc-splitter
-            artifact_name: macos-intel-portable-binary
+            build_args: --target x86_64-apple-darwin --bundles app
+            binary_name: "Veiga's S3CC Splitter"
+            artifact_name: S3CC-Splitter-v1.0.0-macOS-Intel
 
           - platform: macos-15
             target: aarch64-apple-darwin
-            build_args: --target aarch64-apple-darwin --no-bundle
-            binary_name: veiga-s3cc-splitter
-            artifact_name: macos-apple-silicon-portable-binary
+            build_args: --target aarch64-apple-darwin --bundles app
+            binary_name: "Veiga's S3CC Splitter"
+            artifact_name: S3CC-Splitter-v1.0.0-macOS-Apple-Silicon
 
     runs-on: ${{ matrix.platform }}
 
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
     steps:
-      - uses: actions/checkout@v5
+      - name: Checkout
+        uses: actions/checkout@v5
 
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu') && matrix.target != 'i686-unknown-linux-gnu'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -53,48 +162,67 @@ jobs:
             libxdo-dev \
             libssl-dev \
             libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf
+            librsvg2-dev
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v5
         with:
           node-version: lts/*
           cache: npm
           cache-dependency-path: veiga-s3cc-splitter/package-lock.json
 
-      - name: Install Rust stable
+      - name: Install Rust toolchain (macOS uses Rust 1.99 for objc2 0.4 compatibility)
+        if: matrix.target == ''
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ startsWith(matrix.platform, 'macos') && '1.99.0' || 'stable' }}
+
+      - name: Install Rust toolchain for cross-target builds
+        if: matrix.target != ''
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ startsWith(matrix.platform, 'macos') && '1.99.0' || 'stable' }}
           targets: ${{ matrix.target }}
 
       - name: Install frontend dependencies
         working-directory: veiga-s3cc-splitter
         run: npm ci
 
-      - name: Build portable binary
+      - name: Run full JavaScript regressions
         working-directory: veiga-s3cc-splitter
-        run: npm run tauri build -- --verbose ${{ matrix.build_args }}
+        run: node --test
 
-      - name: Locate portable binary on Windows
-        if: matrix.platform == 'windows-2022'
+      - name: Check Rust workspace
+        if: matrix.target != 'i686-unknown-linux-gnu'
+        run: cargo check --workspace
+
+      - name: Build portable binary
+        if: matrix.target != 'i686-unknown-linux-gnu'
+        working-directory: veiga-s3cc-splitter
+        run: npm run tauri build -- ${{ matrix.build_args }}
+
+      - name: Locate Windows binary
+        if: startsWith(matrix.platform, 'windows')
         id: locate_windows
         shell: pwsh
         run: |
           $file = Get-ChildItem -Path "target" -Filter "${{ matrix.binary_name }}" -Recurse -File |
-            Where-Object { $_.FullName -match '\\release\\' -and $_.FullName -notmatch '\\bundle\\' } |
+            Where-Object {
+              $_.FullName -match '\\release\\' -and
+              $_.FullName -notmatch '\\bundle\\'
+            } |
             Select-Object -First 1 -ExpandProperty FullName
 
           if (-not $file) {
-            Write-Host "Arquivos encontrados em target:"
+            Write-Host "Files found in target:"
             Get-ChildItem -Path "target" -Recurse -File | Select-Object FullName
             throw "Portable binary not found."
           }
 
           "artifact_path=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Locate portable binary on Unix
-        if: matrix.platform != 'windows-2022'
+      - name: Locate Linux ELF binary
+        if: startsWith(matrix.platform, 'ubuntu')
         id: locate_unix
         shell: bash
         run: |
@@ -103,27 +231,142 @@ jobs:
           file_path="$(find target -type f -name "${{ matrix.binary_name }}" ! -path "*/bundle/*" | grep "/release/" | head -n 1 || true)"
 
           if [ -z "$file_path" ]; then
-            echo "Arquivos encontrados em target:"
+            echo "Files found in target:"
             find target -type f | sort || true
             exit 1
           fi
 
           echo "artifact_path=$file_path" >> "$GITHUB_OUTPUT"
 
-      - name: Upload portable artifact on Windows
-        if: matrix.platform == 'windows-2022'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ steps.locate_windows.outputs.artifact_path }}
-          if-no-files-found: error
-          retention-days: 30
+      - name: Package Windows EXE and include original license
+        if: startsWith(matrix.platform, 'windows')
+        shell: pwsh
+        run: |
+          $out = Join-Path $PWD 'portable/${{ matrix.artifact_name }}'
+          $stage = Join-Path $env:RUNNER_TEMP 'S3CC-Beta2'
+          New-Item -ItemType Directory -Force -Path $out, $stage | Out-Null
+          Copy-Item -LiteralPath "${{ steps.locate_windows.outputs.artifact_path }}" -Destination (Join-Path $stage "Veiga's S3CC Splitter.exe")
+          Copy-Item -LiteralPath 'LICENSE.txt' -Destination (Join-Path $stage 'LICENSE.txt')
+          Copy-Item -LiteralPath 'README.txt' -Destination (Join-Path $stage 'README.txt')
+          $archive = Join-Path $out '${{ matrix.artifact_name }}.zip'
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -CompressionLevel Optimal
+          $sha = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$sha  ${{ matrix.artifact_name }}.zip" | Set-Content -LiteralPath (Join-Path $out 'SHA256.txt') -Encoding ascii
 
-      - name: Upload portable artifact on Unix
-        if: matrix.platform != 'windows-2022'
-        uses: actions/upload-artifact@v4
+      - name: Package Linux ELF and preserve executable permissions
+        if: startsWith(matrix.platform, 'ubuntu')
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$(mktemp -d)"
+          out="portable/${{ matrix.artifact_name }}"
+          mkdir -p "$out"
+          cp "${{ steps.locate_unix.outputs.artifact_path }}" "$stage/Veiga's S3CC Splitter"
+          chmod 755 "$stage/Veiga's S3CC Splitter"
+          cp LICENSE.txt README.txt "$stage/"
+          tar -czf "$out/${{ matrix.artifact_name }}.tar.gz" -C "$stage" .
+          (cd "$out" && sha256sum '${{ matrix.artifact_name }}.tar.gz' > SHA256.txt)
+
+      - name: Package macOS app bundle and include original license
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$(find target -type d -name "Veiga's S3CC Splitter.app" -path '*/release/bundle/macos/*' | head -n 1 || true)"
+          if [ -z "$app" ]; then echo "Native macOS .app not found"; exit 1; fi
+          stage="$(mktemp -d)"
+          out="portable/${{ matrix.artifact_name }}"
+          mkdir -p "$out"
+          ditto "$app" "$stage/Veiga's S3CC Splitter.app"
+          cp LICENSE.txt README.txt "$stage/"
+          tar -czf "$out/${{ matrix.artifact_name }}.tar.gz" -C "$stage" .
+          (cd "$out" && shasum -a 256 '${{ matrix.artifact_name }}.tar.gz' > SHA256.txt)
+
+      - name: Upload complete portable package
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ steps.locate_unix.outputs.artifact_path }}
+          path: portable/${{ matrix.artifact_name }}/*
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
+          compression-level: 0
+
+  publish-v1-0-0:
+    name: Publish original Splitter 1.0.0 draft after all eight builds pass
+    needs: [linux-i386-preflight, build-portable]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/build/v1.0.0'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download all eight archives
+        uses: actions/download-artifact@v5
+        with:
+          pattern: S3CC-Splitter-v1.0.0-*
+          path: release-assets
+
+      - name: Verify packages and publish original 1.0.0 draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          id=339230076
+          release_path="repos/$GITHUB_REPOSITORY/releases/$id"
+          release="$(gh api "$release_path")"
+          [ "$(jq -r .tag_name <<<"$release")" = app-v1.0.0 ] || { echo "Wrong release tag" >&2; exit 1; }
+          [ "$(jq -r .draft <<<"$release")" = true ] || { echo "Original 1.0.0 draft is no longer unpublished" >&2; exit 1; }
+
+          count="$(find release-assets -type f \( -name '*.zip' -o -name '*.tar.gz' \) | wc -l)"
+          [ "$count" -eq 8 ] || { echo "Expected eight native archives, found $count" >&2; exit 1; }
+          for dir in release-assets/*; do (cd "$dir" && sha256sum -c SHA256.txt); done
+
+          # Existing 1.0.0 MSI remains untouched. Only our own v1.0.0
+          # platform archives can be replaced when resuming a partial upload.
+          while IFS= read -r -d '' file; do
+            name="$(basename "$file")"
+            old="$(gh api "$release_path/assets?per_page=100" \
+              --jq '.[] | select(.name == "'"$name"'") | .id')"
+            if [ -n "$old" ]; then
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$old"
+            fi
+            curl --fail-with-body --silent --show-error --retry 3 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"$file" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$id/assets?name=$name" > /dev/null
+            echo "Uploaded $name"
+          done < <(find release-assets -type f \( -name '*.zip' -o -name '*.tar.gz' \) -print0)
+
+          cat > "$RUNNER_TEMP/notes.md" <<'NOTES'
+          # Veiga's S3CC Splitter v1.0.0
+
+          Original standalone release of Veiga's S3CC Splitter for The Sims 3.
+
+          - Open and inspect supported custom-content .package files.
+          - Select and export content to individual packages.
+          - Preview supported package resources.
+          - Original Splitter interface, sidebar and export workflow.
+
+          This is the original version 1.0.0, not Beta 1 of the 2.0.0 series.
+          It does not include later Merger and Unmerge features.
+
+          Eight downloadable native archives:
+          - Windows x64, x86 and ARM64: Veiga's S3CC Splitter.exe
+          - Linux x64, x86 and ARM64: Veiga's S3CC Splitter (ELF)
+          - macOS Intel and Apple Silicon: Veiga's S3CC Splitter.app
+
+          Every archive includes LICENSE.txt (original copyright/license) and README.txt.
+          The original Windows x64 MSI installer remains available as an additional download.
+          macOS apps are not Apple-notarized. Keep copies of your The Sims 3 content before exporting.
+          NOTES
+
+          # Publish the historical draft only after all eight uploads succeeded.
+          gh api --method PATCH "$release_path" \
+            -F draft=false -F prerelease=false \
+            -f name="Veiga's S3CC Splitter v1.0.0" \
+            -f target_commitish="$GITHUB_SHA" \
+            -f body="$(cat "$RUNNER_TEMP/notes.md")" > /dev/null
+          echo 'Published original Splitter 1.0.0.'
