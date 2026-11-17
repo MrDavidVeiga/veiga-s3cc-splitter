@@ -40,6 +40,8 @@ pub fn run() {
             system_appearance::get_system_appearance,
             commands::scan_package_resources,
             commands::cancel_package_operation,
+            commands::cancel_package_relation_analysis,
+            commands::analyze_package_relations_async,
             commands::get_resource_preview_async,
             commands::analyze_remove_selection,
             commands::remove_selected_from_merged,
