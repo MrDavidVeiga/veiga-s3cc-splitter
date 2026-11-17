@@ -111,14 +111,17 @@ jobs:
           cache: npm
           cache-dependency-path: veiga-s3cc-splitter/package-lock.json
 
-      - name: Install Rust stable
+      - name: Install Rust toolchain (macOS uses Rust 1.99 for objc2 0.4 compatibility)
         if: matrix.target == ''
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ startsWith(matrix.platform, 'macos') && '1.99.0' || 'stable' }}
 
-      - name: Install Rust stable with target
+      - name: Install Rust toolchain for cross-target builds
         if: matrix.target != ''
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ startsWith(matrix.platform, 'macos') && '1.99.0' || 'stable' }}
           targets: ${{ matrix.target }}
 
       - name: Install frontend dependencies
@@ -158,9 +161,20 @@ jobs:
                 ca-certificates curl build-essential pkg-config file \
                 libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
                 libxdo-dev libssl-dev librsvg2-dev
-              curl -fsSL https://sh.rustup.rs | sh -s -- \
-                -y --profile minimal --default-toolchain stable
+              # The rustup bootstrap shell script can see the host kernel's
+              # x86_64 architecture under QEMU, even inside a 32-bit image.
+              # Download the explicitly i686 rustup binary to install an
+              # executable 32-bit Cargo/rustc rather than a broken x64 toolchain.
+              curl -fsSLo /tmp/rustup-init \
+                https://static.rust-lang.org/rustup/dist/i686-unknown-linux-gnu/rustup-init
+              chmod +x /tmp/rustup-init
+              file /tmp/rustup-init
+              /tmp/rustup-init -y --profile minimal \
+                --default-host i686-unknown-linux-gnu --default-toolchain stable
               . "$HOME/.cargo/env"
+              rustc -vV
+              cargo --version
+              test "$(rustc -vV | sed -n "s/^host: //p")" = i686-unknown-linux-gnu
               cargo build --locked --release \
                 --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml
               cp target/i686-unknown-linux-gnu/release/veiga-s3cc-splitter \
