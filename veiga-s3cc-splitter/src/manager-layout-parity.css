@@ -602,3 +602,38 @@ html[data-theme-choice] body.release-v1 .results-header .relation-check-controls
 html[data-theme-choice] body.release-v1 .results-header .relation-check-controls .hidden {
   display:none !important;
 }
+
+/* Real images in virtualized resource rows. The existing 76px row geometry
+   remains untouched; no image containers, animation or layout shifts. */
+body.release-v1 #results-state .resource-button {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-width:0;
+  overflow:hidden;
+}
+body.release-v1 #results-state .resource-item-thumbnail {
+  display:block;
+  flex:0 0 46px;
+  width:46px;
+  height:46px;
+  box-sizing:border-box;
+  object-fit:contain;
+  background:#222222;
+  border:1px solid var(--winui-divider-stroke, rgba(255,255,255,.12));
+  border-radius:6px;
+  image-rendering:auto;
+}
+body.release-v1 #results-state .resource-item-text {
+  flex:1 1 auto;
+  min-width:0;
+  overflow:hidden;
+}
+@media(max-width:750px) {
+  body.release-v1 #results-state .resource-button {gap:7px;}
+  body.release-v1 #results-state .resource-item-thumbnail {
+    flex-basis:40px;
+    width:40px;
+    height:40px;
+  }
+}
