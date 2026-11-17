@@ -103,7 +103,7 @@ struct PackageProgress {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct PackageRelationUpdate {
+pub struct PackageRelationUpdate {
     package_path: String,
     relations: BTreeMap<String, ResourceRelation>,
 }
@@ -207,6 +207,90 @@ pub struct ScanResult {
     // complete: checked; deferred: checks continue after list rendering;
     // skipped: optional checks were omitted, not proof of no duplicates.
     pub relations_status: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelationCheckPayload {
+    pub package_path: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct RelationCheckProgress {
+    package_path: String,
+    percent: u32,
+}
+
+// Unlike the baseline scan's optional 8,000-item budget, this explicit user
+// action can verify a complete grouped list with progress and cancellation.
+// It never writes to the input package and does not use the global Merger
+// cancellation flag.
+#[tauri::command]
+pub fn cancel_package_relation_analysis() {
+    RELATION_ANALYSIS_CANCELLED.store(true, Ordering::Release);
+    RELATION_ANALYSIS_GENERATION.fetch_add(1, Ordering::AcqRel);
+}
+
+#[tauri::command]
+pub async fn analyze_package_relations_async(
+    app: AppHandle,
+    payload: RelationCheckPayload,
+) -> Result<PackageRelationUpdate, String> {
+    let generation = RELATION_ANALYSIS_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    RELATION_ANALYSIS_CANCELLED.store(false, Ordering::Release);
+    let active_scan = SCAN_GENERATION.load(Ordering::Acquire);
+    tauri::async_runtime::spawn_blocking(move || {
+        let check = || -> Result<(), String> {
+            if RELATION_ANALYSIS_CANCELLED.load(Ordering::Acquire)
+                || RELATION_ANALYSIS_GENERATION.load(Ordering::Acquire) != generation
+                || SCAN_GENERATION.load(Ordering::Acquire) != active_scan
+            {
+                return Err("Verificação de duplicatas cancelada.".to_string());
+            }
+            Ok(())
+        };
+        check()?;
+        validate_package_extension(&payload.package_path)?;
+        let path = payload.package_path.trim();
+        let mmap = open_package(path)?;
+        check()?;
+        let package = parse_package(&mmap)?;
+        check()?;
+        let name_map = package_resource_names(&package);
+        let ea_catalog = EaSkinCatalog::load_for_package(Path::new(path));
+        let manifest = read_valid_merge_manifest_from_dbpf(&package);
+        check()?;
+        let items = build_scanned_items(
+            &package, "all", "", &name_map, ea_catalog.as_ref(), manifest.as_ref(),
+        );
+        check()?;
+        let last_percent = AtomicU32::new(u32::MAX);
+        let relations = build_resource_relations_monitored(
+            &package, &name_map, &items, &|completed, total| {
+                check()?;
+                let percent = (completed.saturating_mul(100) / total.max(1))
+                    .min(100) as u32;
+                if last_percent.swap(percent, Ordering::AcqRel) != percent {
+                    let _ = app.emit(
+                        "package-relations-progress",
+                        RelationCheckProgress {
+                            package_path: payload.package_path.clone(),
+                            percent,
+                        },
+                    );
+                }
+                Ok(())
+            },
+        )?;
+        check()?;
+        Ok(PackageRelationUpdate {
+            package_path: payload.package_path,
+            relations,
+        })
+    })
+    .await
+    .map_err(|e| format!("Falha ao executar a verificação: {e}"))?
 }
 
 #[derive(Debug, Deserialize)]
