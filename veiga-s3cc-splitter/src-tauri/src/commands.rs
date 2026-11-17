@@ -9563,6 +9563,68 @@ mod remove_selected_tests {
         path
     }
 
+    #[test]
+    fn relation_index_checks_cancellation_inside_large_tgi_loop() {
+        let root = test_dir("relation-cancel-index");
+        let path = root.join("ManyEntries.package");
+        let entries: Vec<_> = (0..320u64)
+            .map(|index| (TYPE_XML, 0, 0xAA00_0000 + index, vec![(index & 0xFF) as u8; 8]))
+            .collect();
+        write_test_package(&path, &entries);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let error = relation_tgi_index(&package, &|| {
+            if calls.fetch_add(1, Ordering::SeqCst) >= 1 {
+                Err("cancelled midway through indexing".to_string())
+            } else {
+                Ok(())
+            }
+        }).unwrap_err();
+        assert!(error.contains("cancelled midway"));
+        assert!(calls.load(Ordering::SeqCst) >= 2);
+        drop(package);
+        drop(mmap);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn exact_duplicate_payload_comparison_honors_inner_cancellation() {
+        let root = test_dir("relation-cancel-exact");
+        let path = root.join("ExactPairs.package");
+        let contents = vec![5u8; 128];
+        write_test_package(&path, &[
+            (TYPE_CASP, 0, 0x1122, contents.clone()),
+            (TYPE_CASP, 0, 0x3344, contents),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let data = package.files[0].data();
+        let (hash_a, hash_b) = relation_hash_pair(data);
+        let key = LogicalAtomKey {
+            resource_type: TYPE_CASP,
+            resource_group: 0,
+            data_len: data.len(),
+            hash_a,
+            hash_b,
+        };
+        let left = LogicalProfile { atoms: vec![LogicalAtom { key, entry_index: 0 }] };
+        let right = LogicalProfile { atoms: vec![LogicalAtom { key, entry_index: 1 }] };
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let error = logical_profiles_exactly_equal(&package, &left, &right, &|| {
+            if calls.fetch_add(1, Ordering::SeqCst) >= 2 {
+                Err("cancelled inside comparison".to_string())
+            } else {
+                Ok(())
+            }
+        }).unwrap_err();
+        assert!(error.contains("cancelled inside comparison"));
+        assert!(calls.load(Ordering::SeqCst) >= 3);
+        drop(package);
+        drop(mmap);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn relation_for<'a>(
         scan: &'a ScanResult,
         key: &str,
