@@ -26,8 +26,8 @@ jobs:
     name: JavaScript regressions and production frontend
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -43,7 +43,7 @@ jobs:
     name: Rust workspace and Tauri tests (Linux)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install Tauri libraries
@@ -61,7 +61,7 @@ jobs:
     name: Windows Rust integration with exact Common Controls test manifest
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -151,8 +151,8 @@ jobs:
     needs: [frontend, rust-linux, rust-windows]
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -192,7 +192,7 @@ jobs:
           Keep originals and test on copied Sims 3 packages first.
           In-game performance and all eight platforms are not yet certified.
           '@ | Set-Content -LiteralPath (Join-Path $folder 'READ-ME-FIRST.txt') -Encoding utf8
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: Veiga-S3CC-Splitter-Beta2-Windows-x64-Experimental
           path: portable/Beta2-Experimental-Windows-x64/*
