@@ -542,6 +542,8 @@ const state = {
   manifestPackageCount: 0,
   pendingRelationUpdates: [],
   relationsStatus: "complete",
+  scanGeneration: null,
+  activeRelationRequestId: null,
   relationAnalysisInProgress: false,
   relationAnalysisCancelPending: false,
   relationAnalysisProgress: 0,
@@ -764,13 +766,25 @@ function setBusy(title, message) {
 }
 
 function applyRelationUpdate(payload) {
-  if (!payload || payload.packagePath !== state.packagePath) return;
+  // A package path alone is not an operation identity: the same file can be
+  // reopened or scanned again before an older background event is delivered.
+  if (!payload || payload.packagePath !== state.packagePath ||
+      payload.scanGeneration !== state.scanGeneration ||
+      state.scanGeneration == null) return false;
+  if (payload.requestId == null) {
+    // Automatic relation events only belong to deferred initial scans.
+    if (state.relationsStatus !== "deferred") return false;
+  } else if (!state.relationAnalysisInProgress ||
+             payload.requestId !== state.activeRelationRequestId) {
+    return false;
+  }
   const relations = payload.relations || {};
   state.resources = state.resources.map((item) => ({
     ...item,
     relation: relations[item.key] || null,
   }));
   state.relationsStatus = "complete";
+  return true;
 }
 
 function clearBusy() {
@@ -1298,6 +1312,7 @@ async function pickPackage() {
     ++previewRequestToken;
     state.pendingRelationUpdates = [];
     state.relationsStatus = "complete";
+    state.scanGeneration = null;
     state.resources = [];
     state.selectedKeys = [];
     state.selectionInitialized = false;
@@ -1325,11 +1340,16 @@ function parentFolderOfPath(path) {
 // Abort only optional duplicate verification, not a scan/merge/export.
 function invalidateRelationAnalysis() {
   ++relationAnalysisRequestToken;
-  if (state.relationAnalysisInProgress && !state.relationAnalysisCancelPending) {
+  const requestId = state.activeRelationRequestId;
+  const scanGeneration = state.scanGeneration;
+  if (state.relationAnalysisInProgress && !state.relationAnalysisCancelPending &&
+      requestId != null && scanGeneration != null) {
     // Prevent a new verification from starting before the previous worker
     // has received cancellation; otherwise the late cancel could kill it.
     state.relationAnalysisCancelPending = true;
-    void invoke("cancel_package_relation_analysis")
+    void invoke("cancel_package_relation_analysis", {
+      payload: { requestId, scanGeneration },
+    })
       .catch((error) => console.error("Could not cancel duplicate verification:", error))
       .finally(() => {
         state.relationAnalysisCancelPending = false;
@@ -1337,6 +1357,7 @@ function invalidateRelationAnalysis() {
       });
   }
   state.relationAnalysisInProgress = false;
+  state.activeRelationRequestId = null;
   state.relationAnalysisProgress = 0;
 }
 
@@ -1344,19 +1365,24 @@ async function analyzeAllRelations() {
   if (state.isBusy || state.relationAnalysisInProgress ||
       state.relationAnalysisCancelPending || state.relationsStatus !== "skipped" || !state.packagePath || !state.resources.length) return;
   const requestedPath = state.packagePath;
+  const scanGeneration = state.scanGeneration;
+  if (scanGeneration == null) return;
   const token = ++relationAnalysisRequestToken;
+  state.activeRelationRequestId = token;
   state.relationAnalysisInProgress = true;
   state.relationAnalysisProgress = 0;
   render();
 
   try {
     const result = await invoke("analyze_package_relations_async", {
-      payload: { packagePath: requestedPath },
+      payload: { packagePath: requestedPath, scanGeneration, requestId: token },
     });
-    if (token !== relationAnalysisRequestToken || state.packagePath !== requestedPath) return;
+    if (token !== relationAnalysisRequestToken ||
+        state.packagePath !== requestedPath || state.scanGeneration !== scanGeneration) return;
     applyRelationUpdate(result);
   } catch (error) {
-    if (token !== relationAnalysisRequestToken || state.packagePath !== requestedPath) return;
+    if (token !== relationAnalysisRequestToken ||
+        state.packagePath !== requestedPath || state.scanGeneration !== scanGeneration) return;
     console.error(error);
     await appModal.showError({
       titleText: t("modalErrorTitle"),
@@ -1366,6 +1392,7 @@ async function analyzeAllRelations() {
   } finally {
     if (token === relationAnalysisRequestToken) {
       state.relationAnalysisInProgress = false;
+      state.activeRelationRequestId = null;
       state.relationAnalysisProgress = 0;
       render();
     }
@@ -1379,6 +1406,7 @@ async function scanPackage() {
   invalidateRelationAnalysis();
   ++previewRequestToken; // invalidate any preview requested before this scan
   state.pendingRelationUpdates = [];
+  state.scanGeneration = null;
   state.relationsStatus = "complete";
   state.scanInProgress = true;
   setBusy(t("busyReadTitle"), t("busyReadMessage"));
@@ -1398,6 +1426,7 @@ async function scanPackage() {
       relation: relations[item.key] || null,
     }));
     state.relationsStatus = result.relationsStatus || "complete";
+    state.scanGeneration = result.scanGeneration;
     state.manifestPackageCount = result.manifestPackageCount || 0;
     state.selectedKeys = [];
     state.selectionInitialized = true;
@@ -1729,6 +1758,7 @@ function clearAll() {
   invalidateRelationAnalysis();
   ++previewRequestToken;
   state.pendingRelationUpdates = [];
+  state.scanGeneration = null;
   state.relationsStatus = "complete";
   state.packagePath = "";
   state.resources = [];
@@ -1801,9 +1831,10 @@ function bindDragAndDrop() {
       if (["package", "dbc"].includes(ext)) {
         invalidateRelationAnalysis();
         state.packagePath = path;
-    ++previewRequestToken;
-    state.pendingRelationUpdates = [];
-    state.relationsStatus = "complete";
+        ++previewRequestToken;
+        state.pendingRelationUpdates = [];
+        state.scanGeneration = null;
+        state.relationsStatus = "complete";
         state.resources = [];
         state.selectedKeys = [];
         state.selectionInitialized = false;
@@ -1969,12 +2000,13 @@ async function setupProgressEvents() {
         state.pendingRelationUpdates.push(payload);
         return;
       }
-      applyRelationUpdate(payload);
-      render();
+      if (applyRelationUpdate(payload)) render();
     });
     await listen("package-relations-progress", (event) => {
       const payload = event.payload || {};
-      if (!state.relationAnalysisInProgress || payload.packagePath !== state.packagePath) return;
+      if (!state.relationAnalysisInProgress || payload.packagePath !== state.packagePath ||
+          payload.scanGeneration !== state.scanGeneration ||
+          payload.requestId !== state.activeRelationRequestId) return;
       const percent = Math.max(0, Math.min(100, Number(payload.percent) || 0));
       // Refresh every 5 percent while leaving the resource list usable.
       if (Math.floor(percent / 5) !== Math.floor(state.relationAnalysisProgress / 5)) {
