@@ -58,6 +58,17 @@ test("large relation checks explicitly indicate skipped or deferred work", () =>
   }
 });
 
+test("scan stage and cancellation notices are localized while preserving backend events", () => {
+  assert.match(app, /const scanStageMessages = \{/);
+  for (const stage of ["Opening package", "Reading names", "Building resource list",
+    "Preparing relationship metadata", "Ready"]) {
+    assert.equal(app.split('"' + stage + '":').length - 1, 3);
+  }
+  assert.equal(app.split("scanCancelling:").length - 1, 3);
+  assert.match(app, /state\.scanInProgress = true/);
+  assert.match(app, /state\.scanInProgress = false/);
+});
+
 test("Beta 1 sidebar geometry is retained in the Beta 2 interface", () => {
   assert.match(managerCss, /\.left-panel > \.winui-social-footer/);
   assert.match(managerCss, /#lang-toggle-btn/);
