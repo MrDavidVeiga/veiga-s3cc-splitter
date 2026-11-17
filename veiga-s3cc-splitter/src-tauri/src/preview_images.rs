@@ -19,8 +19,6 @@ fn select_format(data: &[u8], hint: Option<PreviewHint>) -> Option<image::ImageF
         Some(image::ImageFormat::Png)
     } else if data.starts_with(b"DDS ") {
         Some(image::ImageFormat::Dds)
-    } else if data.starts_with(&[0xff, 0xd8, 0xff]) {
-        Some(image::ImageFormat::Jpeg)
     } else if hint == Some(PreviewHint::Tga) {
         Some(image::ImageFormat::Tga)
     } else {
