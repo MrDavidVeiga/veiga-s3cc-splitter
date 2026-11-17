@@ -585,3 +585,20 @@ html[data-theme-choice] body.release-v1 .topbar #lang-toggle-icon {
   margin-left:auto;
 }
 
+/* Optional complete TGI/duplicate verification stays in the results header,
+   not in a blocking background card. Keep buttons compact on narrow windows. */
+html[data-theme-choice] body.release-v1 .results-header .relation-check-controls {
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:8px;
+  margin-top:8px;
+}
+html[data-theme-choice] body.release-v1 .results-header .relation-check-controls .secondary-btn {
+  min-height:30px;
+  padding:5px 10px;
+  white-space:normal;
+}
+html[data-theme-choice] body.release-v1 .results-header .relation-check-controls .hidden {
+  display:none !important;
+}
