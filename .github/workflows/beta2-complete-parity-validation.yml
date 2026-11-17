@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "integration/beta2-complete-beta1-parity-20261116"
+      - "build/beta2-windows-x64-20261117"
     paths:
       - ".github/workflows/beta2-complete-parity-validation.yml"
       - "BETA2_COMPLETENESS_INTEGRATION.md"
@@ -146,7 +147,7 @@ jobs:
   portable-windows-x64:
     # Do not burn Windows release minutes and attempt storage uploads on every
     # source commit. Artifact quota must be freed before manual delivery.
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/build/beta2-windows-x64-20261117'
     name: Build experimental Windows x64 candidate after passing regressions
     needs: [frontend, rust-linux, rust-windows]
     runs-on: windows-2022
