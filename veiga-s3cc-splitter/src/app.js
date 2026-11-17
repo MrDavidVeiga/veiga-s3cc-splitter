@@ -543,6 +543,7 @@ const state = {
   pendingRelationUpdates: [],
   relationsStatus: "complete",
   relationAnalysisInProgress: false,
+  relationAnalysisCancelPending: false,
   relationAnalysisProgress: 0,
   mergerSources: [],
   mergerBusy: false,
@@ -1038,7 +1039,7 @@ function render() {
   if (el.relationAnalyzeBtn) {
     el.relationAnalyzeBtn.classList.toggle("hidden",
       state.relationsStatus !== "skipped" || state.relationAnalysisInProgress ||
-      state.isBusy || !state.resources.length);
+      state.relationAnalysisCancelPending || state.isBusy || !state.resources.length);
     el.relationAnalyzeBtn.textContent = t("relationCheckAction");
   }
   if (el.relationCancelBtn) {
@@ -1324,9 +1325,16 @@ function parentFolderOfPath(path) {
 // Abort only optional duplicate verification, not a scan/merge/export.
 function invalidateRelationAnalysis() {
   ++relationAnalysisRequestToken;
-  if (state.relationAnalysisInProgress) {
-    void invoke("cancel_package_relation_analysis").catch((error) =>
-      console.error("Could not cancel duplicate verification:", error));
+  if (state.relationAnalysisInProgress && !state.relationAnalysisCancelPending) {
+    // Prevent a new verification from starting before the previous worker
+    // has received cancellation; otherwise the late cancel could kill it.
+    state.relationAnalysisCancelPending = true;
+    void invoke("cancel_package_relation_analysis")
+      .catch((error) => console.error("Could not cancel duplicate verification:", error))
+      .finally(() => {
+        state.relationAnalysisCancelPending = false;
+        render();
+      });
   }
   state.relationAnalysisInProgress = false;
   state.relationAnalysisProgress = 0;
@@ -1334,7 +1342,7 @@ function invalidateRelationAnalysis() {
 
 async function analyzeAllRelations() {
   if (state.isBusy || state.relationAnalysisInProgress ||
-      state.relationsStatus !== "skipped" || !state.packagePath || !state.resources.length) return;
+      state.relationAnalysisCancelPending || state.relationsStatus !== "skipped" || !state.packagePath || !state.resources.length) return;
   const requestedPath = state.packagePath;
   const token = ++relationAnalysisRequestToken;
   state.relationAnalysisInProgress = true;
