@@ -92,7 +92,7 @@ test("full relation verification is opt-in and cancellable without blocking list
   assert.match(backend, /fn build_resource_relations_monitored<F>\(/);
   assert.match(backend, /item_index % 16 == 0/);
   assert.match(backend, /RELATION_ANALYSIS_GENERATION\.load\(Ordering::Acquire\) != generation/);
-  assert.match(backend, /SCAN_GENERATION\.load\(Ordering::Acquire\) != active_scan/);
+  assert.match(backend, /SCAN_GENERATION\.load\(Ordering::Acquire\) != payload\.scan_generation/);
   assert.match(commands, /commands::analyze_package_relations_async/);
   assert.match(commands, /commands::cancel_package_relation_analysis/);
   assert.match(app, /invoke\("analyze_package_relations_async"/);
@@ -178,9 +178,9 @@ test("progress handlers ignore previous requests even when the package path is u
     Math,
     Number,
   };
-  vm.runInNewContext(source + "\nsetupProgressEvents()", context);
-  // await the three sequential listener registrations
-  for (let n = 0; n < 4; n++) await Promise.resolve();
+  const installed = vm.runInNewContext(source + "\nsetupProgressEvents()", context);
+  // Await the promise from the VM realm, not the host realm's microtask ticks.
+  await installed;
   const progress = callbacks.get("package-relations-progress");
   assert.equal(typeof progress, "function");
 
