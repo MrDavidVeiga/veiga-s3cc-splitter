@@ -169,10 +169,21 @@ jobs:
                 https://static.rust-lang.org/rustup/dist/i686-unknown-linux-gnu/rustup-init
               chmod +x /tmp/rustup-init
               file /tmp/rustup-init
-              # Verify all dynamically linked runtime libraries exist before bootstrapping.
+              # Debian installs the i386 libatomic package correctly, but
+              # the emulated loader may not consult its multiarch directory.
+              # Discover the real package path rather than assuming /lib32.
+              atomic_path="$(dpkg-query -L libatomic1:i386 | grep -m1 "/libatomic.so.1$" || true)"
+              if [ -z "$atomic_path" ] || [ ! -e "$atomic_path" ]; then
+                echo "libatomic1:i386 was installed but libatomic.so.1 is missing" >&2
+                exit 1
+              fi
+              export LD_LIBRARY_PATH="$(dirname "$atomic_path")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+              ldconfig
+              echo "Using i386 libatomic from: $atomic_path"
+              # Verify all dynamically linked runtime libraries before bootstrapping.
               ldd /tmp/rustup-init | tee /tmp/rustup-deps.txt
-              if grep -q 'not found' /tmp/rustup-deps.txt; then
-                echo 'Missing i386 runtime library for rustup-init' >&2
+              if grep -q "not found" /tmp/rustup-deps.txt; then
+                echo "Missing i386 runtime library for rustup-init" >&2
                 exit 1
               fi
               /tmp/rustup-init -y --profile minimal \
