@@ -9735,6 +9735,24 @@ mod remove_selected_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn thumbnail_cache_candidates_include_localized_sims3_names() {
+        let root = test_dir("thumbnail-localized-path");
+        let dirs = thumbnail_directory_candidates(&root);
+        let candidates: Vec<String> = dirs.iter().map(|path| path.display().to_string()).collect();
+        for name in ["The Sims 3", "Os Sims 3", "Los Sims 3", "Les Sims 3",
+                     "Die Sims 3", "I Sims 3"] {
+            assert!(
+                candidates.iter().any(|path| path.contains(name)),
+                "Missing Sims 3 locale: {name}"
+            );
+        }
+        assert!(dirs.iter().all(|path|
+            path.ends_with("Thumbnails") && path.starts_with(&root)));
+        assert!(dirs.iter().all(|path| !path.to_string_lossy().contains("Sims 4")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn relation_for<'a>(
         scan: &'a ScanResult,
         key: &str,
