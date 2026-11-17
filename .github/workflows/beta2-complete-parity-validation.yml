@@ -123,3 +123,52 @@ jobs:
           }) -join ';'
           cargo test --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml --locked -- --nocapture
           if ($LASTEXITCODE -ne 0) { throw 'Tauri Rust integration tests failed' }
+
+  portable-windows-x64:
+    name: Build experimental Windows x64 candidate after passing regressions
+    needs: [frontend, rust-linux, rust-windows]
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: veiga-s3cc-splitter/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: veiga-s3cc-splitter/src-tauri -> target
+      - name: Install frontend dependencies
+        working-directory: veiga-s3cc-splitter
+        run: npm ci
+      - name: Build Tauri standalone executable without publishing a release
+        working-directory: veiga-s3cc-splitter
+        shell: pwsh
+        run: |
+          npm run tauri build -- --no-bundle
+          if ($LASTEXITCODE -ne 0) { throw 'Windows x64 candidate build failed' }
+      - name: Verify candidate and record SHA-256
+        shell: pwsh
+        run: |
+          $binary = Join-Path $PWD 'target\release\veiga-s3cc-splitter.exe'
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
+            throw "Expected executable not found: $binary"
+          }
+          $folder = Join-Path $PWD 'portable\Beta2-Experimental-Windows-x64'
+          New-Item -ItemType Directory -Force -Path $folder | Out-Null
+          Copy-Item -LiteralPath $binary -Destination (Join-Path $folder 'Veiga-S3CC-Splitter-Beta2.exe')
+          $hash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
+          "SHA256: $hash" | Set-Content -LiteralPath (Join-Path $folder 'SHA256.txt')
+          @'
+          EXPERIMENTAL BETA 2 - NOT A STABLE RELEASE.
+          Includes Beta 1 parity patches for async preview, cancellation and scanning.
+          Keep originals and test on copied Sims 3 packages first.
+          In-game performance and all eight platforms are not yet certified.
+          '@ | Set-Content -LiteralPath (Join-Path $folder 'READ-ME-FIRST.txt') -Encoding utf8
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Veiga-S3CC-Splitter-Beta2-Windows-x64-Experimental
+          path: portable/Beta2-Experimental-Windows-x64/*
+          if-no-files-found: error
+          retention-days: 30
