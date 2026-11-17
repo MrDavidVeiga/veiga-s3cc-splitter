@@ -104,3 +104,19 @@ const pluralPlan = {
 assert.match(formatRemoveConfirm("en", pluralPlan), /2 resources associated with 2 selected items\?/);
 assert.match(formatRemoveConfirm("pt", pluralPlan), /2 recursos associados a 2 itens selecionados\?/);
 assert.match(formatRemoveConfirm("es", pluralPlan), /2 recursos asociados a 2 elementos seleccionados\?/);
+
+const backupWarnings = {
+  en: "A bit-for-bit backup of the original",
+  pt: "Um backup bit a bit do original",
+  es: "Se creará",
+};
+for (const language of ["en", "pt", "es"]) {
+  for (const source of [externalPlan, plan(2, 10)]) {
+    const text = formatRemoveConfirm(language, source);
+    const tail = text.split("\n\n").at(-1);
+    assert.ok(tail.startsWith(backupWarnings[language]),
+      language + " backup warning must be a separate final paragraph");
+    assert.equal(tail.includes("\n"), false,
+      "Backup warning must be one paragraph");
+  }
+}
