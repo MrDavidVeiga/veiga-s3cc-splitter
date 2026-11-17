@@ -29,6 +29,7 @@ const buttonIcons = {
 
 const translations = {
   en: {
+    scanCancelling: "Cancelling package read…",
     relationCheckSkipped: "Duplicate/conflict checks were not run for this large package.",
     relationCheckRunning: "Checking duplicates/conflicts in the background…",
     appTitle: "Veiga's S3CC Splitter",
@@ -178,6 +179,7 @@ const translations = {
     splittError: "Export failed:",
   },
   pt: {
+    scanCancelling: "Cancelando leitura do package…",
     relationCheckSkipped: "Verificação de duplicatas/conflitos não realizada para este package grande.",
     relationCheckRunning: "Verificando duplicatas/conflitos em segundo plano…",
     appTitle: "Veiga's S3CC Splitter",
@@ -327,6 +329,7 @@ const translations = {
     splittError: "Falha na exportação:",
   },
   es: {
+    scanCancelling: "Cancelando la lectura del package…",
     relationCheckSkipped: "No se verificaron duplicados/conflictos en este package grande.",
     relationCheckRunning: "Verificando duplicados/conflictos en segundo plano…",
     appTitle: "Veiga's S3CC Splitter",
@@ -477,6 +480,32 @@ const translations = {
   },
 };
 
+// Progress events include internal English stage keys; localize them in the UI
+// while leaving backend events stable for diagnostics and existing consumers.
+const scanStageMessages = {
+  en: {
+    "Opening package": "Mapping package resources.",
+    "Reading names": "Reading names and package metadata.",
+    "Building resource list": "Building the resource list.",
+    "Preparing relationship metadata": "Checking relationships and dependencies.",
+    "Ready": "Resource list ready.",
+  },
+  pt: {
+    "Opening package": "Mapeando os recursos do package.",
+    "Reading names": "Lendo nomes e metadados do package.",
+    "Building resource list": "Montando a lista de recursos.",
+    "Preparing relationship metadata": "Verificando relações e dependências.",
+    "Ready": "Lista de recursos pronta.",
+  },
+  es: {
+    "Opening package": "Mapeando los recursos del package.",
+    "Reading names": "Leyendo nombres y metadatos del package.",
+    "Building resource list": "Preparando la lista de recursos.",
+    "Preparing relationship metadata": "Comprobando relaciones y dependencias.",
+    "Ready": "Lista de recursos lista.",
+  },
+};
+
 const state = {
   mode: "splitter",
   packagePath: "",
@@ -488,6 +517,7 @@ const state = {
   selectionAnchorKey: null,
   preview: null,
   isBusy: false,
+  scanInProgress: false,
   removalPending: false,
   busyTitle: "",
   busyMessage: "",
@@ -740,6 +770,7 @@ function clearBusy() {
 async function cancelCurrentOperation() {
   if (!state.isBusy || !state.operationCancellable || state.operationCancelRequested) return;
   state.operationCancelRequested = true;
+  if (state.scanInProgress) state.busyMessage = t("scanCancelling");
   if (el.cancelOperationBtn) {
     el.cancelOperationBtn.disabled = true;
     el.cancelOperationBtn.textContent = t("cancelOperation");
@@ -1224,6 +1255,7 @@ async function scanPackage() {
   ++previewRequestToken; // invalidate any preview requested before this scan
   state.pendingRelationUpdates = [];
   state.relationsStatus = "complete";
+  state.scanInProgress = true;
   setBusy(t("busyReadTitle"), t("busyReadMessage"));
   state.operationCancellable = true;
   state.operationCancelRequested = false;
@@ -1257,6 +1289,7 @@ async function scanPackage() {
       });
     }
   } finally {
+    state.scanInProgress = false;
     clearBusy(); // show the virtualized list before any expensive thumbnail work
   }
   if (firstVisible && state.packagePath === requestedPath) {
@@ -1776,8 +1809,15 @@ async function setupProgressEvents() {
       const payload = event.payload || {};
       if (!state.isBusy) return;
       state.progress = Math.max(0, Math.min(100, Number(payload.percent) || 0));
-      state.busyTitle = payload.stage || state.busyTitle;
-      state.busyMessage = payload.message || state.busyMessage;
+      if (state.scanInProgress) {
+        state.busyTitle = t("busyReadTitle");
+        state.busyMessage = state.operationCancelRequested
+          ? t("scanCancelling")
+          : (scanStageMessages[state.language] || scanStageMessages.en)[payload.stage] || t("busyReadMessage");
+      } else {
+        state.busyTitle = payload.stage || state.busyTitle;
+        state.busyMessage = payload.message || state.busyMessage;
+      }
       // Progress events can arrive every few hundred milliseconds while
       // rebuilding a gigabyte-sized package. Re-rendering the entire CC
       // list and preview here competes with the file operation and can
