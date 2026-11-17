@@ -67,6 +67,8 @@ const TYPE_S3SA: u32 = 0x073FAA07;
 
 // Optional relation badges must not delay loading a very large package.
 const MAX_RELATION_ANALYSIS_PACKAGE_BYTES: usize = 256 * 1024 * 1024;
+// For extremely large lists, do not launch unbounded optional duplicate hashing.
+const MAX_RELATION_ANALYSIS_ITEMS: usize = 8_000;
 
 static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 static PREVIEW_CACHE: OnceLock<Mutex<Option<PreviewCacheEntry>>> = OnceLock::new();
@@ -198,6 +200,9 @@ pub struct ScanResult {
     pub items: Vec<ResourceItem>,
     pub manifest_package_count: usize,
     pub relations: BTreeMap<String, ResourceRelation>,
+    // complete: checked; deferred: checks continue after list rendering;
+    // skipped: optional checks were omitted, not proof of no duplicates.
+    pub relations_status: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -7551,18 +7556,23 @@ fn scan_package_resources_inner(
             app, started, "Preparing relationship metadata",
             "Keeping large-package loading responsive.", 3, 5, package.files.len(), mmap.len(),
         );
-        let relations = if merge_manifest.is_some()
+        let (relations, relations_status) = if items.len() > MAX_RELATION_ANALYSIS_ITEMS {
+            // Beta 1 parity: returning the resource list takes priority over
+            // optional badges when thousands of entries require full hashing.
+            eprintln!("[package-relations] skip optional analysis for {} items", items.len());
+            (BTreeMap::new(), "skipped")
+        } else if merge_manifest.is_some()
             && mmap.len() > MAX_RELATION_ANALYSIS_PACKAGE_BYTES
         {
             // A manifest-backed 1 GiB merge already has authoritative source
             // ownership. Do not launch an uncancellable 1 GiB hashing and
             // decompression thread that competes with removal for CPU/RAM/I/O.
             eprintln!("[package-relations] skip optional large manifest analysis");
-            BTreeMap::new()
+            (BTreeMap::new(), "skipped")
         } else if mmap.len() <= MAX_RELATION_ANALYSIS_PACKAGE_BYTES {
             let relations = build_resource_relations(&package, &name_map, &items);
             check_cancelled()?;
-            relations
+            (relations, "complete")
         } else if let Some(relation_app) = app.cloned() {
             // Relationship detection hashes/decompresses payloads. For large
             // packages, compute optional UI badges after returning the list.
@@ -7599,11 +7609,11 @@ fn scan_package_resources_inner(
                     ),
                 }
             });
-            BTreeMap::new()
+            (BTreeMap::new(), "deferred")
         } else {
             // Unit tests do not own a Tauri AppHandle; calculate this result
             // synchronously so they still cover relation-analysis behavior.
-            build_resource_relations(&package, &name_map, &items)
+            (build_resource_relations(&package, &name_map, &items), "complete")
         };
         check_cancelled()?;
         emit_package_progress(
@@ -7614,6 +7624,7 @@ fn scan_package_resources_inner(
             items,
             manifest_package_count,
             relations,
+            relations_status: relations_status.to_string(),
         })
     }))
     .map_err(|_| "Falha ao carregar a lista de recursos deste package.".to_string())?
@@ -7858,6 +7869,18 @@ fn remove_selected_from_merged_inner(
         selected_resources_preserved: plan.selected_resources_preserved,
         disk_free_bytes_warning,
     })
+}
+
+// Preserve Beta 2's cached, pose-aware preview implementation while running
+// cache construction and image decoding on a dedicated blocking worker.
+#[tauri::command]
+pub async fn get_resource_preview_async(
+    app: AppHandle,
+    payload: PreviewPayload,
+) -> Result<PreviewResult, String> {
+    tauri::async_runtime::spawn_blocking(move || get_resource_preview(app, payload))
+        .await
+        .map_err(|error| format!("Falha ao preparar a pré-visualização: {error}"))?
 }
 
 #[tauri::command]
