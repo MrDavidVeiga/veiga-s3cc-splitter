@@ -43,7 +43,11 @@ pub fn preview_png(data: &[u8], hint: Option<PreviewHint>, max_edge: u32) -> Opt
     }
     let image = image::load_from_memory_with_format(data, format).ok()?;
     let edge = max_edge.clamp(32, MAX_PREVIEW_EDGE);
-    let thumbnail = image.thumbnail(edge, edge);
+    let thumbnail = if width > edge || height > edge {
+        image.thumbnail(edge, edge)
+    } else {
+        image // Never upscale tiny icons into blurry thumbnails.
+    };
     let mut encoded = Cursor::new(Vec::new());
     thumbnail.write_to(&mut encoded, image::ImageOutputFormat::Png).ok()?;
     let bytes = encoded.into_inner();
@@ -74,6 +78,7 @@ mod tests {
         let mut dds = vec![0u8; 128 + 8];
         dds[..4].copy_from_slice(b"DDS ");
         dds[4..8].copy_from_slice(&124u32.to_le_bytes());
+        dds[8..12].copy_from_slice(&0x1007u32.to_le_bytes()); // required DDS flags
         dds[12..16].copy_from_slice(&4u32.to_le_bytes());
         dds[16..20].copy_from_slice(&4u32.to_le_bytes());
         dds[76..80].copy_from_slice(&32u32.to_le_bytes());
@@ -93,6 +98,7 @@ mod tests {
             let mut dds = vec![0u8; 128 + 16];
             dds[..4].copy_from_slice(b"DDS ");
             dds[4..8].copy_from_slice(&124u32.to_le_bytes());
+            dds[8..12].copy_from_slice(&0x1007u32.to_le_bytes()); // required DDS flags
             dds[12..16].copy_from_slice(&4u32.to_le_bytes());
             dds[16..20].copy_from_slice(&4u32.to_le_bytes());
             dds[76..80].copy_from_slice(&32u32.to_le_bytes());
