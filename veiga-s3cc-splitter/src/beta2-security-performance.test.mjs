@@ -34,6 +34,7 @@ test("resource rows preserve untrusted CC names as literal text rather than pars
     }
     set innerHTML(value) { throw new Error("Unsafe HTML insertion: " + value); }
     set textContent(value) { this.text = value; }
+    get childNodes() { return this.children; }
     append(...children) { this.children.push(...children); }
     appendChild(child) { this.children.push(child); return child; }
     replaceChildren(...children) {
