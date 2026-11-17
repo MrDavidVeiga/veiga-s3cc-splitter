@@ -144,6 +144,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Tauri Rust integration tests failed' }
 
   portable-windows-x64:
+    # Do not burn Windows release minutes and attempt storage uploads on every
+    # source commit. Artifact quota must be freed before manual delivery.
+    if: github.event_name == 'workflow_dispatch'
     name: Build experimental Windows x64 candidate after passing regressions
     needs: [frontend, rust-linux, rust-windows]
     runs-on: windows-2022
@@ -194,4 +197,5 @@ jobs:
           name: Veiga-S3CC-Splitter-Beta2-Windows-x64-Experimental
           path: portable/Beta2-Experimental-Windows-x64/*
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 3
+          compression-level: 9
