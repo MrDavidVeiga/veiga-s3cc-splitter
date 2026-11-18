@@ -1,0 +1,202 @@
+name: Beta 2 completeness and Beta 1 parity validation
+
+on:
+  push:
+    branches:
+      - "integration/beta2-complete-beta1-parity-20261116"
+    paths:
+      - ".github/workflows/beta2-complete-parity-validation.yml"
+      - "BETA2_COMPLETENESS_INTEGRATION.md"
+      - "veiga-s3cc-splitter/**"
+      - "sims3-core/**"
+      - "sims3-pack/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+concurrency:
+  group: beta2-completeness-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: JavaScript regressions and production frontend
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: veiga-s3cc-splitter/package-lock.json
+      - name: Test and bundle
+        working-directory: veiga-s3cc-splitter
+        run: |
+          npm ci
+          node --test
+          npm run build
+
+  rust-linux:
+    name: Rust workspace and Tauri tests (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Tauri libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev pkg-config build-essential
+      - name: Check workspace
+        run: cargo check --locked --workspace
+      - name: Test Rust libraries including Tauri backend
+        run: cargo test --locked --workspace --lib -- --nocapture
+      - name: Test read-only DBPF merge comparator
+        run: cargo test --locked -p sims3-pack --example compare_merges -- --nocapture
+
+  rust-windows:
+    name: Windows Rust integration with exact Common Controls test manifest
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: veiga-s3cc-splitter/src-tauri -> target
+      - name: Compile workspace and unit tests
+        shell: pwsh
+        run: |
+          cargo check --locked --workspace
+          if ($LASTEXITCODE -ne 0) { throw 'Workspace check failed' }
+          cargo check --locked --workspace --tests
+          if ($LASTEXITCODE -ne 0) { throw 'Workspace test check failed' }
+      - name: Test read-only DBPF comparator
+        shell: pwsh
+        run: |
+          cargo test --locked -p sims3-pack --example compare_merges -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'DBPF comparator regression failed' }
+      - name: Test isolated TONE parser
+        shell: pwsh
+        run: |
+          rustc --edition=2021 --test veiga-s3cc-splitter/src-tauri/src/tone_dependencies.rs -o "$env:RUNNER_TEMP\tone-tests.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'TONE parser compile failed' }
+          & "$env:RUNNER_TEMP\tone-tests.exe" --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'TONE parser test failed' }
+      - name: Embed Common Controls v6 manifest into the actual Tauri test executable
+        shell: pwsh
+        run: |
+          cargo test --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml --locked --no-run
+          if ($LASTEXITCODE -ne 0) { throw 'Tauri test executable compile failed' }
+          $sdkBin = 'C:\Program Files (x86)\Windows Kits\10\bin'
+          $mt = Get-ChildItem -LiteralPath $sdkBin -Filter mt.exe -File -Recurse |
+            Where-Object { $_.DirectoryName.EndsWith('\x64') } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $mt) { throw 'Windows SDK x64 mt.exe not found' }
+          $manifestPath = Join-Path $env:RUNNER_TEMP 'veiga-beta2-test.manifest'
+          @'
+          <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+            <assemblyIdentity type="win32" name="Veiga.S3CC.Splitter.Beta2Tests" version="1.0.0.0" processorArchitecture="*" />
+            <dependency>
+              <dependentAssembly>
+                <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*" />
+              </dependentAssembly>
+            </dependency>
+          </assembly>
+          '@ | Set-Content -LiteralPath $manifestPath -Encoding utf8
+          # Cargo can place Tauri test harnesses under target/debug/build/*/out
+          # rather than target/debug/deps, depending on workspace configuration.
+          # Resolve the actual target directory instead of assuming the CI cwd.
+          $cargoMetadata = cargo metadata --locked --format-version 1 --no-deps | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $cargoMetadata.target_directory) {
+            throw 'Cannot determine Cargo target directory'
+          }
+          $targetDir = $cargoMetadata.target_directory
+          if (-not (Test-Path -LiteralPath $targetDir -PathType Container)) {
+            throw "Cargo target directory not found: $targetDir"
+          }
+          $tests = @(Get-ChildItem -LiteralPath $targetDir -Filter 'veiga_s3cc_splitter*.exe' -File -Recurse |
+            Where-Object {
+              $_.FullName -match '[\\/]debug[\\/]' -and
+              $_.FullName -match '[\\/](deps|out)[\\/]'
+            })
+          if ($tests.Count -eq 0) {
+            throw "No compiled Tauri test harness found below $targetDir"
+          }
+          Write-Host "Found $($tests.Count) Tauri test executable(s) under $targetDir"
+          foreach ($exe in $tests) {
+            Write-Host "Embedding v6 Common Controls into $($exe.FullName)"
+            & $mt.FullName '-nologo' '-manifest' $manifestPath "-outputresource:$($exe.FullName);#1"
+            if ($LASTEXITCODE -ne 0) { throw "Manifest embed failed: $($exe.Name)" }
+          }
+      - name: Run complete Tauri integration suite
+        shell: pwsh
+        run: |
+          $serviceFabric = 'C:\Program Files\Microsoft Service Fabric\bin\Fabric\Fabric.Code'
+          $env:PATH = (($env:PATH -split ';') | Where-Object {
+            $_.TrimEnd('\') -ine $serviceFabric.TrimEnd('\')
+          }) -join ';'
+          cargo test --manifest-path veiga-s3cc-splitter/src-tauri/Cargo.toml --locked -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Tauri Rust integration tests failed' }
+
+  portable-windows-x64:
+    # Do not burn Windows release minutes and attempt storage uploads on every
+    # source commit. Artifact quota must be freed before manual delivery.
+    if: github.event_name == 'workflow_dispatch'
+    name: Build experimental Windows x64 candidate after passing regressions
+    needs: [frontend, rust-linux, rust-windows]
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: veiga-s3cc-splitter/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: veiga-s3cc-splitter/src-tauri -> target
+      - name: Install frontend dependencies
+        working-directory: veiga-s3cc-splitter
+        run: npm ci
+      - name: Build Tauri standalone executable without publishing a release
+        working-directory: veiga-s3cc-splitter
+        shell: pwsh
+        run: |
+          npm run tauri build -- --no-bundle
+          if ($LASTEXITCODE -ne 0) { throw 'Windows x64 candidate build failed' }
+      - name: Verify candidate and record SHA-256
+        shell: pwsh
+        run: |
+          $cargoMetadata = cargo metadata --locked --format-version 1 --no-deps | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $cargoMetadata.target_directory) {
+            throw 'Cannot determine Cargo target directory for portable build'
+          }
+          $binary = Join-Path $cargoMetadata.target_directory "release\Veiga's S3CC Splitter.exe"
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
+            throw "Expected executable not found: $binary"
+          }
+          $folder = Join-Path $PWD 'portable\Beta2-Experimental-Windows-x64'
+          New-Item -ItemType Directory -Force -Path $folder | Out-Null
+          Copy-Item -LiteralPath $binary -Destination (Join-Path $folder "Veiga's S3CC Splitter.exe")
+          Copy-Item -LiteralPath 'LICENSE.txt' -Destination (Join-Path $folder 'LICENSE.txt')
+          $hash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
+          "SHA256: $hash" | Set-Content -LiteralPath (Join-Path $folder 'SHA256.txt')
+          @'
+          EXPERIMENTAL BETA 2 - NOT A STABLE RELEASE.
+          Includes Beta 1 parity patches for async preview, cancellation and scanning.
+          Keep originals and test on copied Sims 3 packages first.
+          In-game performance and all eight platforms are not yet certified.
+          '@ | Set-Content -LiteralPath (Join-Path $folder 'READ-ME-FIRST.txt') -Encoding utf8
+      - uses: actions/upload-artifact@v6
+        with:
+          name: Veiga-S3CC-Splitter-Beta2-Windows-x64-Experimental
+          path: portable/Beta2-Experimental-Windows-x64/*
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 9

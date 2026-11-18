@@ -4,7 +4,7 @@ use std::fs::{copy, create_dir_all, remove_file, rename, File, OpenOptions};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -14,7 +14,7 @@ use num_traits::ToPrimitive;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sims3_core::dbpf::filetypes::{resource_is_png, ResourceType};
+use sims3_core::dbpf::filetypes::ResourceType;
 use sims3_core::dbpf::{DBPFEntry, DBPF};
 use sims3_pack::dbpf::{Package as WritablePackage, ResourceEntry as WritableEntry};
 use tauri::{AppHandle, Emitter, Manager};
@@ -67,9 +67,28 @@ const TYPE_S3SA: u32 = 0x073FAA07;
 
 // Optional relation badges must not delay loading a very large package.
 const MAX_RELATION_ANALYSIS_PACKAGE_BYTES: usize = 256 * 1024 * 1024;
+// For extremely large lists, do not launch unbounded optional duplicate hashing.
+const MAX_RELATION_ANALYSIS_ITEMS: usize = 8_000;
 
 static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
+// Suppress late duplicate/conflict events from a previous scan of the same path.
+static SCAN_GENERATION: AtomicU64 = AtomicU64::new(0);
+static RELATION_ANALYSIS_GENERATION: AtomicU64 = AtomicU64::new(0);
+static RELATION_ANALYSIS_CANCELLED: AtomicBool = AtomicBool::new(false);
+// Pair every action with the scan and request that originated it. A cancelled
+// request can reach Rust before its async start command, so remember those IDs.
+#[derive(Default)]
+struct RelationOperationState {
+    active: Option<(u64, u64)>,
+    cancelled_before_start: HashSet<(u64, u64)>,
+}
+static RELATION_OPERATIONS: OnceLock<Mutex<RelationOperationState>> = OnceLock::new();
+fn relation_operations() -> &'static Mutex<RelationOperationState> {
+    RELATION_OPERATIONS.get_or_init(|| Mutex::new(RelationOperationState::default()))
+}
 static PREVIEW_CACHE: OnceLock<Mutex<Option<PreviewCacheEntry>>> = OnceLock::new();
+// A newer preview supersedes worker requests still waiting to run.
+static PREVIEW_REQUEST_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 struct PreviewCacheEntry {
     // The DBPF borrows the memory map; declaration order keeps the DBPF
@@ -97,8 +116,12 @@ struct PackageProgress {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct PackageRelationUpdate {
+pub struct PackageRelationUpdate {
     package_path: String,
+    scan_generation: u64,
+    // None denotes automatic background analysis associated with a scan.
+    // Some(request_id) denotes the explicit on-demand verification.
+    request_id: Option<u64>,
     relations: BTreeMap<String, ResourceRelation>,
 }
 
@@ -196,8 +219,149 @@ pub struct ResourceRelation {
 #[serde(rename_all = "camelCase")]
 pub struct ScanResult {
     pub items: Vec<ResourceItem>,
+    pub scan_generation: u64,
     pub manifest_package_count: usize,
     pub relations: BTreeMap<String, ResourceRelation>,
+    // complete: checked; deferred: checks continue after list rendering;
+    // skipped: optional checks were omitted, not proof of no duplicates.
+    pub relations_status: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelationCheckPayload {
+    pub package_path: String,
+    pub scan_generation: u64,
+    pub request_id: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelationCancelPayload {
+    pub scan_generation: u64,
+    pub request_id: u64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct RelationCheckProgress {
+    package_path: String,
+    scan_generation: u64,
+    request_id: u64,
+    percent: u32,
+}
+
+// Unlike the baseline scan's optional 8,000-item budget, this explicit user
+// action can verify a complete grouped list with progress and cancellation.
+// It never writes to the input package and does not use the global Merger
+// cancellation flag.
+#[tauri::command]
+pub fn cancel_package_relation_analysis(payload: RelationCancelPayload) -> Result<(), String> {
+    let id = (payload.scan_generation, payload.request_id);
+    let mut operations = relation_operations()
+        .lock()
+        .map_err(|_| "Controle de verificações indisponível.".to_string())?;
+    if operations.active == Some(id) {
+        operations.active = None;
+        RELATION_ANALYSIS_CANCELLED.store(true, Ordering::Release);
+        RELATION_ANALYSIS_GENERATION.fetch_add(1, Ordering::AcqRel);
+    } else {
+        // Invokes can be processed out of order: cancellation must still win
+        // if it arrives before a queued start. Bound memory for stale IDs.
+        if operations.cancelled_before_start.len() >= 128 {
+            operations.cancelled_before_start.clear();
+        }
+        operations.cancelled_before_start.insert(id);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn analyze_package_relations_async(
+    app: AppHandle,
+    payload: RelationCheckPayload,
+) -> Result<PackageRelationUpdate, String> {
+    let id = (payload.scan_generation, payload.request_id);
+    let generation = {
+        let mut operations = relation_operations()
+            .lock()
+            .map_err(|_| "Controle de verificações indisponível.".to_string())?;
+        if operations.cancelled_before_start.remove(&id) {
+            return Err("Verificação de duplicatas cancelada.".to_string());
+        }
+        if payload.scan_generation != SCAN_GENERATION.load(Ordering::Acquire) {
+            return Err("Verificação referente a uma leitura anterior.".to_string());
+        }
+        operations.active = Some(id);
+        RELATION_ANALYSIS_CANCELLED.store(false, Ordering::Release);
+        RELATION_ANALYSIS_GENERATION.fetch_add(1, Ordering::AcqRel) + 1
+    };
+
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let check = || -> Result<(), String> {
+            if RELATION_ANALYSIS_CANCELLED.load(Ordering::Acquire)
+                || RELATION_ANALYSIS_GENERATION.load(Ordering::Acquire) != generation
+                || SCAN_GENERATION.load(Ordering::Acquire) != payload.scan_generation
+            {
+                return Err("Verificação de duplicatas cancelada.".to_string());
+            }
+            Ok(())
+        };
+        check()?;
+        validate_package_extension(&payload.package_path)?;
+        let path = payload.package_path.trim();
+        let mmap = open_package(path)?;
+        check()?;
+        let package = parse_package(&mmap)?;
+        check()?;
+        let name_map = package_resource_names(&package);
+        check()?;
+        let ea_catalog = EaSkinCatalog::load_for_package(Path::new(path));
+        let manifest = read_valid_merge_manifest_from_dbpf(&package);
+        check()?;
+        let items = build_scanned_items(
+            &package, "all", "", &name_map, ea_catalog.as_ref(), manifest.as_ref(),
+        );
+        check()?;
+        let last_percent = AtomicU32::new(u32::MAX);
+        let relations = build_resource_relations_monitored(
+            &package, &name_map, &items, &|completed, total| {
+                check()?;
+                let percent = (completed.saturating_mul(100) / total.max(1))
+                    .min(100) as u32;
+                if last_percent.swap(percent, Ordering::AcqRel) != percent {
+                    let _ = app.emit(
+                        "package-relations-progress",
+                        RelationCheckProgress {
+                            package_path: payload.package_path.clone(),
+                            scan_generation: payload.scan_generation,
+                            request_id: payload.request_id,
+                            percent,
+                        },
+                    );
+                }
+                Ok(())
+            },
+        )?;
+        check()?;
+        Ok(PackageRelationUpdate {
+            package_path: payload.package_path,
+            scan_generation: payload.scan_generation,
+            request_id: Some(payload.request_id),
+            relations,
+        })
+    })
+    .await
+    .map_err(|e| format!("Falha ao executar a verificação: {e}"))
+    .and_then(|worker_result| worker_result);
+
+    // Do not clear the newer operation if the user started a replacement.
+    if let Ok(mut operations) = relation_operations().lock() {
+        if operations.active == Some(id) {
+            operations.active = None;
+        }
+    }
+    result
 }
 
 #[derive(Debug, Deserialize)]
@@ -3090,15 +3254,24 @@ fn build_skintone_group_items(
     items
 }
 
-fn is_valid_png(data: &[u8]) -> bool {
-    data.len() >= 8 && data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
+fn encode_preview_image(data: &[u8], resource_type: u32, edge: u32) -> Option<String> {
+    let hint = (resource_type == TYPE_IMAG_TGA).then_some(crate::preview_images::PreviewHint::Tga);
+    crate::preview_images::preview_png(data, hint, edge)
+        .map(|png| STANDARD.encode(png))
 }
 
-fn encode_best_preview(entries: impl Iterator<Item = (usize, Vec<u8>)>) -> Option<String> {
-    entries
-        .filter_map(|(size, data)| is_valid_png(&data).then_some((size, STANDARD.encode(&data))))
-        .max_by_key(|(size, _)| *size)
-        .map(|(_, b64)| b64)
+fn encode_best_preview<'a>(
+    entries: impl Iterator<Item = (u32, &'a [u8])>,
+    edge: u32,
+) -> Option<String> {
+    // Prefer higher-resolution candidates but decode only until the first
+    // valid image. Avoid copying multiple potentially huge DDS payloads.
+    let mut candidates: Vec<_> = entries
+        .filter(|(_, data)| !data.is_empty() && data.len() <= 32 * 1024 * 1024)
+        .collect();
+    candidates.sort_by_key(|(_, data)| std::cmp::Reverse(data.len()));
+    candidates.into_iter()
+        .find_map(|(resource_type, data)| encode_preview_image(data, resource_type, edge))
 }
 
 fn parse_thumbnail_triplet(value: &str) -> Option<ResourceKeyParts> {
@@ -3141,6 +3314,23 @@ fn is_object_thumbnail_type(resource_type: u32) -> bool {
         resource_type,
         TYPE_ICON | TYPE_THUM_SMALL | TYPE_THUM_MED | TYPE_THUM_LARGE
             | 0x0580A2B4 | 0x0580A2B5 | 0x0580A2B6
+    )
+}
+
+// List thumbnails must only decode genuine Sims 3 ICON or THUM resources.
+// Do not use regular IMG/IMAG textures or SNAP screenshots as list pictures.
+fn is_icon_or_thum_resource_type(resource_type: u32) -> bool {
+    matches!(resource_type,
+        TYPE_ICON | 0x2E75C764 | 0x2E75C766 | 0x2E75C767
+            | 0xD84E7FC5 | 0xD84E7FC6 | 0xD84E7FC7
+            | TYPE_THUM_SMALL | TYPE_THUM_MED | TYPE_THUM_LARGE
+            | 0x0580A2B4 | 0x0580A2B5 | 0x0580A2B6
+            | 0x0589DC44 | 0x0589DC45 | 0x0589DC46
+            | 0x05B1B524 | 0x05B1B525 | 0x05B1B526
+            | 0x05B17698 | 0x05B17699 | 0x05B1769A
+            | 0x2653E3C8 | 0x2653E3C9 | 0x2653E3CA
+            | 0x2D4284F0 | 0x2D4284F1 | 0x2D4284F2
+            | 0x5DE9DBA0 | 0x5DE9DBA1 | 0x5DE9DBA2
     )
 }
 
@@ -3195,7 +3385,11 @@ fn object_manifest_icon_ref(package: &DBPF<'_>, key: ResourceKeyParts) -> Option
 
 // Resolve thumbnail references within this package's resource metadata,
 // rather than borrowing an unrelated thumbnail or showing a stock preview.
-fn linked_embedded_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> Option<String> {
+fn linked_embedded_preview_base64(
+    package: &DBPF<'_>,
+    key: ResourceKeyParts,
+    edge: u32,
+) -> Option<String> {
     if !matches!(
         key.resource_type,
         TYPE_CASP | TYPE_FACE | TYPE_SKINTONE | TYPE_PATTERN | TYPE_XML
@@ -3213,8 +3407,6 @@ fn linked_embedded_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> 
     for window in data.windows(8) {
         let instance = u64::from_le_bytes(window.try_into().ok()?);
         let matches = package.entries_for_instance(instance);
-        // Most sliding 8-byte windows do not identify any real resource:
-        // don't allocate an entry in the set for those false candidates.
         if matches.is_empty() || !seen.insert(instance) { continue; }
         for &candidate_index in matches {
             let Some(entry) = package.files.get(candidate_index) else { continue };
@@ -3222,99 +3414,100 @@ fn linked_embedded_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> 
                 entry.resource_type, TYPE_THUM_SMALL | TYPE_THUM_MED | TYPE_THUM_LARGE
                     | 0x0580A2B4 | 0x0580A2B5 | 0x0580A2B6 | TYPE_ICON
             );
-            let is_image = matches!(entry.resource_type, TYPE_IMG | TYPE_IMAG_PNG);
-            if !(is_thumb || is_image) || !is_valid_png(entry.data()) { continue; }
-            let bytes = entry.data().to_vec();
-            if is_thumb { thumbs.push((bytes.len(), bytes)); }
-            else { images.push((bytes.len(), bytes)); }
+            let is_image = matches!(entry.resource_type,
+                TYPE_IMG | TYPE_IMAG_JPG | TYPE_IMAG_PNG | TYPE_IMAG_TGA);
+            if !(is_thumb || is_image) { continue; }
+            let bytes = entry.data();
+            if is_thumb { thumbs.push((entry.resource_type, bytes)); }
+            else { images.push((entry.resource_type, bytes)); }
         }
         if thumbs.len() >= 16 || images.len() >= 16 { break; }
     }
-    encode_best_preview(thumbs.into_iter())
-        .or_else(|| encode_best_preview(images.into_iter()))
+    encode_best_preview(thumbs.into_iter(), edge)
+        .or_else(|| encode_best_preview(images.into_iter(), edge))
 }
 
 fn find_preview_base64(package: &DBPF<'_>, key: ResourceKeyParts) -> Option<String> {
+    find_preview_base64_with_size(package, key, 320)
+}
+
+fn find_preview_base64_with_size(
+    package: &DBPF<'_>,
+    key: ResourceKeyParts,
+    edge: u32,
+) -> Option<String> {
     let thum_types = [
-        TYPE_THUM_SMALL,
-        TYPE_THUM_MED,
-        TYPE_THUM_LARGE,
-        0x0580A2B4,
-        0x0580A2B5,
-        0x0580A2B6,
+        TYPE_THUM_SMALL, TYPE_THUM_MED, TYPE_THUM_LARGE,
+        0x0580A2B4, 0x0580A2B5, 0x0580A2B6,
     ];
 
-    // 1) THUM com a mesma instance do recurso selecionado
+    // 1) Embedded THUM with the same instance.
     if let Some(b64) = encode_best_preview(
         package.entries_for_instance(key.instance).iter()
             .filter_map(|&index| package.files.get(index))
-            .filter(|entry| {
-                thum_types.contains(&entry.resource_type)
-                    || (resource_is_png(entry.resource_type)
-                        && matches!(
-                            entry.resource_type,
-                            TYPE_THUM_SMALL | TYPE_THUM_MED | TYPE_THUM_LARGE
-                        ))
-            })
-            .map(|entry| (entry.data().len(), entry.data().to_vec())),
-    ) {
-        return Some(b64);
-    }
+            .filter(|entry| thum_types.contains(&entry.resource_type))
+            .map(|entry| (entry.resource_type, entry.data())),
+        edge,
+    ) { return Some(b64); }
 
-    // 2) Se o próprio recurso selecionado for ICON, usar ele diretamente
+    // 2) A selected ICON can be previewed directly.
     if key.resource_type == TYPE_ICON {
         if let Some(entry) = package.entry_index(TYPE_ICON, key.resource_group, key.instance)
             .and_then(|index| package.files.get(index)) {
-            let data = entry.data();
-            if is_valid_png(data) {
-                return Some(STANDARD.encode(data));
+            if let Some(b64) = encode_preview_image(entry.data(), TYPE_ICON, edge) {
+                return Some(b64);
             }
         }
     }
 
-    // 3) ICON com a mesma instance do recurso selecionado
+    // 3) ICON with matching instance.
     if let Some(b64) = encode_best_preview(
-        package
-            .files
-            .iter()
-            .filter(|entry| entry.resource_type == TYPE_ICON && entry.instance == key.instance)
-            .map(|entry| (entry.data().len(), entry.data().to_vec())),
-    ) {
-        return Some(b64);
-    }
+        package.entries_for_instance(key.instance).iter()
+            .filter_map(|&index| package.files.get(index))
+            .filter(|entry| entry.resource_type == TYPE_ICON)
+            .map(|entry| (entry.resource_type, entry.data())),
+        edge,
+    ) { return Some(b64); }
 
-    // 4) ICON apontado por manifest / XML de objeto
+    // 4) ICON referenced by the object's metadata/manifest.
     if let Some(icon) = object_manifest_icon_ref(package, key) {
         if let Some(entry) = package.entry_index(icon.resource_type, icon.resource_group, icon.instance)
             .and_then(|index| package.files.get(index)) {
-            let data = entry.data();
-            if is_valid_png(data) {
-                return Some(STANDARD.encode(data));
+            if let Some(b64) = encode_preview_image(entry.data(), icon.resource_type, edge) {
+                return Some(b64);
             }
         }
     }
 
-    // 5) IMG / IMAG (skin e afins)
+    // 5) TS3 textures: PNG/DDS and RLE-compressed TGA.
     encode_best_preview(
         package.entries_for_instance(key.instance).iter()
             .filter_map(|&index| package.files.get(index))
-            .filter(|entry| {
-                matches!(
-                    entry.resource_type,
-                    TYPE_IMG | TYPE_IMAG_JPG | TYPE_IMAG_PNG | TYPE_IMAG_TGA
-                )
-            })
-            .map(|entry| (entry.data().len(), entry.data().to_vec())),
-    ).or_else(|| linked_embedded_preview_base64(package, key))
+            .filter(|entry| matches!(entry.resource_type,
+                TYPE_IMG | TYPE_IMAG_JPG | TYPE_IMAG_PNG | TYPE_IMAG_TGA))
+            .map(|entry| (entry.resource_type, entry.data())),
+        edge,
+    ).or_else(|| linked_embedded_preview_base64(package, key, edge))
 }
 
-fn sims3_thumbnails_dir(app: &AppHandle) -> Option<PathBuf> {
-    let documents = app.path().document_dir().ok()?;
-    let path = documents
-        .join("Electronic Arts")
-        .join("The Sims 3")
-        .join("Thumbnails");
-    path.is_dir().then_some(path)
+// The game keeps its cache filenames in English, but the user folder varies
+// by installed locale. Use the OS Documents API rather than a literal path.
+fn thumbnail_directory_candidates(documents: &Path) -> Vec<PathBuf> {
+    const NAMES: &[&str] = &[
+        "The Sims 3", "Os Sims 3", "Los Sims 3", "Les Sims 3",
+        "Die Sims 3", "I Sims 3", "De Sims 3", "Sims 3",
+    ];
+    NAMES.iter()
+        .map(|name| documents.join("Electronic Arts").join(name).join("Thumbnails"))
+        .collect()
+}
+
+fn sims3_thumbnails_dirs(app: &AppHandle) -> Vec<PathBuf> {
+    let Ok(documents) = app.path().document_dir() else { return Vec::new() };
+    thumbnail_directory_candidates(&documents)
+        .into_iter()
+        .filter(|candidate| candidate.is_dir())
+        .collect()
 }
 
 fn thumbnail_cache_file_order(resource_type: u32) -> [&'static str; 3] {
@@ -3330,35 +3523,41 @@ fn thumbnail_cache_file_order(resource_type: u32) -> [&'static str; 3] {
     }
 }
 
-fn thumbnail_from_cache_package(path: &Path, instance: u64) -> Option<String> {
-    // Large Sims 3 thumbnail caches can be several gigabytes. Use a memory map
-    // instead of allocating a full heap copy for the automatic first preview.
+fn thumbnail_from_cache_package(
+    path: &Path, instance: u64, edge: u32, only_icon_or_thum: bool,
+) -> Option<String> {
+    // Cache packages can be gigabytes: mmap, then find only matching indices.
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if !path.is_file() {
-            return None;
-        }
+        if !path.is_file() { return None; }
         let file = File::open(path).ok()?;
         let mmap = unsafe { Mmap::map(&file).ok()? };
         let package = DBPF::new(&mmap[..]).ok()?;
         encode_best_preview(
-            package
-                .files
-                .iter()
-                .filter(|entry| entry.instance == instance)
-                .map(|entry| (entry.data().len(), entry.data().to_vec())),
+            package.entries_for_instance(instance).iter()
+                .filter_map(|&index| package.files.get(index))
+                .filter(|entry| !only_icon_or_thum || is_icon_or_thum_resource_type(entry.resource_type))
+                .map(|entry| (entry.resource_type, entry.data())),
+            edge,
         )
-    }))
-    .ok()
-    .flatten()
+    })).ok().flatten()
 }
 
 fn external_thumbnail_base64_from_dir(
     thumbnails_dir: &Path,
     key: ResourceKeyParts,
 ) -> Option<String> {
+    external_thumbnail_base64_from_dir_sized(thumbnails_dir, key, 320, false)
+}
+
+fn external_thumbnail_base64_from_dir_sized(
+    thumbnails_dir: &Path,
+    key: ResourceKeyParts,
+    edge: u32,
+    only_icon_or_thum: bool,
+) -> Option<String> {
     for file_name in thumbnail_cache_file_order(key.resource_type) {
         if let Some(preview) =
-            thumbnail_from_cache_package(&thumbnails_dir.join(file_name), key.instance)
+            thumbnail_from_cache_package(&thumbnails_dir.join(file_name), key.instance, edge, only_icon_or_thum)
         {
             return Some(preview);
         }
@@ -3366,25 +3565,125 @@ fn external_thumbnail_base64_from_dir(
     None
 }
 
-fn external_thumbnail_base64(app: &AppHandle, key: ResourceKeyParts) -> Option<String> {
-    let thumbnails_dir = sims3_thumbnails_dir(app)?;
-    external_thumbnail_base64_from_dir(&thumbnails_dir, key)
+fn external_thumbnail_base64(app: &AppHandle, key: ResourceKeyParts, edge: u32) -> Option<String> {
+    for thumbnails_dir in sims3_thumbnails_dirs(app) {
+        if let Some(preview) = external_thumbnail_base64_from_dir_sized(&thumbnails_dir, key, edge, false) {
+            return Some(preview);
+        }
+    }
+    None
+}
+
+// Apply the same strict resource-type filter to the game's thumbnail caches.
+fn external_list_thumbnail_base64(
+    app: &AppHandle, key: ResourceKeyParts, edge: u32,
+) -> Option<String> {
+    for thumbnails_dir in sims3_thumbnails_dirs(app) {
+        if let Some(preview) =
+            external_thumbnail_base64_from_dir_sized(&thumbnails_dir, key, edge, true)
+        {
+            return Some(preview);
+        }
+    }
+    None
 }
 
 fn pose_list_preview_base64(package: &DBPF<'_>, text: &str) -> Option<String> {
+    pose_list_preview_base64_sized(package, text, 320)
+}
+
+fn pose_list_preview_base64_sized(
+    package: &DBPF<'_>,
+    text: &str,
+    edge: u32,
+) -> Option<String> {
     let icon_hashes = pose_list_icon_hashes(text);
     encode_best_preview(
-        package
-            .files
-            .iter()
-            .filter(|entry| {
-                matches!(
-                    entry.resource_type,
-                    TYPE_IMG | TYPE_IMAG_JPG | TYPE_IMAG_PNG | TYPE_IMAG_TGA
-                ) && icon_hashes.contains(&entry.instance)
-            })
-            .map(|entry| (entry.data().len(), entry.data().to_vec())),
+        package.files.iter()
+            .filter(|entry| matches!(entry.resource_type,
+                TYPE_IMG | TYPE_IMAG_JPG | TYPE_IMAG_PNG | TYPE_IMAG_TGA)
+                && icon_hashes.contains(&entry.instance))
+            .map(|entry| (entry.resource_type, entry.data())),
+        edge,
     )
+}
+
+// Read linked thumbnail instances without borrowing regular textures.
+// The full selected-item preview retains its independent IMG/IMAG handling.
+fn linked_embedded_thumbnail_base64(
+    package: &DBPF<'_>,
+    key: ResourceKeyParts,
+    edge: u32,
+) -> Option<String> {
+    if !matches!(
+        key.resource_type,
+        TYPE_CASP | TYPE_FACE | TYPE_SKINTONE | TYPE_PATTERN | TYPE_XML
+            | TYPE_OBJD | TYPE_OBJK | TYPE_VPXY | TYPE_MODL | TYPE_MLOD
+            | TYPE_TXTC | TYPE_FTPT
+    ) { return None; }
+
+    let index = package.entry_index(key.resource_type, key.resource_group, key.instance)?;
+    let data = package.files.get(index)?.data();
+    if data.len() < 8 || data.len() > 1024 * 1024 { return None; }
+
+    let mut seen = HashSet::new();
+    let mut thumbs = Vec::new();
+    for window in data.windows(8) {
+        let instance = u64::from_le_bytes(window.try_into().ok()?);
+        if !seen.insert(instance) { continue; }
+        for &candidate_index in package.entries_for_instance(instance) {
+            let Some(entry) = package.files.get(candidate_index) else { continue };
+            if is_icon_or_thum_resource_type(entry.resource_type) {
+                thumbs.push((entry.resource_type, entry.data()));
+                if thumbs.len() >= 16 { break; }
+            }
+        }
+        if thumbs.len() >= 16 { break; }
+    }
+    encode_best_preview(thumbs.into_iter(), edge)
+}
+
+fn embedded_resource_thumbnail(
+    package: &DBPF<'_>,
+    key: ResourceKeyParts,
+    edge: u32,
+) -> Option<String> {
+    // Direct ICON/THUM entries, including small and large variants.
+    if is_icon_or_thum_resource_type(key.resource_type) {
+        if let Some(entry) = package
+            .entry_index(key.resource_type, key.resource_group, key.instance)
+            .and_then(|index| package.files.get(index))
+        {
+            if let Some(preview) = encode_preview_image(entry.data(), entry.resource_type, edge) {
+                return Some(preview);
+            }
+        }
+    }
+
+    // Prefer associated thumbnail entries, never arbitrary IMG/IMAG textures.
+    if let Some(preview) = encode_best_preview(
+        package.entries_for_instance(key.instance).iter()
+            .filter_map(|&index| package.files.get(index))
+            .filter(|entry| is_icon_or_thum_resource_type(entry.resource_type))
+            .map(|entry| (entry.resource_type, entry.data())),
+        edge,
+    ) {
+        return Some(preview);
+    }
+
+    // Catalog metadata can refer to ICON with a different instance.
+    if let Some(icon) = object_manifest_icon_ref(package, key) {
+        if let Some(entry) = package
+            .entry_index(icon.resource_type, icon.resource_group, icon.instance)
+            .and_then(|index| package.files.get(index))
+        {
+            if let Some(preview) = encode_preview_image(entry.data(), entry.resource_type, edge) {
+                return Some(preview);
+            }
+        }
+    }
+
+    linked_embedded_thumbnail_base64(package, key, edge)
 }
 
 fn selected_entry_indices(package: &DBPF<'_>, keys: &HashSet<String>) -> Vec<usize> {
@@ -4541,26 +4840,52 @@ fn object_catalog_anchor_tgis(item: &ResourceItem) -> Option<Vec<(u32, u32, u64)
     Some(anchors)
 }
 
-fn relation_hash_pair(data: &[u8]) -> (u64, u64) {
+// Preserve the exact original rolling hash while allowing a user to stop
+// hashing a single unusually large decompressed resource. Data decompression
+// itself is delegated to DBPF and may still run until that resource finishes.
+fn relation_hash_pair_monitored<F>(
+    data: &[u8],
+    checkpoint: &F,
+) -> Result<(u64, u64), String>
+where
+    F: Fn() -> Result<(), String>,
+{
     let mut a = 0xcbf29ce484222325u64;
     let mut b = 0x84222325cbf29ce4u64 ^ data.len() as u64;
+    checkpoint()?;
+    for chunk in data.chunks(1024 * 1024) {
+        checkpoint()?;
+        for &byte in chunk {
+            a ^= byte as u64;
+            a = a.wrapping_mul(0x100000001b3);
 
-    for &byte in data {
-        a ^= byte as u64;
-        a = a.wrapping_mul(0x100000001b3);
-
-        b ^= (byte as u64).wrapping_add(0x9e3779b97f4a7c15);
-        b = b.rotate_left(13).wrapping_mul(0xff51afd7ed558ccd);
-        b ^= b >> 29;
+            b ^= (byte as u64).wrapping_add(0x9e3779b97f4a7c15);
+            b = b.rotate_left(13).wrapping_mul(0xff51afd7ed558ccd);
+            b ^= b >> 29;
+        }
     }
-
-    (a, b)
+    checkpoint()?;
+    Ok((a, b))
 }
 
-fn relation_tgi_index(package: &DBPF<'_>) -> HashMap<ResourceKeyParts, Vec<usize>> {
-    let mut index: HashMap<ResourceKeyParts, Vec<usize>> = HashMap::new();
+#[cfg(test)]
+fn relation_hash_pair(data: &[u8]) -> (u64, u64) {
+    relation_hash_pair_monitored(data, &|| Ok(())).expect("infallible test hash")
+}
 
+// The optional full verification can run against multi-gigabyte merges.
+// Check cancellation while indexing, comparing conflicting TGIs, expanding
+// individual logical resources and comparing exact decoded payloads.
+fn relation_tgi_index<F>(
+    package: &DBPF<'_>,
+    checkpoint: &F,
+) -> Result<HashMap<ResourceKeyParts, Vec<usize>>, String>
+where
+    F: Fn() -> Result<(), String>,
+{
+    let mut index: HashMap<ResourceKeyParts, Vec<usize>> = HashMap::new();
     for (entry_index, entry) in package.files.iter().enumerate() {
+        if entry_index % 256 == 0 { checkpoint()?; }
         let parts = ResourceKeyParts {
             resource_type: entry.resource_type,
             resource_group: entry.resource_group,
@@ -4568,48 +4893,69 @@ fn relation_tgi_index(package: &DBPF<'_>) -> HashMap<ResourceKeyParts, Vec<usize
         };
         index.entry(parts).or_default().push(entry_index);
     }
-
-    index
+    checkpoint()?;
+    Ok(index)
 }
 
-fn relation_entries_have_same_payload(package: &DBPF<'_>, indices: &[usize]) -> bool {
+fn relation_entries_have_same_payload<F>(
+    package: &DBPF<'_>,
+    indices: &[usize],
+    checkpoint: &F,
+) -> Result<bool, String>
+where
+    F: Fn() -> Result<(), String>,
+{
     let Some(first_index) = indices.first().copied() else {
-        return true;
+        return Ok(true);
     };
+    checkpoint()?;
     let first = package.files[first_index].data();
-    indices
-        .iter()
-        .copied()
-        .skip(1)
-        .all(|entry_index| package.files[entry_index].data() == first)
+    checkpoint()?;
+    for (position, &entry_index) in indices.iter().enumerate().skip(1) {
+        if position % 8 == 1 { checkpoint()?; }
+        if package.files[entry_index].data() != first {
+            return Ok(false);
+        }
+        checkpoint()?;
+    }
+    Ok(true)
 }
 
-fn relation_tgi_conflicts(
+fn relation_tgi_conflicts<F>(
     package: &DBPF<'_>,
     tgi_index: &HashMap<ResourceKeyParts, Vec<usize>>,
-) -> HashMap<ResourceKeyParts, usize> {
+    checkpoint: &F,
+) -> Result<HashMap<ResourceKeyParts, usize>, String>
+where
+    F: Fn() -> Result<(), String>,
+{
     let mut conflicts = HashMap::new();
-
-    for (parts, indices) in tgi_index {
+    for (position, (parts, indices)) in tgi_index.iter().enumerate() {
+        if position % 128 == 0 { checkpoint()?; }
         if relation_ignored_resource(*parts) || indices.len() < 2 {
             continue;
         }
-        if !relation_entries_have_same_payload(package, indices) {
+        if !relation_entries_have_same_payload(package, indices, checkpoint)? {
             conflicts.insert(*parts, indices.len());
         }
     }
-
-    conflicts
+    checkpoint()?;
+    Ok(conflicts)
 }
 
-fn logical_profile_for_item(
+fn logical_profile_for_item<F>(
     package: &DBPF<'_>,
     item: &ResourceItem,
     name_map: &BTreeMap<u64, String>,
     tgi_index: &HashMap<ResourceKeyParts, Vec<usize>>,
     tgi_conflicts: &HashMap<ResourceKeyParts, usize>,
     atom_cache: &mut HashMap<usize, LogicalAtomKey>,
-) -> Result<(Option<LogicalProfile>, usize), String> {
+    checkpoint: &F,
+) -> Result<(Option<LogicalProfile>, usize), String>
+where
+    F: Fn() -> Result<(), String>,
+{
+    checkpoint()?;
     let base_keys: HashSet<String> = item
         .key
         .split("||")
@@ -4622,14 +4968,17 @@ fn logical_profile_for_item(
         return Ok((None, 0));
     }
 
+    // Reuse the same dependency expansion as export and the baseline report.
     let expanded = expand_selection_for_export(package, &base_keys, false, name_map)?;
+    checkpoint()?;
     let mut ordered_keys: Vec<String> = expanded.into_iter().collect();
     ordered_keys.sort();
 
     let mut atoms = Vec::new();
     let mut conflict_count = 0usize;
 
-    for key in ordered_keys {
+    for (position, key) in ordered_keys.into_iter().enumerate() {
+        if position % 8 == 0 { checkpoint()?; }
         let parts = parse_key(&key)?;
         if relation_ignored_resource(parts) {
             continue;
@@ -4648,17 +4997,23 @@ fn logical_profile_for_item(
         }
 
         let entry_index = indices[0];
-        let atom_key = *atom_cache.entry(entry_index).or_insert_with(|| {
+        let atom_key = if let Some(existing) = atom_cache.get(&entry_index) {
+            *existing
+        } else {
+            checkpoint()?;
             let data = package.files[entry_index].data();
-            let (hash_a, hash_b) = relation_hash_pair(data);
-            LogicalAtomKey {
+            let (hash_a, hash_b) = relation_hash_pair_monitored(data, checkpoint)?;
+            let computed = LogicalAtomKey {
                 resource_type: parts.resource_type,
                 resource_group: parts.resource_group,
                 data_len: data.len(),
                 hash_a,
                 hash_b,
-            }
-        });
+            };
+            atom_cache.insert(entry_index, computed);
+            computed
+        };
+        checkpoint()?;
         atoms.push(LogicalAtom {
             key: atom_key,
             entry_index,
@@ -4673,26 +5028,32 @@ fn logical_profile_for_item(
     }
 
     atoms.sort_by_key(|atom| atom.key);
+    checkpoint()?;
     Ok((Some(LogicalProfile { atoms }), 0))
 }
 
-fn logical_profiles_exactly_equal(
+fn logical_profiles_exactly_equal<F>(
     package: &DBPF<'_>,
     left: &LogicalProfile,
     right: &LogicalProfile,
-) -> bool {
+    checkpoint: &F,
+) -> Result<bool, String>
+where
+    F: Fn() -> Result<(), String>,
+{
+    checkpoint()?;
     if left.atoms.len() != right.atoms.len() {
-        return false;
+        return Ok(false);
     }
-
     let left_keys: Vec<LogicalAtomKey> = left.atoms.iter().map(|atom| atom.key).collect();
     let right_keys: Vec<LogicalAtomKey> = right.atoms.iter().map(|atom| atom.key).collect();
     if left_keys != right_keys {
-        return false;
+        return Ok(false);
     }
 
     let mut start = 0usize;
     while start < left.atoms.len() {
+        checkpoint()?;
         let atom_key = left.atoms[start].key;
         let mut end = start + 1;
         while end < left.atoms.len() && left.atoms[end].key == atom_key {
@@ -4701,10 +5062,12 @@ fn logical_profiles_exactly_equal(
 
         let mut used = vec![false; end - start];
         for left_atom in &left.atoms[start..end] {
+            checkpoint()?;
             let left_data = package.files[left_atom.entry_index].data();
             let mut matched = false;
 
             for (offset, right_atom) in right.atoms[start..end].iter().enumerate() {
+                if offset % 8 == 0 { checkpoint()?; }
                 if used[offset] {
                     continue;
                 }
@@ -4715,16 +5078,14 @@ fn logical_profiles_exactly_equal(
                     break;
                 }
             }
-
             if !matched {
-                return false;
+                return Ok(false);
             }
         }
-
         start = end;
     }
-
-    true
+    checkpoint()?;
+    Ok(true)
 }
 
 fn build_resource_relations(
@@ -4732,8 +5093,27 @@ fn build_resource_relations(
     name_map: &BTreeMap<u64, String>,
     items: &[ResourceItem],
 ) -> BTreeMap<String, ResourceRelation> {
-    let tgi_index = relation_tgi_index(package);
-    let tgi_conflicts = relation_tgi_conflicts(package, &tgi_index);
+    build_resource_relations_monitored(package, name_map, items, &|_, _| Ok(()))
+        .unwrap_or_default()
+}
+
+// The same exact TGI/hash comparisons, with cooperative checkpoints between
+// resource profiles and within large duplicate candidate groups.
+fn build_resource_relations_monitored<F>(
+    package: &DBPF<'_>,
+    name_map: &BTreeMap<u64, String>,
+    items: &[ResourceItem],
+    monitor: &F,
+) -> Result<BTreeMap<String, ResourceRelation>, String>
+where
+    F: Fn(usize, usize) -> Result<(), String>,
+{
+    let total_work = items.len().saturating_mul(2).max(1);
+    monitor(0, total_work)?;
+    let tgi_index = relation_tgi_index(package, &|| monitor(0, total_work))?;
+    let tgi_conflicts = relation_tgi_conflicts(
+        package, &tgi_index, &|| monitor(0, total_work),
+    )?;
     let mut atom_cache: HashMap<usize, LogicalAtomKey> = HashMap::new();
     let mut profiles: Vec<Option<LogicalProfile>> = vec![None; items.len()];
     let mut relations: Vec<ResourceRelation> = vec![ResourceRelation::default(); items.len()];
@@ -4742,16 +5122,23 @@ fn build_resource_relations(
     let object_roots: Vec<_> = items.iter().map(object_catalog_anchor_tgis).collect();
 
     for (item_index, item) in items.iter().enumerate() {
-        let Ok((profile, conflict_count)) = logical_profile_for_item(
+        if item_index % 16 == 0 { monitor(item_index, total_work)?; }
+        let (profile, conflict_count) = match logical_profile_for_item(
             package,
             item,
             name_map,
             &tgi_index,
             &tgi_conflicts,
             &mut atom_cache,
-        )
-        else {
-            continue;
+            &|| monitor(item_index, total_work),
+        ) {
+            Ok(profile) => profile,
+            Err(_) => {
+                // Historical behavior skips malformed individual resources;
+                // cancellation, however, must never be mistaken for damage.
+                monitor(item_index, total_work)?;
+                continue;
+            }
         };
         if conflict_count > 1 {
             relations[item_index].tgi_conflict_count = conflict_count;
@@ -4769,7 +5156,10 @@ fn build_resource_relations(
         buckets.entry(summary).or_default().push(item_index);
     }
 
+    let mut checked_groups = 0usize;
     for candidates in buckets.values().filter(|candidates| candidates.len() > 1) {
+        monitor(items.len().saturating_add(checked_groups).min(total_work), total_work)?;
+        checked_groups += 1;
         let mut remaining = candidates.clone();
 
         while let Some(seed) = remaining.pop() {
@@ -4780,14 +5170,20 @@ fn build_resource_relations(
             let mut exact_group = vec![seed];
             let mut keep = Vec::new();
 
-            for candidate in remaining {
+            for (position, candidate) in remaining.into_iter().enumerate() {
+                if position % 16 == 0 {
+                    monitor(items.len().saturating_add(checked_groups).min(total_work), total_work)?;
+                }
                 let Some(candidate_profile) = profiles[candidate].as_ref() else {
                     keep.push(candidate);
                     continue;
                 };
 
                 if object_roots[seed] == object_roots[candidate]
-                    && logical_profiles_exactly_equal(package, seed_profile, candidate_profile)
+                    && logical_profiles_exactly_equal(
+                        package, seed_profile, candidate_profile,
+                        &|| monitor(items.len().saturating_add(checked_groups).min(total_work), total_work),
+                    )?
                 {
                     exact_group.push(candidate);
                 } else {
@@ -4806,6 +5202,7 @@ fn build_resource_relations(
         }
     }
 
+    monitor(total_work.saturating_sub(1), total_work)?;
     let mut by_key = BTreeMap::new();
     for (item, relation) in items.iter().zip(relations.into_iter()) {
         if relation.duplicate_count > 1 || relation.tgi_conflict_count > 1 {
@@ -4813,7 +5210,8 @@ fn build_resource_relations(
         }
     }
 
-    by_key
+    monitor(total_work, total_work)?;
+    Ok(by_key)
 }
 
 fn manifest_removal_plan_sets(
@@ -7443,9 +7841,74 @@ fn build_merge_manifest_items(
 
 #[tauri::command]
 pub async fn scan_package_resources(app: AppHandle, payload: ScanPayload) -> Result<ScanResult, String> {
+    // Clear stale cancellation BEFORE queueing the worker. If the user presses
+    // Cancel while spawn_blocking is still queued, the worker must preserve it.
+    CANCEL_REQUESTED.store(false, Ordering::Release);
     tauri::async_runtime::spawn_blocking(move || scan_package_resources_inner(Some(&app), payload))
         .await
         .map_err(|error| format!("Falha ao executar a leitura do package: {error}"))?
+}
+
+// Build exactly the same logical resources for initial scanning and for
+// explicit duplicate verification; never compare raw DBPF entries against
+// the grouped list shown to the user.
+fn build_scanned_items(
+    package: &DBPF<'_>,
+    resource_type: &str,
+    query: &str,
+    name_map: &BTreeMap<u64, String>,
+    ea_catalog: Option<&EaSkinCatalog>,
+    merge_manifest: Option<&MergeManifest>,
+) -> Vec<ResourceItem> {
+    let items = if resource_type == "all" && merge_manifest.is_some() {
+            build_merge_manifest_items(
+                package,
+                merge_manifest.unwrap(),
+                &query,
+                &name_map,
+            )
+        } else if resource_type == "skintone" {
+            build_skintone_group_items(package, &query, &name_map, ea_catalog)
+        } else if resource_type == "face" {
+            build_face_group_items(package, &query, &name_map)
+        } else if resource_type == "casp" {
+            build_casp_group_items(package, &query, &name_map)
+        } else if resource_type == "clip" {
+            build_clip_group_items(package, &query, &name_map)
+        } else if resource_type == "all" {
+            let mut items: Vec<ResourceItem> = package
+                .files
+                .iter()
+                .filter(|entry| filter_matches(entry, "all"))
+                .filter(|entry| entry.resource_type != TYPE_SKINTONE)
+                .filter(|entry| entry.resource_type != TYPE_FACE)
+                .filter(|entry| entry.resource_type != TYPE_XML)
+                .filter(|entry| entry.resource_type != TYPE_CASP)
+                .filter(|entry| entry.resource_type != TYPE_CLIP)
+                .map(|entry| build_item(package, entry, &name_map))
+                .filter(|item| item_matches_query(item, &query))
+                .collect();
+
+            items.extend(build_casp_group_items(package, &query, &name_map));
+            items.extend(build_skintone_group_items(package, &query, &name_map, ea_catalog));
+            items.extend(build_face_group_items(package, &query, &name_map));
+            items.extend(build_clip_group_items(package, &query, &name_map));
+            items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+            items
+        } else {
+            let mut items: Vec<ResourceItem> = package
+                .files
+                .iter()
+                .filter(|entry| filter_matches(entry, &resource_type))
+                .filter(|entry| !(resource_type == "casp" && entry.resource_type == TYPE_XML))
+                .map(|entry| build_item(package, entry, &name_map))
+                .filter(|item| item_matches_query(item, &query))
+                .collect();
+
+            items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+            items
+        };
+    items
 }
 
 fn scan_package_resources_inner(
@@ -7465,7 +7928,25 @@ fn scan_package_resources_inner(
         _ => "all".to_string(),
     };
 
-    CANCEL_REQUESTED.store(false, Ordering::Release);
+    // Headless scans (unit tests and read-only offline verification) do not
+    // represent the active Tauri UI request. They must not invalidate each
+    // other's global scan generation or share the UI cancellation flag.
+    let live_scan = app.is_some();
+    let scan_generation = if live_scan {
+        SCAN_GENERATION.fetch_add(1, Ordering::AcqRel) + 1
+    } else {
+        0
+    };
+    let check_scan_cancelled = || -> Result<(), String> {
+        if !live_scan {
+            return Ok(());
+        }
+        check_cancelled()?;
+        if SCAN_GENERATION.load(Ordering::Acquire) != scan_generation {
+            return Err("A leitura foi substituída.".to_string());
+        }
+        Ok(())
+    };
     let started = Instant::now();
     emit_package_progress(
         app, started, "Opening package",
@@ -7474,9 +7955,9 @@ fn scan_package_resources_inner(
 
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mmap = open_package(package_path)?;
-        check_cancelled()?;
+        check_scan_cancelled()?;
         let package = parse_package(&mmap)?;
-        check_cancelled()?;
+        check_scan_cancelled()?;
         emit_package_progress(
             app, started, "Reading names",
             "Reading package metadata and resource names.", 1, 5, package.files.len(), mmap.len(),
@@ -7485,7 +7966,7 @@ fn scan_package_resources_inner(
         let name_map = package_resource_names(&package);
         // Optional user-supplied EA full-TGI reference, not bundled copyrighted data.
         let ea_catalog = EaSkinCatalog::load_for_package(Path::new(package_path));
-        check_cancelled()?;
+        check_scan_cancelled()?;
         let merge_manifest = read_valid_merge_manifest_from_dbpf(&package);
         let manifest_package_count = merge_manifest
             .as_ref()
@@ -7496,73 +7977,36 @@ fn scan_package_resources_inner(
             app, started, "Building resource list",
             "Building and sorting resource metadata.", 2, 5, package.files.len(), mmap.len(),
         );
-        check_cancelled()?;
-        let items = if resource_type == "all" && merge_manifest.is_some() {
-            build_merge_manifest_items(
-                &package,
-                merge_manifest.as_ref().unwrap(),
-                &query,
-                &name_map,
-            )
-        } else if resource_type == "skintone" {
-            build_skintone_group_items(&package, &query, &name_map, ea_catalog.as_ref())
-        } else if resource_type == "face" {
-            build_face_group_items(&package, &query, &name_map)
-        } else if resource_type == "casp" {
-            build_casp_group_items(&package, &query, &name_map)
-        } else if resource_type == "clip" {
-            build_clip_group_items(&package, &query, &name_map)
-        } else if resource_type == "all" {
-            let mut items: Vec<ResourceItem> = package
-                .files
-                .iter()
-                .filter(|entry| filter_matches(entry, "all"))
-                .filter(|entry| entry.resource_type != TYPE_SKINTONE)
-                .filter(|entry| entry.resource_type != TYPE_FACE)
-                .filter(|entry| entry.resource_type != TYPE_XML)
-                .filter(|entry| entry.resource_type != TYPE_CASP)
-                .filter(|entry| entry.resource_type != TYPE_CLIP)
-                .map(|entry| build_item(&package, entry, &name_map))
-                .filter(|item| item_matches_query(item, &query))
-                .collect();
+        check_scan_cancelled()?;
+        let items = build_scanned_items(
+            &package, &resource_type, &query, &name_map,
+            ea_catalog.as_ref(), merge_manifest.as_ref(),
+        );
 
-            items.extend(build_casp_group_items(&package, &query, &name_map));
-            items.extend(build_skintone_group_items(&package, &query, &name_map, ea_catalog.as_ref()));
-            items.extend(build_face_group_items(&package, &query, &name_map));
-            items.extend(build_clip_group_items(&package, &query, &name_map));
-            items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
-            items
-        } else {
-            let mut items: Vec<ResourceItem> = package
-                .files
-                .iter()
-                .filter(|entry| filter_matches(entry, &resource_type))
-                .filter(|entry| !(resource_type == "casp" && entry.resource_type == TYPE_XML))
-                .map(|entry| build_item(&package, entry, &name_map))
-                .filter(|item| item_matches_query(item, &query))
-                .collect();
-
-            items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
-            items
-        };
-
-        check_cancelled()?;
+        check_scan_cancelled()?;
         emit_package_progress(
             app, started, "Preparing relationship metadata",
             "Keeping large-package loading responsive.", 3, 5, package.files.len(), mmap.len(),
         );
-        let relations = if merge_manifest.is_some()
+        let (relations, relations_status) = if items.len() > MAX_RELATION_ANALYSIS_ITEMS {
+            // Beta 1 parity: returning the resource list takes priority over
+            // optional badges when thousands of entries require full hashing.
+            eprintln!("[package-relations] skip optional analysis for {} items", items.len());
+            (BTreeMap::new(), "skipped")
+        } else if merge_manifest.is_some()
             && mmap.len() > MAX_RELATION_ANALYSIS_PACKAGE_BYTES
         {
             // A manifest-backed 1 GiB merge already has authoritative source
             // ownership. Do not launch an uncancellable 1 GiB hashing and
             // decompression thread that competes with removal for CPU/RAM/I/O.
             eprintln!("[package-relations] skip optional large manifest analysis");
-            BTreeMap::new()
+            (BTreeMap::new(), "skipped")
         } else if mmap.len() <= MAX_RELATION_ANALYSIS_PACKAGE_BYTES {
-            let relations = build_resource_relations(&package, &name_map, &items);
-            check_cancelled()?;
-            relations
+            let relations = build_resource_relations_monitored(
+                &package, &name_map, &items,
+                &|_, _| check_scan_cancelled(),
+            )?;
+            (relations, "complete")
         } else if let Some(relation_app) = app.cloned() {
             // Relationship detection hashes/decompresses payloads. For large
             // packages, compute optional UI badges after returning the list.
@@ -7573,22 +8017,40 @@ fn scan_package_resources_inner(
             let relation_path = package_path.to_string();
             let relation_name_map = name_map.clone();
             let relation_items = items.clone();
+            let relation_generation = scan_generation;
             std::thread::spawn(move || {
                 let result = (|| -> Result<BTreeMap<String, ResourceRelation>, String> {
                     let mmap = open_package(&relation_path)?;
                     let package = parse_package(&mmap)?;
-                    Ok(build_resource_relations(
+                    build_resource_relations_monitored(
                         &package,
                         &relation_name_map,
                         &relation_items,
-                    ))
+                        &|_, _| {
+                            if SCAN_GENERATION.load(Ordering::Acquire) != relation_generation
+                                || CANCEL_REQUESTED.load(Ordering::Acquire)
+                            {
+                                return Err("Análise automática substituída ou cancelada.".to_string());
+                            }
+                            Ok(())
+                        },
+                    )
                 })();
                 match result {
                     Ok(relations) => {
+                        if SCAN_GENERATION.load(Ordering::Acquire) != relation_generation
+                            || CANCEL_REQUESTED.load(Ordering::Acquire)
+                        {
+                            // The user started another scan or cancelled this one;
+                            // never apply badges from obsolete heavy work.
+                            return;
+                        }
                         let _ = relation_app.emit(
                             "package-relations",
                             PackageRelationUpdate {
                                 package_path: relation_path,
+                                scan_generation: relation_generation,
+                                request_id: None,
                                 relations,
                             },
                         );
@@ -7599,21 +8061,25 @@ fn scan_package_resources_inner(
                     ),
                 }
             });
-            BTreeMap::new()
+            (BTreeMap::new(), "deferred")
         } else {
             // Unit tests do not own a Tauri AppHandle; calculate this result
             // synchronously so they still cover relation-analysis behavior.
-            build_resource_relations(&package, &name_map, &items)
+            (build_resource_relations_monitored(
+                &package, &name_map, &items, &|_, _| check_scan_cancelled(),
+            )?, "complete")
         };
-        check_cancelled()?;
+        check_scan_cancelled()?;
         emit_package_progress(
             app, started, "Ready", "Resource list ready.", 5, 5, package.files.len(), mmap.len(),
         );
 
         Ok(ScanResult {
             items,
+            scan_generation,
             manifest_package_count,
             relations,
+            relations_status: relations_status.to_string(),
         })
     }))
     .map_err(|_| "Falha ao carregar a lista de recursos deste package.".to_string())?
@@ -7860,6 +8326,51 @@ fn remove_selected_from_merged_inner(
     })
 }
 
+// Preserve Beta 2's cached, pose-aware preview implementation while running
+// cache construction and image decoding on a dedicated blocking worker.
+#[tauri::command]
+pub async fn get_resource_preview_async(
+    app: AppHandle,
+    payload: PreviewPayload,
+) -> Result<PreviewResult, String> {
+    let generation = PREVIEW_REQUEST_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    tauri::async_runtime::spawn_blocking(move || {
+        if PREVIEW_REQUEST_GENERATION.load(Ordering::Acquire) != generation {
+            return Err("Pré-visualização substituída por outra seleção.".to_string());
+        }
+        get_resource_preview(app, payload)
+    })
+    .await
+    .map_err(|error| format!("Falha ao preparar a pré-visualização: {error}"))?
+}
+
+// Separate from the full preview's latest-request guard: virtual-list rows
+// can load concurrently without invalidating the selected item's preview.
+#[tauri::command]
+pub async fn get_resource_thumbnail_async(
+    app: AppHandle,
+    payload: PreviewPayload,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        validate_package_extension(&payload.package_path)?;
+        let key = parse_key(first_compound_key(&payload.resource_key))?;
+        let path = canonical_package_path(&payload.package_path);
+        let mut cache = preview_cache().lock()
+            .map_err(|_| "Cache de miniaturas indisponível.".to_string())?;
+        if cache.as_ref().map(|entry| !preview_cache_is_current(entry, &path)).unwrap_or(true) {
+            *cache = Some(build_preview_cache(&path)?);
+        }
+        let package = &cache.as_ref()
+            .ok_or_else(|| "Cache de miniaturas indisponível.".to_string())?
+            .package;
+        let embedded = embedded_resource_thumbnail(package, key, 96);
+        // Never hold the shared preview lock while scanning external caches.
+        drop(cache);
+        Ok(embedded.or_else(|| external_list_thumbnail_base64(&app, key, 96)))
+    }).await
+      .map_err(|error| format!("Falha ao carregar miniatura: {error}"))?
+}
+
 #[tauri::command]
 pub fn get_resource_preview(app: AppHandle, payload: PreviewPayload) -> Result<PreviewResult, String> {
     validate_package_extension(&payload.package_path)?;
@@ -7926,16 +8437,18 @@ pub fn get_resource_preview(app: AppHandle, payload: PreviewPayload) -> Result<P
         let entry = &package.files[entry_index];
         let name_map = &cached.name_map;
 
+        let label = object_display_label(package, entry, name_map);
+        let resource_key = key_string(entry);
+        let kind = kind_from_type(entry.resource_type).to_string();
+        let details = format!(
+            "Type 0x{:08X} • Group 0x{:08X}",
+            entry.resource_type, entry.resource_group
+        );
+        let embedded = find_preview_base64(package, key);
+        drop(cache);
         Ok(PreviewResult {
-            label: object_display_label(package, entry, name_map),
-            key: key_string(entry),
-            kind: kind_from_type(entry.resource_type).to_string(),
-            details: format!(
-                "Type 0x{:08X} • Group 0x{:08X}",
-                entry.resource_type, entry.resource_group
-            ),
-            thumb_base64: find_preview_base64(package, key)
-                .or_else(|| external_thumbnail_base64(&app, key)),
+            label, key: resource_key, kind, details,
+            thumb_base64: embedded.or_else(|| external_thumbnail_base64(&app, key, 320)),
         })
     }))
     .unwrap_or_else(|_| Err("A prévia deste recurso falhou inesperadamente; o arquivo original não foi alterado.".to_string()))
@@ -8961,6 +9474,101 @@ mod remove_selected_tests {
     }
 
     #[test]
+    fn list_thumbnail_ignores_img_imag_and_preserves_full_preview() {
+        let path = test_path("strict-list-thumb-reject-images");
+        let instance = 0xBA11_0000_0000_1234u64;
+        let png = valid_preview_png([230, 40, 70, 255]);
+        write_test_package(&path, &[
+            (TYPE_CASP, 0, instance, vec![0; 24]),
+            (TYPE_IMG, 0, instance, png.clone()),
+            (TYPE_IMAG_PNG, 0, instance, png),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let key = ResourceKeyParts { resource_type: TYPE_CASP, resource_group: 0, instance };
+
+        assert!(embedded_resource_thumbnail(&package, key, 96).is_none(),
+            "IMG/IMAG must not supply the virtual-list thumbnail");
+        assert!(find_preview_base64(&package, key).is_some(),
+            "Full selected-item preview must keep its IMG/IMAG support");
+
+        drop(package);
+        drop(mmap);
+        let _ = remove_file(&path);
+    }
+
+    #[test]
+    fn list_thumbnail_prefers_linked_thum_over_img_and_accepts_icon_variants() {
+        let path = test_path("strict-list-thumb-linked");
+        let casp_instance = 0xA111_2222_3333_4444u64;
+        let thumb_instance = 0xB111_2222_3333_4444u64;
+        let thumb = valid_preview_png([10, 160, 85, 255]);
+        let texture = valid_preview_png([210, 30, 170, 255]);
+        let mut metadata = vec![4; 32];
+        metadata.extend_from_slice(&thumb_instance.to_le_bytes());
+        metadata.extend_from_slice(&[2; 16]);
+        write_test_package(&path, &[
+            (TYPE_CASP, 0, casp_instance, metadata),
+            (TYPE_IMG, 0, thumb_instance, texture),
+            (TYPE_THUM_MED, 0, thumb_instance, thumb.clone()),
+            (0x2E75C764, 0, 0x9999, valid_preview_png([25, 60, 240, 255])),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let casp_key = ResourceKeyParts {
+            resource_type: TYPE_CASP, resource_group: 0, instance: casp_instance,
+        };
+        let rendered = STANDARD.decode(
+            embedded_resource_thumbnail(&package, casp_key, 96).expect("Linked THUM missing")
+        ).unwrap();
+        assert_eq!(
+            image::load_from_memory(&rendered).unwrap().to_rgba8(),
+            image::load_from_memory(&thumb).unwrap().to_rgba8(),
+            "IMG texture must not replace a linked THUM"
+        );
+
+        let icon_key = ResourceKeyParts {
+            resource_type: 0x2E75C764, resource_group: 0, instance: 0x9999,
+        };
+        assert!(embedded_resource_thumbnail(&package, icon_key, 96).is_some(),
+            "Small ICON variant must be recognized");
+
+        drop(package);
+        drop(mmap);
+        let _ = remove_file(&path);
+    }
+
+    #[test]
+    fn strict_thumbnail_cache_skips_non_thumb_types() {
+        let root = test_dir("strict-list-thumbnail-cache");
+        let thumbnails = root.join("Thumbnails");
+        std::fs::create_dir_all(&thumbnails).unwrap();
+        let instance = 0x7654_3210_1234_4321u64;
+        let wrong = valid_preview_png([240, 18, 20, 255]);
+        let right = valid_preview_png([25, 180, 70, 255]);
+        write_test_package(&thumbnails.join("CASThumbnails.package"),
+            &[(TYPE_IMG, 1, instance, wrong.clone())]);
+        write_test_package(&thumbnails.join("ObjectThumbnails.package"),
+            &[(TYPE_THUM_LARGE, 1, instance, right.clone())]);
+        let key = ResourceKeyParts {
+            resource_type: TYPE_CASP, resource_group: 0, instance,
+        };
+        let strict = external_thumbnail_base64_from_dir_sized(&thumbnails, key, 96, true)
+            .expect("Strict cache must accept THUM from next cache package");
+        assert_eq!(
+            image::load_from_memory(&STANDARD.decode(strict).unwrap()).unwrap().to_rgba8(),
+            image::load_from_memory(&right).unwrap().to_rgba8()
+        );
+        let unrestricted = external_thumbnail_base64_from_dir_sized(&thumbnails, key, 96, false)
+            .expect("Existing full preview cache behavior must remain");
+        assert_eq!(
+            image::load_from_memory(&STANDARD.decode(unrestricted).unwrap()).unwrap().to_rgba8(),
+            image::load_from_memory(&wrong).unwrap().to_rgba8()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn uses_thumbnail_referenced_by_resource_in_same_package() {
         let path = test_path("embedded-casp-thumb");
         let casp_id = 0x1000_1234_5678_0001u64;
@@ -8968,8 +9576,7 @@ mod remove_selected_tests {
         let mut metadata = vec![42; 19];
         metadata.extend_from_slice(&thumb_id.to_le_bytes());
         metadata.extend_from_slice(&[1; 24]);
-        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-        png.extend_from_slice(&[7; 45]);
+        let png = valid_preview_png([242, 85, 12, 255]);
         write_test_package(&path, &[
             (TYPE_CASP, 0, casp_id, metadata),
             (TYPE_THUM_LARGE, 0, thumb_id, png.clone()),
@@ -8979,7 +9586,10 @@ mod remove_selected_tests {
         let key = ResourceKeyParts {
             resource_type: TYPE_CASP, resource_group: 0, instance: casp_id,
         };
-        assert_eq!(STANDARD.decode(find_preview_base64(&package, key).unwrap()).unwrap(), png);
+        let converted = STANDARD.decode(find_preview_base64(&package, key).unwrap()).unwrap();
+        let source_pixels = image::load_from_memory(&png).unwrap().to_rgba8();
+        let result_pixels = image::load_from_memory(&converted).unwrap().to_rgba8();
+        assert_eq!(result_pixels, source_pixels);
         drop(package);
         drop(mmap);
         let _ = remove_file(&path);
@@ -9014,10 +9624,8 @@ mod remove_selected_tests {
         std::fs::create_dir_all(&thumbnails).unwrap();
 
         let instance = 0x1234_5678_9ABC_DEF0u64;
-        let mut cas_png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-        cas_png.extend_from_slice(&[1; 32]);
-        let mut object_png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-        object_png.extend_from_slice(&[2; 64]);
+        let cas_png = valid_preview_png([13, 78, 218, 255]);
+        let object_png = valid_preview_png([210, 88, 36, 255]);
 
         write_test_package(
             &thumbnails.join("CASThumbnails.package"),
@@ -9042,8 +9650,13 @@ mod remove_selected_tests {
         let cas_found = external_thumbnail_base64_from_dir(&thumbnails, cas_key).unwrap();
         let object_found = external_thumbnail_base64_from_dir(&thumbnails, object_key).unwrap();
 
-        assert_eq!(STANDARD.decode(cas_found).unwrap(), cas_png);
-        assert_eq!(STANDARD.decode(object_found).unwrap(), object_png);
+        let cas_pixels = image::load_from_memory(&STANDARD.decode(cas_found).unwrap())
+            .unwrap().to_rgba8();
+        let object_pixels = image::load_from_memory(&STANDARD.decode(object_found).unwrap())
+            .unwrap().to_rgba8();
+        assert_eq!(cas_pixels, image::load_from_memory(&cas_png).unwrap().to_rgba8());
+        assert_eq!(object_pixels, image::load_from_memory(&object_png).unwrap().to_rgba8());
+        assert_ne!(cas_pixels, object_pixels, "CAS and object cache priority must differ");
 
         let missing = ResourceKeyParts {
             resource_type: TYPE_CASP,
@@ -9237,6 +9850,14 @@ mod remove_selected_tests {
         let _ = remove_file(&rebuilt);
     }
 
+    fn valid_preview_png(rgba: [u8; 4]) -> Vec<u8> {
+        let source = image::RgbaImage::from_pixel(8, 8, image::Rgba(rgba));
+        let mut output = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(source)
+            .write_to(&mut output, image::ImageOutputFormat::Png).unwrap();
+        output.into_inner()
+    }
+
     fn test_dir(label: &str) -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -9248,6 +9869,104 @@ mod remove_selected_tests {
         ));
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn relation_index_checks_cancellation_inside_large_tgi_loop() {
+        let root = test_dir("relation-cancel-index");
+        let path = root.join("ManyEntries.package");
+        let entries: Vec<_> = (0..320u64)
+            .map(|index| (TYPE_XML, 0, 0xAA00_0000 + index, vec![(index & 0xFF) as u8; 8]))
+            .collect();
+        write_test_package(&path, &entries);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let error = relation_tgi_index(&package, &|| {
+            if calls.fetch_add(1, Ordering::SeqCst) >= 1 {
+                Err("cancelled midway through indexing".to_string())
+            } else {
+                Ok(())
+            }
+        }).unwrap_err();
+        assert!(error.contains("cancelled midway"));
+        assert!(calls.load(Ordering::SeqCst) >= 2);
+        drop(package);
+        drop(mmap);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hash_is_unchanged_and_can_cancel_midway_through_large_payload() {
+        let bytes = vec![0x5Au8; 2 * 1024 * 1024 + 35];
+        let expected = relation_hash_pair(&bytes);
+        let actual = relation_hash_pair_monitored(&bytes, &|| Ok(())).unwrap();
+        assert_eq!(actual, expected);
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let error = relation_hash_pair_monitored(&bytes, &|| {
+            if calls.fetch_add(1, Ordering::SeqCst) >= 2 {
+                Err("hash interrupted between MiB chunks".to_string())
+            } else {
+                Ok(())
+            }
+        }).unwrap_err();
+        assert!(error.contains("between MiB chunks"));
+        assert!(calls.load(Ordering::SeqCst) >= 3);
+    }
+
+    #[test]
+    fn exact_duplicate_payload_comparison_honors_inner_cancellation() {
+        let root = test_dir("relation-cancel-exact");
+        let path = root.join("ExactPairs.package");
+        let contents = vec![5u8; 128];
+        write_test_package(&path, &[
+            (TYPE_CASP, 0, 0x1122, contents.clone()),
+            (TYPE_CASP, 0, 0x3344, contents),
+        ]);
+        let mmap = open_package(&path.display().to_string()).unwrap();
+        let package = parse_package(&mmap).unwrap();
+        let data = package.files[0].data();
+        let (hash_a, hash_b) = relation_hash_pair(data);
+        let key = LogicalAtomKey {
+            resource_type: TYPE_CASP,
+            resource_group: 0,
+            data_len: data.len(),
+            hash_a,
+            hash_b,
+        };
+        let left = LogicalProfile { atoms: vec![LogicalAtom { key, entry_index: 0 }] };
+        let right = LogicalProfile { atoms: vec![LogicalAtom { key, entry_index: 1 }] };
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let error = logical_profiles_exactly_equal(&package, &left, &right, &|| {
+            if calls.fetch_add(1, Ordering::SeqCst) >= 2 {
+                Err("cancelled inside comparison".to_string())
+            } else {
+                Ok(())
+            }
+        }).unwrap_err();
+        assert!(error.contains("cancelled inside comparison"));
+        assert!(calls.load(Ordering::SeqCst) >= 3);
+        drop(package);
+        drop(mmap);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn thumbnail_cache_candidates_include_localized_sims3_names() {
+        let root = test_dir("thumbnail-localized-path");
+        let dirs = thumbnail_directory_candidates(&root);
+        let candidates: Vec<String> = dirs.iter().map(|path| path.display().to_string()).collect();
+        for name in ["The Sims 3", "Os Sims 3", "Los Sims 3", "Les Sims 3",
+                     "Die Sims 3", "I Sims 3"] {
+            assert!(
+                candidates.iter().any(|path| path.contains(name)),
+                "Missing Sims 3 locale: {name}"
+            );
+        }
+        assert!(dirs.iter().all(|path|
+            path.ends_with("Thumbnails") && path.starts_with(&root)));
+        assert!(dirs.iter().all(|path| !path.to_string_lossy().contains("Sims 4")));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn relation_for<'a>(
@@ -10660,6 +11379,41 @@ mod remove_selected_tests {
             fnv64_name_hash("a_GDS_ROSELIPA_pose_1"),
             0xCEC2_C5DF_F572_6C85
         );
+    }
+
+    #[test]
+    fn parallel_headless_scans_do_not_cancel_each_others_relationship_analysis() {
+        // Windows runs Rust tests in parallel. Only real Tauri/UI scans should
+        // advance the global generation or receive global UI cancellation.
+        let root = test_dir("parallel-headless-scans");
+        let path = root.join("IndependentScans.package");
+        write_test_package(&path, &[
+            (TYPE_CASP, 0, 0xCA5101, vec![1, 2, 3, 4]),
+            (TYPE_CASP, 0, 0xCA5102, vec![1, 2, 3, 4]),
+            (TYPE_CASP, 0, 0xCA5103, vec![5, 6, 7, 8]),
+        ]);
+        let source_path = path.display().to_string();
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..12).map(|_| {
+                let source_path = source_path.clone();
+                scope.spawn(move || {
+                    for _ in 0..6 {
+                        let result = scan_package_resources_inner(None, ScanPayload {
+                            package_path: source_path.clone(),
+                            resource_type: "casp".to_string(),
+                            search: None,
+                        }).expect("parallel headless scans should not replace each other");
+                        assert_eq!(result.scan_generation, 0);
+                        assert!(!result.items.is_empty());
+                        assert_eq!(result.relations_status, "complete");
+                    }
+                })
+            }).collect();
+            for worker in workers {
+                worker.join().expect("headless scan worker");
+            }
+        });
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

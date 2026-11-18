@@ -22,8 +22,14 @@ class FakeElement {
     this.listeners = new Map();
     this.attributes = new Map();
     this.textContent = "";
+    this.children = [];
+    this.tagName = null;
     this.disabled = false;
     this.focusCount = 0;
+  }
+  replaceChildren(...nodes) {
+    this.children = nodes;
+    this.textContent = nodes.map((node) => node.textContent ?? "").join("");
   }
   addEventListener(type, handler) {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
@@ -43,6 +49,12 @@ class FakeElement {
 
 function fixture() {
   const doc = { activeElement: null };
+  doc.createElement = (tag) => {
+    const element = new FakeElement(doc);
+    element.tagName = tag;
+    return element;
+  };
+  doc.createTextNode = (value) => ({ textContent: String(value), nodeType: 3 });
   const trigger = new FakeElement(doc);
   trigger.focus();
   const root = new FakeElement(doc, ["hidden"]);
@@ -156,6 +168,47 @@ function fixture() {
     primaryLabel: "Remover",
   });
   assert.equal(f.message.textContent, copy);
+  f.cancelButton.click();
+  await pending;
+}
+
+// H2) The removal backup is bold, separately spaced, and stays literal text.
+{
+  const f = fixture();
+  const copy = '2 associated resources will be removed. 1 detected shared resource will be preserved.\n\nA bit-for-bit backup of the original will be created and verified before the final replacement.';
+  const pending = f.modal.showConfirm({
+    titleText: "Remove",
+    messageText: copy,
+    emphasizeLastParagraph: true,
+    cancelLabel: "Cancel",
+    primaryLabel: "Remove",
+  });
+  assert.equal(f.message.textContent, copy);
+  assert.equal(f.message.children.length, 2);
+  assert.equal(f.message.children[0].nodeType, 3);
+  assert.equal(f.message.children[0].textContent.endsWith("\n\n"), true);
+  assert.equal(f.message.children[1].tagName, "strong");
+  assert.equal(f.message.children[1].className, "app-modal-emphasis");
+  assert.equal(f.message.children[1].textContent,
+    "A bit-for-bit backup of the original will be created and verified before the final replacement.");
+  f.cancelButton.click();
+  await pending;
+}
+
+// H3) Even markup-like resource names are escaped and never parsed as HTML.
+{
+  const f = fixture();
+  const copy = '<img src=x onerror=alert(1)>\n\nDo not lose the original.';
+  const pending = f.modal.showConfirm({
+    titleText: "Warning",
+    messageText: copy,
+    emphasizeLastParagraph: true,
+    cancelLabel: "Cancel",
+    primaryLabel: "Proceed",
+  });
+  assert.equal(f.message.textContent, copy);
+  assert.equal(f.message.children[0].textContent.includes("<img"), true);
+  assert.equal(f.message.children[1].textContent, "Do not lose the original.");
   f.cancelButton.click();
   await pending;
 }

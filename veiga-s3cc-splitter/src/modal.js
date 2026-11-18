@@ -47,6 +47,7 @@ export function createModalController(elements, environment = {}) {
     cancelLabel = "",
     closeLabel = getCloseLabel(),
     danger = false,
+    emphasizeLastParagraph = false,
   }) {
     if (activeResolve) finish(false);
 
@@ -54,7 +55,20 @@ export function createModalController(elements, environment = {}) {
     activeKind = kind;
 
     if (title) title.textContent = titleText;
-    if (message) message.textContent = messageText;
+    if (message) {
+      const copy = String(messageText ?? "");
+      const boundary = copy.lastIndexOf("\n\n");
+      if (emphasizeLastParagraph && boundary >= 0 && copy.slice(boundary + 2).trim()) {
+        // Trusted formatting, untrusted content: keep the entire message as
+        // text nodes, never treat resource names/details as HTML.
+        const emphasis = doc.createElement("strong");
+        emphasis.className = "app-modal-emphasis";
+        emphasis.textContent = copy.slice(boundary + 2);
+        message.replaceChildren(doc.createTextNode(copy.slice(0, boundary + 2)), emphasis);
+      } else {
+        message.textContent = copy;
+      }
+    }
     if (closeButton) {
       closeButton.setAttribute("aria-label", closeLabel);
       closeButton.setAttribute("title", closeLabel);

@@ -1,4 +1,5 @@
 mod commands;
+mod preview_images;
 mod merge_manifest;
 mod tone_dependencies;
 mod skin_classification;
@@ -40,7 +41,10 @@ pub fn run() {
             system_appearance::get_system_appearance,
             commands::scan_package_resources,
             commands::cancel_package_operation,
-            commands::get_resource_preview,
+            commands::cancel_package_relation_analysis,
+            commands::analyze_package_relations_async,
+            commands::get_resource_preview_async,
+            commands::get_resource_thumbnail_async,
             commands::analyze_remove_selection,
             commands::remove_selected_from_merged,
             commands::collect_merge_package_files,

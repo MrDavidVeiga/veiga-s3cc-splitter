@@ -27,8 +27,41 @@ const buttonIcons = {
   zip: `<svg class="btn-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m10 2 7 4v8l-7 4-7-4V6l7-4Z"/><path d="m3 6 7 4 7-4"/><path d="M10 10v8"/><path d="M8.5 3.2v2M11.5 3.2v2"/></svg>`
 };
 
+// Progress events include internal English stage keys; localize them in the UI
+// while leaving backend events stable for diagnostics and existing consumers.
+const scanStageMessages = {
+  en: {
+    "Opening package": "Mapping package resources.",
+    "Reading names": "Reading names and package metadata.",
+    "Building resource list": "Building the resource list.",
+    "Preparing relationship metadata": "Checking relationships and dependencies.",
+    "Ready": "Resource list ready.",
+  },
+  pt: {
+    "Opening package": "Mapeando os recursos do package.",
+    "Reading names": "Lendo nomes e metadados do package.",
+    "Building resource list": "Montando a lista de recursos.",
+    "Preparing relationship metadata": "Verificando relações e dependências.",
+    "Ready": "Lista de recursos pronta.",
+  },
+  es: {
+    "Opening package": "Mapeando los recursos del package.",
+    "Reading names": "Leyendo nombres y metadatos del package.",
+    "Building resource list": "Preparando la lista de recursos.",
+    "Preparing relationship metadata": "Comprobando relaciones y dependencias.",
+    "Ready": "Lista de recursos lista.",
+  },
+};
+
 const translations = {
   en: {
+    relationCheckAction: "Verify Duplicates",
+    relationCheckCancel: "Cancel Check",
+    relationCheckProgress: (percent) => "Checking duplicates/conflicts… " + percent + "%",
+    relationCheckError: "Duplicate/conflict check failed:",
+    scanCancelling: "Cancelling package read…",
+    relationCheckSkipped: "Duplicate/conflict checks were not run for this large package.",
+    relationCheckRunning: "Checking duplicates/conflicts in the background…",
     appTitle: "Veiga's S3CC Splitter",
     langLabel: "Language:",
     pickPackage: "Open Package",
@@ -142,7 +175,7 @@ const translations = {
     busyDefaultMessage: "Please wait.",
     busyReadTitle: "Reading package...",
     busyReadMessage: "Building the resource list from the file.",
-    cancelOperation: "Cancel operation",
+    cancelOperation: "Cancel",
     busyExportTitle: "Exporting...",
     busyExportMessage: "Saving resources to folder.",
     modalInfoTitle: "Information",
@@ -176,6 +209,13 @@ const translations = {
     splittError: "Export failed:",
   },
   pt: {
+    relationCheckAction: "Verificar Duplicatas",
+    relationCheckCancel: "Cancelar Verificação",
+    relationCheckProgress: (percent) => "Verificando duplicatas/conflitos… " + percent + "%",
+    relationCheckError: "Falha ao verificar duplicatas/conflitos:",
+    scanCancelling: "Cancelando leitura do package…",
+    relationCheckSkipped: "Verificação de duplicatas/conflitos não realizada para este package grande.",
+    relationCheckRunning: "Verificando duplicatas/conflitos em segundo plano…",
     appTitle: "Veiga's S3CC Splitter",
     langLabel: "Idioma:",
     pickPackage: "Abrir Package",
@@ -289,7 +329,7 @@ const translations = {
     busyDefaultMessage: "Aguarde.",
     busyReadTitle: "Lendo package...",
     busyReadMessage: "Montando a lista de recursos do arquivo.",
-    cancelOperation: "Cancelar operação",
+    cancelOperation: "Cancelar",
     busyExportTitle: "Exportando...",
     busyExportMessage: "Gravando recursos em pasta.",
     modalInfoTitle: "Informação",
@@ -323,6 +363,13 @@ const translations = {
     splittError: "Falha na exportação:",
   },
   es: {
+    relationCheckAction: "Verificar Duplicados",
+    relationCheckCancel: "Cancelar Verificación",
+    relationCheckProgress: (percent) => "Verificando duplicados/conflictos… " + percent + "%",
+    relationCheckError: "Error al verificar duplicados/conflictos:",
+    scanCancelling: "Cancelando la lectura del package…",
+    relationCheckSkipped: "No se verificaron duplicados/conflictos en este package grande.",
+    relationCheckRunning: "Verificando duplicados/conflictos en segundo plano…",
     appTitle: "Veiga's S3CC Splitter",
     langLabel: "Idioma:",
     pickPackage: "Abrir Package",
@@ -436,7 +483,7 @@ const translations = {
     busyDefaultMessage: "Espera un momento.",
     busyReadTitle: "Leyendo package...",
     busyReadMessage: "Armando la lista de recursos del archivo.",
-    cancelOperation: "Cancelar operación",
+    cancelOperation: "Cancelar",
     busyExportTitle: "Exportando...",
     busyExportMessage: "Guardando recursos en la carpeta.",
     modalInfoTitle: "Información",
@@ -482,6 +529,7 @@ const state = {
   selectionAnchorKey: null,
   preview: null,
   isBusy: false,
+  scanInProgress: false,
   removalPending: false,
   busyTitle: "",
   busyMessage: "",
@@ -493,10 +541,20 @@ const state = {
   isContentFilterOpen: false,
   manifestPackageCount: 0,
   pendingRelationUpdates: [],
+  relationsStatus: "complete",
+  scanGeneration: null,
+  activeRelationRequestId: null,
+  relationAnalysisInProgress: false,
+  relationAnalysisCancelPending: false,
+  relationAnalysisProgress: 0,
   mergerSources: [],
   mergerBusy: false,
   mergerResult: null,
 };
+
+// Ignore old previews after a new scan, a source change, or a newer click.
+let previewRequestToken = 0;
+let relationAnalysisRequestToken = 0;
 
 const el = {
   modeSplitterBtn: document.querySelector("#mode-splitter-btn"),
@@ -548,6 +606,8 @@ const el = {
   optClone: document.querySelector("#opt-clone"),
   resultsTitle: document.querySelector("#results-title"),
   resultsSummary: document.querySelector("#results-summary"),
+  relationAnalyzeBtn: document.querySelector("#relation-analyze-btn"),
+  relationCancelBtn: document.querySelector("#relation-cancel-btn"),
   selectedCount: document.querySelector("#selected-count"),
   emptyState: document.querySelector("#empty-state"),
   busyState: document.querySelector("#busy-state"),
@@ -706,12 +766,25 @@ function setBusy(title, message) {
 }
 
 function applyRelationUpdate(payload) {
-  if (!payload || payload.packagePath !== state.packagePath) return;
+  // A package path alone is not an operation identity: the same file can be
+  // reopened or scanned again before an older background event is delivered.
+  if (!payload || payload.packagePath !== state.packagePath ||
+      payload.scanGeneration !== state.scanGeneration ||
+      state.scanGeneration == null) return false;
+  if (payload.requestId == null) {
+    // Automatic relation events only belong to deferred initial scans.
+    if (state.relationsStatus !== "deferred") return false;
+  } else if (!state.relationAnalysisInProgress ||
+             payload.requestId !== state.activeRelationRequestId) {
+    return false;
+  }
   const relations = payload.relations || {};
   state.resources = state.resources.map((item) => ({
     ...item,
     relation: relations[item.key] || null,
   }));
+  state.relationsStatus = "complete";
+  return true;
 }
 
 function clearBusy() {
@@ -729,6 +802,7 @@ function clearBusy() {
 async function cancelCurrentOperation() {
   if (!state.isBusy || !state.operationCancellable || state.operationCancelRequested) return;
   state.operationCancelRequested = true;
+  if (state.scanInProgress) state.busyMessage = t("scanCancelling");
   if (el.cancelOperationBtn) {
     el.cancelOperationBtn.disabled = true;
     el.cancelOperationBtn.textContent = t("cancelOperation");
@@ -790,6 +864,18 @@ function itemMatchesSearch(item, query) {
 }
 
 let cachedVisibleResources = { source: null, filter: null, search: null, items: [] };
+// Selection remains an ordered array for export, but row membership is O(1).
+let cachedSelection = { source: null, keys: new Set() };
+let renderedListWindow = {
+  items: null, first: -1, last: -1, selection: null,
+  previewKey: null, language: null,
+};
+function selectedResourceKeys() {
+  if (cachedSelection.source !== state.selectedKeys) {
+    cachedSelection = { source: state.selectedKeys, keys: new Set(state.selectedKeys) };
+  }
+  return cachedSelection.keys;
+}
 function getVisibleResources() {
   const filter = state.activeContentFilter;
   const search = state.search;
@@ -953,11 +1039,27 @@ function render() {
 
   const visibleResources = getVisibleResources();
   el.selectedCount.textContent = t("selectedCount", state.selectedKeys.length);
+  const relationsLabel = state.relationAnalysisInProgress
+    ? t("relationCheckProgress", state.relationAnalysisProgress)
+    : state.relationsStatus === "skipped"
+      ? t("relationCheckSkipped")
+      : state.relationsStatus === "deferred" ? t("relationCheckRunning") : "";
   el.resultsSummary.textContent = state.packagePath
-    ? [t("packageReady", visibleResources.length), state.manifestPackageCount ? t("manifestFound", state.manifestPackageCount) : ""]
+    ? [t("packageReady", visibleResources.length), state.manifestPackageCount ? t("manifestFound", state.manifestPackageCount) : "", relationsLabel]
         .filter(Boolean)
         .join(" • ")
     : t("noPackageLoaded");
+
+  if (el.relationAnalyzeBtn) {
+    el.relationAnalyzeBtn.classList.toggle("hidden",
+      state.relationsStatus !== "skipped" || state.relationAnalysisInProgress ||
+      state.relationAnalysisCancelPending || state.isBusy || !state.resources.length);
+    el.relationAnalyzeBtn.textContent = t("relationCheckAction");
+  }
+  if (el.relationCancelBtn) {
+    el.relationCancelBtn.classList.toggle("hidden", !state.relationAnalysisInProgress);
+    el.relationCancelBtn.textContent = t("relationCheckCancel");
+  }
 
   el.busyTitle.textContent = state.busyTitle || t("busyDefaultTitle");
   el.busyMessage.textContent = state.busyMessage || t("busyDefaultMessage");
@@ -999,6 +1101,88 @@ function render() {
 }
 
 let cachedListCounts = { source: null, counts: null };
+// A bounded lazy queue for visible virtual rows. Never request thumbnails for
+// the full DBPF resource table, and never reuse images across rescans.
+const listThumbnailCache = new Map();
+let listThumbnailPending = new Set();
+let listThumbnailQueue = [];
+let listThumbnailRunning = 0;
+let listThumbnailGeneration = 0;
+const MAX_LIST_THUMBNAIL_CACHE = 160;
+const MAX_SIMULTANEOUS_LIST_THUMBNAILS = 2;
+
+function resetListThumbnails() {
+  ++listThumbnailGeneration;
+  listThumbnailCache.clear();
+  listThumbnailQueue = [];
+  listThumbnailPending = new Set();
+}
+
+function storeListThumbnail(key, base64) {
+  if (listThumbnailCache.has(key)) listThumbnailCache.delete(key);
+  listThumbnailCache.set(key, base64 || null); // null also caches missing images
+  if (listThumbnailCache.size > MAX_LIST_THUMBNAIL_CACHE) {
+    listThumbnailCache.delete(listThumbnailCache.keys().next().value);
+  }
+}
+
+function fillVisibleListThumbnails(key, base64) {
+  const images = el.resourceList.querySelectorAll(".resource-item-thumbnail");
+  for (const image of images) {
+    if (image.dataset.resourceKey === key) {
+      image.src = base64 ? `data:image/png;base64,${base64}` : noPreviewImage;
+    }
+  }
+}
+
+function listThumbnailStillVisible(key) {
+  return [...el.resourceList.querySelectorAll(".resource-item-thumbnail")]
+    .some((image) => image.dataset.resourceKey === key);
+}
+
+function pumpListThumbnails() {
+  while (listThumbnailRunning < MAX_SIMULTANEOUS_LIST_THUMBNAILS && listThumbnailQueue.length) {
+    const job = listThumbnailQueue.shift();
+    if (job.generation !== listThumbnailGeneration ||
+        job.packagePath !== state.packagePath || !listThumbnailStillVisible(job.key)) {
+      if (job.generation === listThumbnailGeneration) listThumbnailPending.delete(job.key);
+      continue;
+    }
+    listThumbnailRunning++;
+    void invoke("get_resource_thumbnail_async", {
+      payload: { packagePath: job.packagePath, resourceKey: job.key },
+    }).then((base64) => {
+      if (job.generation !== listThumbnailGeneration || job.packagePath !== state.packagePath) return;
+      storeListThumbnail(job.key, base64);
+      fillVisibleListThumbnails(job.key, base64);
+    }).catch((error) => {
+      // A damaged or unsupported texture must never hide the CC or block
+      // subsequent thumbnails. Record the miss and keep the llama fallback.
+      if (job.generation === listThumbnailGeneration) {
+        console.warn("Thumbnail unavailable:", error);
+        storeListThumbnail(job.key, null);
+      }
+    }).finally(() => {
+      listThumbnailRunning--;
+      if (job.generation === listThumbnailGeneration) listThumbnailPending.delete(job.key);
+      pumpListThumbnails();
+    });
+  }
+}
+
+function queueListThumbnail(key) {
+  if (!state.packagePath || state.isBusy || listThumbnailCache.has(key) ||
+      listThumbnailPending.has(key)) return;
+  listThumbnailPending.add(key);
+  listThumbnailQueue.push({
+    key, packagePath: state.packagePath, generation: listThumbnailGeneration,
+  });
+  // Schedule after the current virtual row is attached to the DOM.
+  if (listThumbnailQueue.length === 1) {
+    queueMicrotask(pumpListThumbnails);
+  }
+}
+
 function renderList() {
   const visibleResources = getVisibleResources();
   const rowHeight = 76;
@@ -1008,6 +1192,22 @@ function renderList() {
   const firstIndex = Math.max(0, Math.floor(scrollTop / rowHeight) - 6);
   const lastIndex = Math.min(visibleResources.length,
     Math.ceil((scrollTop + viewportHeight) / rowHeight) + 6);
+  const selection = selectedResourceKeys();
+  // Scrolling within the buffered window should not rebuild the DOM.
+  if (renderedListWindow.items === visibleResources &&
+      renderedListWindow.first === firstIndex &&
+      renderedListWindow.last === lastIndex &&
+      renderedListWindow.selection === state.selectedKeys &&
+      renderedListWindow.previewKey === (state.preview?.key || null) &&
+      renderedListWindow.language === state.language &&
+      el.resourceList.firstElementChild) {
+    return;
+  }
+  renderedListWindow = {
+    items: visibleResources, first: firstIndex, last: lastIndex,
+    selection: state.selectedKeys, previewKey: state.preview?.key || null,
+    language: state.language,
+  };
   const content = document.createElement("div");
   content.className = "resource-virtual-content";
   content.style.position = "relative";
@@ -1043,36 +1243,66 @@ function renderList() {
 
     const check = document.createElement("input");
     check.type = "checkbox";
-    check.checked = state.selectedKeys.includes(item.key);
+    check.checked = selection.has(item.key);
     check.addEventListener("click", (event) => handleSelectionClick(item.key, event));
     checkWrap.appendChild(check);
 
     const button = document.createElement("button");
     button.className = "resource-button";
 
-    let sameNameBadge = "";
-    const metaLines = [];
-    if (displayType) metaLines.push(displayType);
-    if (displayDetails) metaLines.push(displayDetails);
-    if (relation?.kind === "tgi-conflict") {
-      metaLines.push(
-        `<span class="tgi-conflict-badge" title="${t("tgiConflictHint")}">${t("tgiConflictLabel", relation.count)}</span>`,
-      );
-    } else if (relation?.kind === "duplicate") {
-      metaLines.push(
-        `<span class="duplicate-badge" title="${t("duplicateHint")}">${t("duplicateLabel", relation.count)}</span>`,
-      );
-    } else if (relation?.kind === "same-name") {
-      sameNameBadge = `<span class="same-name-badge" title="${t("sameNameHint")}">${t("sameNameLabel", relation.count)}</span>`;
-    }
+    // Package metadata is untrusted. Never interpolate labels or details
+    // into innerHTML: this also preserves literal <, &, quotes and accents.
+    const heading = document.createElement("div");
+    heading.className = "resource-heading";
+    const name = document.createElement("div");
+    name.className = "resource-name";
+    name.textContent = item.label || "";
+    heading.appendChild(name);
+    const meta = document.createElement("div");
+    meta.className = "resource-meta";
+    const appendMeta = (value) => {
+      if (meta.childNodes.length) meta.appendChild(document.createElement("br"));
+      meta.appendChild(document.createTextNode(String(value)));
+    };
+    if (displayType) appendMeta(displayType);
+    if (displayDetails) appendMeta(displayDetails);
 
-    button.innerHTML = `
-      <div class="resource-heading">
-        <div class="resource-name">${item.label}</div>
-        ${sameNameBadge}
-      </div>
-      <div class="resource-meta">${metaLines.join("<br />")}</div>
-    `;
+    const addBadge = (className, hint, label, destination) => {
+      const badge = document.createElement("span");
+      badge.className = className;
+      badge.title = hint;
+      badge.textContent = label;
+      destination.appendChild(badge);
+    };
+    if (relation?.kind === "tgi-conflict") {
+      if (meta.childNodes.length) meta.appendChild(document.createElement("br"));
+      addBadge("tgi-conflict-badge", t("tgiConflictHint"),
+        t("tgiConflictLabel", relation.count), meta);
+    } else if (relation?.kind === "duplicate") {
+      if (meta.childNodes.length) meta.appendChild(document.createElement("br"));
+      addBadge("duplicate-badge", t("duplicateHint"),
+        t("duplicateLabel", relation.count), meta);
+    } else if (relation?.kind === "same-name") {
+      addBadge("same-name-badge", t("sameNameHint"),
+        t("sameNameLabel", relation.count), heading);
+    }
+    const thumb = document.createElement("img");
+    thumb.className = "resource-item-thumbnail";
+    thumb.dataset.resourceKey = item.key;
+    thumb.alt = ""; // Decorative; full resource name remains accessible.
+    thumb.loading = "lazy";
+    thumb.decoding = "async";
+    thumb.draggable = false;
+    const cachedThumb = listThumbnailCache.get(item.key);
+    thumb.src = cachedThumb ? `data:image/png;base64,${cachedThumb}` : noPreviewImage;
+    thumb.addEventListener("error", () => {
+      if (thumb.src !== noPreviewImage) thumb.src = noPreviewImage;
+    });
+
+    const textContent = document.createElement("div");
+    textContent.className = "resource-item-text";
+    textContent.append(heading, meta);
+    button.append(thumb, textContent);
     button.addEventListener("click", () => loadPreview(item));
 
     const pill = document.createElement("div");
@@ -1087,6 +1317,7 @@ function renderList() {
     row.style.boxSizing = "border-box";
     row.append(checkWrap, button, pill);
     content.appendChild(row);
+    if (!listThumbnailCache.has(item.key)) queueListThumbnail(item.key);
   }
 }
 
@@ -1155,7 +1386,7 @@ function handleSelectionClick(key, event) {
     state.selectedKeys = [...selected];
   } else {
     if (targetChecked) {
-      if (!state.selectedKeys.includes(key)) {
+      if (!selectedResourceKeys().has(key)) {
         state.selectedKeys = [...state.selectedKeys, key];
       }
     } else {
@@ -1175,7 +1406,13 @@ function isScannablePackagePath(path) {
 async function pickPackage() {
   const result = await open({ multiple: false, filters: [{ name: "*.package", extensions: ["package", "dbc"] }] });
   if (typeof result === "string" && isScannablePackagePath(result)) {
+    invalidateRelationAnalysis();
+    resetListThumbnails();
     state.packagePath = result;
+    ++previewRequestToken;
+    state.pendingRelationUpdates = [];
+    state.relationsStatus = "complete";
+    state.scanGeneration = null;
     state.resources = [];
     state.selectedKeys = [];
     state.selectionInitialized = false;
@@ -1200,9 +1437,79 @@ function parentFolderOfPath(path) {
   return raw.slice(0, slash) || ".";
 }
 
+// Abort only optional duplicate verification, not a scan/merge/export.
+function invalidateRelationAnalysis() {
+  ++relationAnalysisRequestToken;
+  const requestId = state.activeRelationRequestId;
+  const scanGeneration = state.scanGeneration;
+  if (state.relationAnalysisInProgress && !state.relationAnalysisCancelPending &&
+      requestId != null && scanGeneration != null) {
+    // Prevent a new verification from starting before the previous worker
+    // has received cancellation; otherwise the late cancel could kill it.
+    state.relationAnalysisCancelPending = true;
+    void invoke("cancel_package_relation_analysis", {
+      payload: { requestId, scanGeneration },
+    })
+      .catch((error) => console.error("Could not cancel duplicate verification:", error))
+      .finally(() => {
+        state.relationAnalysisCancelPending = false;
+        render();
+      });
+  }
+  state.relationAnalysisInProgress = false;
+  state.activeRelationRequestId = null;
+  state.relationAnalysisProgress = 0;
+}
+
+async function analyzeAllRelations() {
+  if (state.isBusy || state.relationAnalysisInProgress ||
+      state.relationAnalysisCancelPending || state.relationsStatus !== "skipped" || !state.packagePath || !state.resources.length) return;
+  const requestedPath = state.packagePath;
+  const scanGeneration = state.scanGeneration;
+  if (scanGeneration == null) return;
+  const token = ++relationAnalysisRequestToken;
+  state.activeRelationRequestId = token;
+  state.relationAnalysisInProgress = true;
+  state.relationAnalysisProgress = 0;
+  render();
+
+  try {
+    const result = await invoke("analyze_package_relations_async", {
+      payload: { packagePath: requestedPath, scanGeneration, requestId: token },
+    });
+    if (token !== relationAnalysisRequestToken ||
+        state.packagePath !== requestedPath || state.scanGeneration !== scanGeneration) return;
+    applyRelationUpdate(result);
+  } catch (error) {
+    if (token !== relationAnalysisRequestToken ||
+        state.packagePath !== requestedPath || state.scanGeneration !== scanGeneration) return;
+    console.error(error);
+    await appModal.showError({
+      titleText: t("modalErrorTitle"),
+      messageText: `${t("relationCheckError")}\n${error}`,
+      primaryLabel: t("modalClose"),
+    });
+  } finally {
+    if (token === relationAnalysisRequestToken) {
+      state.relationAnalysisInProgress = false;
+      state.activeRelationRequestId = null;
+      state.relationAnalysisProgress = 0;
+      render();
+    }
+  }
+}
+
 async function scanPackage() {
   if (state.isBusy || !isScannablePackagePath(state.packagePath)) return;
-
+  const requestedPath = state.packagePath;
+  let firstVisible = null;
+  invalidateRelationAnalysis();
+  resetListThumbnails();
+  ++previewRequestToken; // invalidate any preview requested before this scan
+  state.pendingRelationUpdates = [];
+  state.scanGeneration = null;
+  state.relationsStatus = "complete";
+  state.scanInProgress = true;
   setBusy(t("busyReadTitle"), t("busyReadMessage"));
   state.operationCancellable = true;
   state.operationCancelRequested = false;
@@ -1210,39 +1517,38 @@ async function scanPackage() {
 
   try {
     const result = await invoke("scan_package_resources", {
-      payload: {
-        packagePath: state.packagePath,
-        resourceType: "all",
-        search: null,
-      },
+      payload: { packagePath: requestedPath, resourceType: "all", search: null },
     });
-
+    // A cancelled or superseded scan must never replace the visible resources.
+    if (state.operationCancelRequested || state.packagePath !== requestedPath) return;
     const relations = result.relations || {};
     state.resources = (result.items || []).map((item) => ({
       ...item,
       relation: relations[item.key] || null,
     }));
+    state.relationsStatus = result.relationsStatus || "complete";
+    state.scanGeneration = result.scanGeneration;
     state.manifestPackageCount = result.manifestPackageCount || 0;
-
     state.selectedKeys = [];
     state.selectionInitialized = true;
-
     state.selectionAnchorKey = null;
     state.preview = null;
-
-    const firstVisible = getVisibleResources()[0] || state.resources[0];
-    if (firstVisible) {
-      await loadPreview(firstVisible);
-    }
+    firstVisible = getVisibleResources()[0] || state.resources[0] || null;
   } catch (error) {
     console.error(error);
-    await appModal.showError({
-      titleText: t("modalErrorTitle"),
-      messageText: `${t("readError")}\n${error}`,
-      primaryLabel: t("modalClose"),
-    });
+    if (!state.operationCancelRequested && state.packagePath === requestedPath) {
+      await appModal.showError({
+        titleText: t("modalErrorTitle"),
+        messageText: `${t("readError")}\n${error}`,
+        primaryLabel: t("modalClose"),
+      });
+    }
   } finally {
-    clearBusy();
+    state.scanInProgress = false;
+    clearBusy(); // show the virtualized list before any expensive thumbnail work
+  }
+  if (firstVisible && state.packagePath === requestedPath) {
+    void loadPreview(firstVisible); // do not block initial list rendering
   }
 }
 
@@ -1257,18 +1563,24 @@ async function revealPreviewSource() {
 }
 
 async function loadPreview(item) {
+  const requestedPath = state.packagePath;
+  const token = ++previewRequestToken;
+  // Coalesce rapid list navigation before requesting expensive image decoding.
+  // This also prevents queued worker jobs for previews the user never sees.
+  await new Promise((resolve) => setTimeout(resolve, 45));
+  if (token !== previewRequestToken || state.packagePath !== requestedPath) return;
   try {
-    const preview = await invoke("get_resource_preview", {
-      payload: {
-        packagePath: state.packagePath,
-        resourceKey: item.key,
-      },
+    const preview = await invoke("get_resource_preview_async", {
+      payload: { packagePath: requestedPath, resourceKey: item.key },
     });
+    if (token !== previewRequestToken || state.packagePath !== requestedPath) return;
     preview.label = item.label;
     state.preview = preview;
+    // The full preview may decode IMG/IMAG. Never put it into the
+    // ICON/THUM-only row cache; that cache is filled by its strict loader.
     render();
   } catch (error) {
-    console.error(error);
+    if (token === previewRequestToken) console.error(error);
   }
 }
 
@@ -1463,6 +1775,7 @@ async function removeSelectionFromMerged() {
       () => appModal.showConfirm({
         titleText: t("removeFromMerged"),
         messageText: t("removeConfirm", confirmPlan),
+        emphasizeLastParagraph: true,
         cancelLabel: t("modalCancel"),
         primaryLabel: t("modalRemove"),
         danger: true,
@@ -1546,6 +1859,12 @@ async function exportSelection() {
 }
 
 function clearAll() {
+  invalidateRelationAnalysis();
+  resetListThumbnails();
+  ++previewRequestToken;
+  state.pendingRelationUpdates = [];
+  state.scanGeneration = null;
+  state.relationsStatus = "complete";
   state.packagePath = "";
   state.resources = [];
   state.selectedKeys = [];
@@ -1615,7 +1934,13 @@ function bindDragAndDrop() {
       const path = paths[0];
       const ext = path?.toLowerCase().split(".").pop();
       if (["package", "dbc"].includes(ext)) {
+        invalidateRelationAnalysis();
+        resetListThumbnails();
         state.packagePath = path;
+        ++previewRequestToken;
+        state.pendingRelationUpdates = [];
+        state.scanGeneration = null;
+        state.relationsStatus = "complete";
         state.resources = [];
         state.selectedKeys = [];
         state.selectionInitialized = false;
@@ -1662,6 +1987,11 @@ function setupEvents() {
 
   el.pickPackageBtn.addEventListener("click", pickPackage);
   el.scanBtn.addEventListener("click", scanPackage);
+  el.relationAnalyzeBtn?.addEventListener("click", analyzeAllRelations);
+  el.relationCancelBtn?.addEventListener("click", () => {
+    invalidateRelationAnalysis();
+    render();
+  });
   el.exportBtn.addEventListener("click", exportSelection);
   if (el.removeMergedBtn) {
     el.removeMergedBtn.addEventListener("click", removeSelectionFromMerged);
@@ -1752,8 +2082,15 @@ async function setupProgressEvents() {
       const payload = event.payload || {};
       if (!state.isBusy) return;
       state.progress = Math.max(0, Math.min(100, Number(payload.percent) || 0));
-      state.busyTitle = payload.stage || state.busyTitle;
-      state.busyMessage = payload.message || state.busyMessage;
+      if (state.scanInProgress) {
+        state.busyTitle = t("busyReadTitle");
+        state.busyMessage = state.operationCancelRequested
+          ? t("scanCancelling")
+          : (scanStageMessages[state.language] || scanStageMessages.en)[payload.stage] || t("busyReadMessage");
+      } else {
+        state.busyTitle = payload.stage || state.busyTitle;
+        state.busyMessage = payload.message || state.busyMessage;
+      }
       // Progress events can arrive every few hundred milliseconds while
       // rebuilding a gigabyte-sized package. Re-rendering the entire CC
       // list and preview here competes with the file operation and can
@@ -1769,8 +2106,19 @@ async function setupProgressEvents() {
         state.pendingRelationUpdates.push(payload);
         return;
       }
-      applyRelationUpdate(payload);
-      render();
+      if (applyRelationUpdate(payload)) render();
+    });
+    await listen("package-relations-progress", (event) => {
+      const payload = event.payload || {};
+      if (!state.relationAnalysisInProgress || payload.packagePath !== state.packagePath ||
+          payload.scanGeneration !== state.scanGeneration ||
+          payload.requestId !== state.activeRelationRequestId) return;
+      const percent = Math.max(0, Math.min(100, Number(payload.percent) || 0));
+      // Refresh every 5 percent while leaving the resource list usable.
+      if (Math.floor(percent / 5) !== Math.floor(state.relationAnalysisProgress / 5)) {
+        state.relationAnalysisProgress = percent;
+        render();
+      }
     });
   } catch (error) {
     console.error("Could not attach package progress listener:", error);
